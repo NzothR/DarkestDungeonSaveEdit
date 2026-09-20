@@ -54,12 +54,5 @@ if(DDSE_BUILD_CLI)
 endif()
 
 if(BUILD_TESTING)
-    add_executable(ddse_tests tests/smoke_tests.cpp)
-    target_link_libraries(ddse_tests PRIVATE
-        ddse_application ddse_infrastructure ddse_project_options ddse_project_warnings)
-    add_test(NAME ddse.smoke COMMAND ddse_tests)
-    if(DDSE_BUILD_CLI)
-        add_test(NAME ddse.cli_smoke COMMAND ddse_cli --version)
-        set_tests_properties(ddse.cli_smoke PROPERTIES PASS_REGULAR_EXPRESSION "DDSE 0.1.0")
-    endif()
+    add_subdirectory(tests)
 endif()

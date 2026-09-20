@@ -1,0 +1,44 @@
+# GoogleTest is test-only; no production library links against it.
+# Prefer a system/local install when available, otherwise download once at configure time.
+find_package(GTest 1.15.2 CONFIG QUIET)
+if(NOT GTest_FOUND)
+    include(FetchContent)
+    # On Windows, avoid changing the parent project's CRT linkage.
+    set(gtest_force_shared_crt ON CACHE BOOL "Use shared CRT for GoogleTest" FORCE)
+    FetchContent_Declare(
+        googletest
+        URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(googletest)
+endif()
+
+add_executable(ddse_tests
+    unit/core_version_tests.cpp
+    unit/application_info_tests.cpp
+    unit/platform_info_tests.cpp
+    integration/fixture_layout_tests.cpp
+)
+target_link_libraries(ddse_tests PRIVATE
+    ddse_application
+    ddse_infrastructure
+    ddse_project_options
+    ddse_project_warnings
+    GTest::gtest_main
+)
+target_include_directories(ddse_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
+target_compile_definitions(ddse_tests PRIVATE
+    DDSE_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+)
+
+include(GoogleTest)
+gtest_discover_tests(ddse_tests
+    DISCOVERY_MODE PRE_TEST
+    TEST_PREFIX "ddse."
+)
+
+if(DDSE_BUILD_CLI)
+    add_test(NAME ddse.cli_smoke COMMAND ddse_cli --version)
+    set_tests_properties(ddse.cli_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION "DDSE 0.1.0")
+endif()

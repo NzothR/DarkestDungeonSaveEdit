@@ -1,44 +1,51 @@
-# DDSE backend — Stage 0.1
+# DDSE backend — Stage 0.2
 
-Minimal C++20 / CMake skeleton for the Darkest Dungeon 1 Sandbox Save Editor.
+C++20 / CMake project skeleton with GoogleTest tests. No DSON/SQLite business code yet.
 
 ## Requirements
 
-- CMake 3.20 or newer
-- C++20 compiler (MSVC, GCC or Clang)
+- CMake >= 3.20 and a C++20 compiler (Windows 10 + CLion supported).
+- First CMake configure needs internet access to download GoogleTest v1.15.2, unless
+  GTest v1.15.2 is already installed as a CMake package. Subsequent builds reuse it.
 
-## Configure, build and test
+## CLion (Windows 10)
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
+Open this directory as the CMake project. Allow CLion to reload CMake after replacing
+Stage 0.1 files. If using MinGW or MSVC, keep the same toolchain selected for the whole
+project. If a previously configured build directory contains incompatible compiler/cache
+settings, use a fresh build directory or delete its CMake cache and reload.
 
-For single-configuration generators on Windows, select the configuration at build and test time:
+Choose the `ddse_tests` target or run individual `CoreVersion.*`, `ApplicationInfo.*`,
+`PlatformInfo.*`, or `FixtureLayout.*` GoogleTest cases in CLion.
+
+## Build and test (PowerShell)
 
 ```powershell
-cmake -S . -B build
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
+cmake -S . -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build cmake-build-debug --config Debug
+ctest --test-dir cmake-build-debug -C Debug --output-on-failure
 ```
 
-Run `build/ddse_cli` on Unix-like single-config generators, or `build/Debug/ddse_cli.exe` on common Windows multi-config generators. The exact path depends on the generator.
+For a multi-config generator, build and test with `--config Debug` / `-C Debug`.
+For a single-config CLion generator, CMAKE_BUILD_TYPE controls the build configuration.
+CLI smoke checking remains registered with CTest. Fixture data is independent of the
+current working directory.
+
+## Test structure
+
+- `tests/unit/`: isolated component contract tests.
+- `tests/integration/`: cross-component / fixture integration tests.
+- `tests/fixtures/{dson,saves,content,environments}/`: deterministic input data.
+- `tests/helpers/`: reusable testing utilities (test-only).
+
+`ddse_tests` retains its executable name for existing CLion configurations, but now
+runs GoogleTest's main. CTest discovers each individual GoogleTest test at test time.
 
 ## Dependency direction
 
-```text
- ddse_cli (composition root)
-    |-- ddse_application ---> ddse_core
-    `-- ddse_infrastructure -> ddse_core
-
-ddse_tests -> application + infrastructure + core (transitive)
-```
-
-Application does not link infrastructure; neither core nor application links SQLite or Drogon.
-The CLI and smoke tests are placeholders for validating the build graph, not production services.
-A dedicated third-party unit test framework is deferred to Stage 0.2.
+The dependency graph from Stage 0.1 is unchanged. GoogleTest is only used by
+`ddse_tests`; core, application, infrastructure, and CLI have no testing dependency.
 
 ## Next
 
-Stage 0.2: introduce a testing framework, fixture organization and focused unit tests.
+Stage 0.3: unified Result/Error types and error contract tests.
