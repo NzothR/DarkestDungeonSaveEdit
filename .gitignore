@@ -5,6 +5,7 @@
 /.idea/
 /googletest*/
 /ddse-data/
+/test_save_profile/
 .vscode/
 *.user
 *.db
