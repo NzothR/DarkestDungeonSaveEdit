@@ -52,6 +52,7 @@ ddse_set_project_defaults(ddse_core)
 add_library(ddse_application STATIC
     src/application/application_info.cpp
     src/application/logger.cpp
+    src/application/save_profile.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)

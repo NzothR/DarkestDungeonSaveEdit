@@ -1,8 +1,9 @@
-# DDSE backend — Stage 0.7
+# DDSE backend — Stage 3
 
 C++20 / CMake backend with structured errors, logging, a filesystem port and native
-adapter, a small SQLite RAII layer, migrations, and an initial DSON reader with structural
-diagnostics. SQLite here is infrastructure only; domain repositories are not implemented.
+adapter, a small SQLite RAII layer, DSON read/write support, and Raw Save Profile
+discovery with per-document diagnostics and baseline fingerprints. SQLite here is
+infrastructure only; domain repositories are not implemented.
 
 ## Requirements
 
@@ -65,6 +66,17 @@ ddse_cli --inspect-dson path/to/persist.roster.json --fields
 The second command also prints ordered field paths, inferred types, source offsets, and
 raw prefixes for unknown field kinds, including fields inside embedded DSON documents.
 
+Inspect a profile without modifying it:
+
+```powershell
+ddse_cli --inspect-profile path/to/profile_0
+ddse_cli --discover-profiles path/to/save-root
+```
+
+This reports detected save domains, the profile baseline fingerprint, registered files,
+which documents decoded as DSON, and any document-level diagnostics. Unknown filenames
+and non-DSON files are retained in the raw registry.
+
 ## Next
 
-Stage 2: DSON Writer and round-trip validation.
+Stage 4: Base Content Scanner.

@@ -1,5 +1,6 @@
 #include "ddse/application/app_configuration.hpp"
 #include "ddse/application/application_info.hpp"
+#include "ddse/application/save_profile.hpp"
 #include "ddse/core/error.hpp"
 #include "ddse/core/dson/dson_reader.hpp"
 #include "ddse/infrastructure/console_logger.hpp"
@@ -50,9 +51,66 @@ void print_dson_fields(const ddse::core::dson::DsonDocument& document,
 
 } // namespace
 
+namespace {
+
+int inspect_profile(const std::filesystem::path& profile_path) {
+    ddse::infrastructure::NativeFileSystem file_system;
+    ddse::application::SaveProfileDiscovery discovery{file_system};
+    auto profile = discovery.load(profile_path);
+    if (!profile) {
+        std::cerr << ddse::core::to_string(profile.error().code) << ": " << profile.error().message << '\n';
+        return 1;
+    }
+
+    const auto& descriptor = profile.value().descriptor;
+    std::cout << "Profile " << descriptor.id << " status="
+              << ddse::application::to_string(profile.value().status)
+              << " documents=" << profile.value().documents.size() << " fingerprint=0x"
+              << std::hex << profile.value().baseline_fingerprint << std::dec << " domains=";
+    if (descriptor.detected_domains.empty()) std::cout << "none";
+    for (std::size_t i = 0; i < descriptor.detected_domains.size(); ++i) {
+        if (i != 0) std::cout << ',';
+        std::cout << ddse::application::to_string(descriptor.detected_domains[i]);
+    }
+    std::cout << '\n';
+    for (const auto& [id, document] : profile.value().documents)
+        std::cout << "  " << id << " bytes=" << document.bytes.size()
+                  << " decoded=" << (document.decoded ? "yes" : "no")
+                  << " core=" << (document.core_document ? "yes" : "no") << '\n';
+    for (const auto& diagnostic : descriptor.diagnostics)
+        std::cout << "  diagnostic document=" << diagnostic.document_id
+                  << " core=" << (diagnostic.core_document ? "yes" : "no")
+                  << " message=\"" << diagnostic.message << "\"\n";
+    return 0;
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     if (argc == 2 && std::string_view{argv[1]} == "--version") {
         std::cout << ddse::application::description() << '\n';
+        return 0;
+    }
+    if (argc == 3 && std::string_view{argv[1]} == "--inspect-profile")
+        return inspect_profile(argv[2]);
+    if (argc == 3 && std::string_view{argv[1]} == "--discover-profiles") {
+        ddse::infrastructure::NativeFileSystem file_system;
+        ddse::application::SaveProfileDiscovery discovery{file_system};
+        auto profiles = discovery.discover(argv[2]);
+        if (!profiles) {
+            std::cerr << ddse::core::to_string(profiles.error().code) << ": " << profiles.error().message << '\n';
+            return 1;
+        }
+        for (const auto& profile : profiles.value()) {
+            std::cout << profile.descriptor.id << " status=" << ddse::application::to_string(profile.status)
+                      << " documents=" << profile.documents.size() << " domains=";
+            if (profile.descriptor.detected_domains.empty()) std::cout << "none";
+            for (std::size_t i = 0; i < profile.descriptor.detected_domains.size(); ++i) {
+                if (i != 0) std::cout << ',';
+                std::cout << ddse::application::to_string(profile.descriptor.detected_domains[i]);
+            }
+            std::cout << '\n';
+        }
         return 0;
     }
     if ((argc == 3 || argc == 4) && std::string_view{argv[1]} == "--inspect-dson") {
@@ -87,7 +145,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (argc != 1) {
-        std::cerr << "Usage: ddse_cli [--version | --inspect-dson <file> [--fields]]\n";
+        std::cerr << "Usage: ddse_cli [--version | --discover-profiles <directory> | --inspect-profile <directory> | --inspect-dson <file> [--fields]]\n";
         return 2;
     }
     ddse::infrastructure::ConsoleLogger logger{std::clog};

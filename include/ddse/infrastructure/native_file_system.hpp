@@ -13,6 +13,10 @@ public:
     [[nodiscard]] core::Result<void, core::Error> create_directories(const std::filesystem::path& path) override;
     [[nodiscard]] core::Result<std::vector<std::filesystem::path>, core::Error>
     list_files(const std::filesystem::path& directory) const override;
+    [[nodiscard]] core::Result<std::vector<std::filesystem::path>, core::Error>
+    list_directories(const std::filesystem::path& directory) const override;
+    [[nodiscard]] core::Result<std::optional<std::filesystem::file_time_type>, core::Error>
+    last_modified(const std::filesystem::path& path) const override;
 };
 
 } // namespace ddse::infrastructure

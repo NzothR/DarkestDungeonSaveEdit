@@ -4,6 +4,7 @@
 #include "ddse/core/result.hpp"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,10 @@ public:
     [[nodiscard]] virtual core::Result<void, core::Error> create_directories(const std::filesystem::path& path) = 0;
     [[nodiscard]] virtual core::Result<std::vector<std::filesystem::path>, core::Error>
     list_files(const std::filesystem::path& directory) const = 0;
+    [[nodiscard]] virtual core::Result<std::vector<std::filesystem::path>, core::Error>
+    list_directories(const std::filesystem::path& directory) const = 0;
+    [[nodiscard]] virtual core::Result<std::optional<std::filesystem::file_time_type>, core::Error>
+    last_modified(const std::filesystem::path& path) const = 0;
 };
 
 } // namespace ddse::application

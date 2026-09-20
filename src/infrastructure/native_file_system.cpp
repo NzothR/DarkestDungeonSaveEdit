@@ -1,5 +1,6 @@
 #include "ddse/infrastructure/native_file_system.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <system_error>
@@ -78,6 +79,34 @@ NativeFileSystem::list_files(const std::filesystem::path& directory) const {
         if (ec) return core::Result<std::vector<std::filesystem::path>, core::Error>::failure(fs_error(directory, ec));
     }
     return core::Result<std::vector<std::filesystem::path>, core::Error>::success(std::move(files));
+}
+
+core::Result<std::vector<std::filesystem::path>, core::Error>
+NativeFileSystem::list_directories(const std::filesystem::path& directory) const {
+    std::error_code ec;
+    std::filesystem::directory_iterator it{directory, ec};
+    if (ec) return core::Result<std::vector<std::filesystem::path>, core::Error>::failure(fs_error(directory, ec));
+    std::vector<std::filesystem::path> directories;
+    const std::filesystem::directory_iterator end;
+    while (it != end) {
+        std::error_code status_error;
+        if (it->is_directory(status_error)) directories.push_back(it->path());
+        if (status_error) return core::Result<std::vector<std::filesystem::path>, core::Error>::failure(fs_error(it->path(), status_error));
+        it.increment(ec);
+        if (ec) return core::Result<std::vector<std::filesystem::path>, core::Error>::failure(fs_error(directory, ec));
+    }
+    std::sort(directories.begin(), directories.end());
+    return core::Result<std::vector<std::filesystem::path>, core::Error>::success(std::move(directories));
+}
+
+core::Result<std::optional<std::filesystem::file_time_type>, core::Error>
+NativeFileSystem::last_modified(const std::filesystem::path& path) const {
+    std::error_code ec;
+    const auto value = std::filesystem::last_write_time(path, ec);
+    if (ec == std::errc::no_such_file_or_directory)
+        return core::Result<std::optional<std::filesystem::file_time_type>, core::Error>::success(std::nullopt);
+    if (ec) return core::Result<std::optional<std::filesystem::file_time_type>, core::Error>::failure(fs_error(path, ec));
+    return core::Result<std::optional<std::filesystem::file_time_type>, core::Error>::success(value);
 }
 
 } // namespace ddse::infrastructure
