@@ -15,6 +15,7 @@ std::string_view to_string(ErrorCode code) noexcept {
     case ErrorCode::PermissionDenied: return "PermissionDenied";
     case ErrorCode::IoError: return "IoError";
     case ErrorCode::DsonMalformed: return "DsonMalformed";
+    case ErrorCode::DsonEncodeFailed: return "DsonEncodeFailed";
     case ErrorCode::UnsupportedDsonType: return "UnsupportedDsonType";
     case ErrorCode::DatabaseLocked: return "DatabaseLocked";
     case ErrorCode::DatabaseError: return "DatabaseError";

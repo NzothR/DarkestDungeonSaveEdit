@@ -43,6 +43,7 @@ add_library(ddse_core STATIC
     src/core/error.cpp
     src/core/dson/dson_document.cpp
     src/core/dson/dson_reader.cpp
+    src/core/dson/dson_writer.cpp
 )
 add_library(ddse::core ALIAS ddse_core)
 ddse_set_project_defaults(ddse_core)

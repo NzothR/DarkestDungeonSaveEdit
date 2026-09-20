@@ -14,6 +14,7 @@ enum class ErrorCode {
     PermissionDenied,
     IoError,
     DsonMalformed,
+    DsonEncodeFailed,
     UnsupportedDsonType,
     DatabaseLocked,
     DatabaseError,

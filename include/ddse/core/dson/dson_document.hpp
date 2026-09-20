@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <utility>
 
 namespace ddse::core::dson {
 
@@ -83,6 +84,12 @@ struct DsonField {
     std::uint32_t field_info{};
     std::uint64_t source_name_offset{};
     std::uint64_t source_value_offset{};
+    bool dirty{};
+
+    void replace_value(Value replacement) {
+        value = std::move(replacement);
+        dirty = true;
+    }
 };
 
 struct DsonDocument {
