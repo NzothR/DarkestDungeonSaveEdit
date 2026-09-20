@@ -3,6 +3,7 @@
 /out/
 /.vs/
 /.idea/
+/googletest*/
 .vscode/
 *.user
 *.db
