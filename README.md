@@ -1,10 +1,14 @@
-# DDSE backend — Stage 4
+# DDSE backend — Stage 5
 
 C++20 / CMake backend with structured errors, logging, a filesystem port and native
 adapter, a small SQLite RAII layer, DSON read/write support, Raw Save Profile
-discovery, and a read-only Vanilla/DLC content scanner that builds an atomic
-`base_content.db`. Mod directories are deliberately excluded. SQLite here is
-infrastructure only; domain repositories are not implemented.
+discovery, and read-only Vanilla/DLC and Mod content scanners that build atomic
+`base_content.db` and `mod_environment.db` catalogs. The mod scanner is configured
+with Workshop roots, extra local mod roots (the game manager's `modes` directory
+in the current setup), an optional save profile, and an optional manager JSON
+export. It inventories installed mods while applying only enabled entries to the
+effective content view. SQLite here is infrastructure only; domain repositories
+are not implemented.
 
 ## Requirements
 
@@ -92,6 +96,32 @@ contents. Rebuilds use a temporary database and replace the previous database on
 a successful transaction. The scan summary includes source and content counts plus
 diagnostics for unsupported/binary payloads.
 
+Build a mod environment catalog from Workshop mods, an extra local-mod directory,
+the save's active mod list, and a standard JSON export from the official mod manager:
+
+```powershell
+ddse_cli --scan-mod-environment `
+  ".\test_save_profile\profile_0" `
+  "D:\SteamLibrary\steamapps\workshop\content\262060" `
+  "D:\SteamLibrary\steamapps\common\DarkestDungeon\modes" `
+  "D:\游戏mod\暗黑地牢\mod排序\Default.json" `
+  ".\cmake-build-debug\base_content.db" `
+  ".\cmake-build-debug\mod_environment.db"
+```
+
+Use `-` for an omitted save profile, local-mod root, or manager export. The CLI
+currently accepts one local root; application configuration supports multiple
+extra local roots. All immediate mod directories are inventoried, including
+disabled mods. The manager export's enabled entries and array order are preferred
+for the effective view; if it is absent, the scanner uses the save order. When
+both sources are available, the database retains both lists and their comparison.
+An enabled mod missing from configured roots is diagnosed and skipped from the
+effective view rather than guessed. Text content is parsed by the shared scanner;
+artwork, audio, and other recognized assets are indexed by metadata. The output
+must be outside configured mod roots, the save profile, and the base database.
+Rebuild is transactional and atomically replaces the previous output only after
+a successful build.
+
 ## Next
 
-Stage 5: Mod Environment Scanner and Overlay.
+Stage 6: Composition Root and HTTP API.

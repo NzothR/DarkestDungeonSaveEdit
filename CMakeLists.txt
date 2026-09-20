@@ -65,6 +65,7 @@ add_library(ddse_application STATIC
     src/application/logger.cpp
     src/application/save_profile.cpp
     src/application/content_scanner.cpp
+    src/application/mod_environment.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)
@@ -81,6 +82,7 @@ add_library(ddse_infrastructure STATIC
     src/infrastructure/sqlite/transaction.cpp
     src/infrastructure/sqlite/migration_runner.cpp
     src/infrastructure/base_content_database.cpp
+    src/infrastructure/mod_environment_database.cpp
 )
 add_library(ddse::infrastructure ALIAS ddse_infrastructure)
 ddse_set_project_defaults(ddse_infrastructure)
@@ -94,6 +96,9 @@ if(DDSE_BUILD_CLI)
     add_executable(ddse_cli src/composition_root/main.cpp)
     target_link_libraries(ddse_cli PRIVATE
         ddse_application ddse_infrastructure ddse_project_options ddse_project_warnings)
+    if(WIN32)
+        target_link_libraries(ddse_cli PRIVATE shell32)
+    endif()
 endif()
 
 if(BUILD_TESTING)

@@ -1,11 +1,13 @@
 #include "ddse/application/app_configuration.hpp"
 #include "ddse/application/application_info.hpp"
 #include "ddse/application/content_scanner.hpp"
+#include "ddse/application/mod_environment.hpp"
 #include "ddse/application/save_profile.hpp"
 #include "ddse/core/error.hpp"
 #include "ddse/core/dson/dson_reader.hpp"
 #include "ddse/infrastructure/console_logger.hpp"
 #include "ddse/infrastructure/base_content_database.hpp"
+#include "ddse/infrastructure/mod_environment_database.hpp"
 #include "ddse/infrastructure/native_file_system.hpp"
 #include "ddse/infrastructure/platform_info.hpp"
 #include "ddse/infrastructure/sqlite/database.hpp"
@@ -19,8 +21,36 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace {
+
+std::filesystem::path argument_path(std::string_view value) {
+    return std::filesystem::path{std::u8string{
+        reinterpret_cast<const char8_t*>(value.data()), value.size()}};
+}
+
+#ifdef _WIN32
+std::string utf8_from_wide(std::wstring_view value) {
+    if (value.empty()) return {};
+    const auto required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string converted(static_cast<std::size_t>(required), '\0');
+    const auto written = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), converted.data(), required, nullptr, nullptr);
+    if (written != required) return {};
+    return converted;
+}
+#endif
 
 void print_dson_fields(const ddse::core::dson::DsonDocument& document,
                        std::string_view embedded_parent = {}, std::size_t indentation = 0) {
@@ -163,21 +193,85 @@ int scan_base_content(const std::filesystem::path& game_root, const std::filesys
     return 0;
 }
 
+int scan_mod_environment(char* argv[]) {
+    // argv[2..7] = save profile, Workshop root, local root, manager export,
+    // base catalog, and output environment catalog. A dash omits either order source.
+    ddse::infrastructure::NativeFileSystem file_system;
+    ddse::application::ModEnvironmentScanConfig config;
+    if (std::string_view{argv[2]} != "-") config.save_profile_root = argument_path(argv[2]);
+    config.workshop_root = argument_path(argv[3]);
+    if (std::string_view{argv[4]} != "-") config.local_mod_roots.push_back(argument_path(argv[4]));
+    if (std::string_view{argv[5]} != "-") config.manager_order_json = argument_path(argv[5]);
+    config.base_content_database = argument_path(argv[6]);
+
+    ddse::application::ModEnvironmentScanner scanner{file_system};
+    auto scan = scanner.scan(config);
+    if (!scan) {
+        std::cerr << ddse::core::to_string(scan.error().code) << ": " << scan.error().message << '\n';
+        for (const auto& [key, value] : scan.error().context)
+            std::cerr << "  " << key << '=' << value << '\n';
+        return 1;
+    }
+    ddse::infrastructure::ModEnvironmentDatabaseBuilder builder;
+    auto built = builder.rebuild(argument_path(argv[7]), config.base_content_database, scan.value());
+    if (!built) {
+        std::cerr << ddse::core::to_string(built.error().code) << ": " << built.error().message << '\n';
+        for (const auto& [key, value] : built.error().context)
+            std::cerr << "  " << key << '=' << value << '\n';
+        return 1;
+    }
+
+    const auto& summary = built.value();
+    const auto enabled_entries = [](const auto& entries) {
+        return std::count_if(entries.begin(), entries.end(), [](const auto& entry) { return entry.enabled; });
+    };
+    std::cout << "mod_environment.db rebuilt: installed=" << summary.installed_mods
+              << " enabled=" << summary.enabled_mods << " workshop=" << summary.workshop_mods
+              << " local=" << summary.local_mods << " source_files=" << summary.source_files
+              << " definitions=" << summary.definitions << " localization=" << summary.localization_entries
+              << " assets=" << summary.assets << " effective_paths=" << summary.effective_paths
+              << " overridden_paths=" << summary.overridden_paths
+              << " diagnostics=" << summary.diagnostics << '\n'
+              << "  effective order source=" << scan.value().effective_order_source
+              << " save/manager exact=" << (summary.save_order_matches_manager ? "yes" : "no")
+              << " shared order=" << (summary.shared_order_matches ? "same" : "different") << '\n';
+    if (scan.value().comparison.save_available && scan.value().comparison.manager_export_available) {
+        std::cout << "  save enabled=" << enabled_entries(scan.value().save_order)
+                  << " manager enabled=" << enabled_entries(scan.value().manager_order)
+                  << " only in save=" << scan.value().comparison.only_in_save.size()
+                  << " only in manager=" << scan.value().comparison.only_in_manager_export.size() << '\n';
+        for (const auto& identity : scan.value().comparison.only_in_save)
+            std::cout << "    save only: " << identity << '\n';
+        for (const auto& identity : scan.value().comparison.only_in_manager_export)
+            std::cout << "    manager only: " << identity << '\n';
+    }
+    for (std::size_t i = 0; i < std::min<std::size_t>(scan.value().diagnostics.size(), 20); ++i) {
+        const auto& diagnostic = scan.value().diagnostics[i];
+        std::cout << "  diagnostic " << diagnostic.mod_id << ':' << diagnostic.virtual_path
+                  << " " << diagnostic.message << '\n';
+    }
+    if (scan.value().diagnostics.size() > 20)
+        std::cout << "  ... " << scan.value().diagnostics.size() - 20 << " more diagnostics in database\n";
+    return 0;
+}
+
 } // namespace
 
-int main(int argc, char* argv[]) {
+int run_cli(int argc, char* argv[]) {
     if (argc == 2 && std::string_view{argv[1]} == "--version") {
         std::cout << ddse::application::description() << '\n';
         return 0;
     }
     if (argc == 3 && std::string_view{argv[1]} == "--inspect-profile")
-        return inspect_profile(argv[2]);
+        return inspect_profile(argument_path(argv[2]));
     if (argc == 4 && std::string_view{argv[1]} == "--scan-base-content")
-        return scan_base_content(argv[2], argv[3]);
+        return scan_base_content(argument_path(argv[2]), argument_path(argv[3]));
+    if (argc == 8 && std::string_view{argv[1]} == "--scan-mod-environment")
+        return scan_mod_environment(argv);
     if (argc == 3 && std::string_view{argv[1]} == "--discover-profiles") {
         ddse::infrastructure::NativeFileSystem file_system;
         ddse::application::SaveProfileDiscovery discovery{file_system};
-        auto profiles = discovery.discover(argv[2]);
+        auto profiles = discovery.discover(argument_path(argv[2]));
         if (!profiles) {
             std::cerr << ddse::core::to_string(profiles.error().code) << ": " << profiles.error().message << '\n';
             return 1;
@@ -201,7 +295,8 @@ int main(int argc, char* argv[]) {
             return 2;
         }
         ddse::infrastructure::NativeFileSystem file_system;
-        auto bytes = file_system.read_file(argv[2]);
+        const auto dson_path = argument_path(argv[2]);
+        auto bytes = file_system.read_file(dson_path);
         if (!bytes) {
             std::cerr << ddse::core::to_string(bytes.error().code) << ": " << bytes.error().message << '\n';
             return 1;
@@ -226,7 +321,11 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (argc != 1) {
-        std::cerr << "Usage: ddse_cli [--version | --scan-base-content <game-root> <database-path> | --discover-profiles <directory> | --inspect-profile <directory> | --inspect-dson <file> [--fields]]\n";
+        std::cerr << "Usage: ddse_cli [--version | --scan-base-content <game-root> <database-path> | "
+                     "--scan-mod-environment <save-profile|-> <workshop-root> <local-root|-> "
+                     "<manager-order.json|-> <base-content.db> <environment.db> | "
+                     "--discover-profiles <directory> | --inspect-profile <directory> | "
+                     "--inspect-dson <file> [--fields]]\n";
         return 2;
     }
     ddse::infrastructure::ConsoleLogger logger{std::clog};
@@ -264,3 +363,31 @@ int main(int argc, char* argv[]) {
               << ddse::infrastructure::platform_name() << ")\n";
     return 0;
 }
+
+#ifdef _WIN32
+int main() {
+    int wide_argc = 0;
+    auto wide_argv = CommandLineToArgvW(GetCommandLineW(), &wide_argc);
+    if (!wide_argv) {
+        std::cerr << "Unable to read Unicode command-line arguments\n";
+        return 2;
+    }
+    std::vector<std::string> utf8_arguments;
+    std::vector<char*> narrow_argv;
+    utf8_arguments.reserve(static_cast<std::size_t>(wide_argc));
+    for (int i = 0; i < wide_argc; ++i) {
+        auto converted = utf8_from_wide(wide_argv[i]);
+        if (!wide_argv[i][0] || !converted.empty()) utf8_arguments.push_back(std::move(converted));
+        else {
+            LocalFree(wide_argv);
+            std::cerr << "Unable to convert a command-line argument to UTF-8\n";
+            return 2;
+        }
+    }
+    LocalFree(wide_argv);
+    for (auto& argument : utf8_arguments) narrow_argv.push_back(argument.data());
+    return run_cli(wide_argc, narrow_argv.data());
+}
+#else
+int main(int argc, char* argv[]) { return run_cli(argc, argv); }
+#endif

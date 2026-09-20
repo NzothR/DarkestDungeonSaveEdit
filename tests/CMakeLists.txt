@@ -26,6 +26,7 @@ add_executable(ddse_tests
     unit/save_profile_tests.cpp
     unit/content_scanner_tests.cpp
     integration/base_content_database_tests.cpp
+    integration/mod_environment_tests.cpp
     integration/fixture_layout_tests.cpp
 )
 target_link_libraries(ddse_tests PRIVATE
