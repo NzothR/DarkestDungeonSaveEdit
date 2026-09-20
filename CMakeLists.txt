@@ -7,6 +7,14 @@ include(CTest)
 option(DDSE_BUILD_CLI "Build the command-line composition root" ON)
 option(DDSE_ENABLE_WARNINGS "Enable compiler warnings for project targets" ON)
 
+find_package(SQLite3 REQUIRED)
+if(TARGET SQLite3::SQLite3)
+    set(DDSE_SQLITE_TARGET SQLite3::SQLite3)
+else()
+    # SQLite3::SQLite3 is an alias added after the project's CMake 3.20 minimum.
+    set(DDSE_SQLITE_TARGET SQLite::SQLite3)
+endif()
+
 # No global compiler flags or include paths: keep each target's contract explicit.
 add_library(ddse_project_options INTERFACE)
 target_compile_features(ddse_project_options INTERFACE cxx_std_20)
@@ -30,21 +38,38 @@ function(ddse_set_project_defaults target)
 endfunction()
 
 # Core contains no platform I/O, SQLite or HTTP dependencies.
-add_library(ddse_core STATIC src/core/version.cpp)
+add_library(ddse_core STATIC
+    src/core/version.cpp
+    src/core/error.cpp
+)
 add_library(ddse::core ALIAS ddse_core)
 ddse_set_project_defaults(ddse_core)
 
 # Application may depend on core contracts, but never on concrete adapters.
-add_library(ddse_application STATIC src/application/application_info.cpp)
+add_library(ddse_application STATIC
+    src/application/application_info.cpp
+    src/application/logger.cpp
+)
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)
 target_link_libraries(ddse_application PUBLIC ddse_core)
 
 # Adapters depend inward; application must never link this target.
-add_library(ddse_infrastructure STATIC src/infrastructure/platform_info.cpp)
+add_library(ddse_infrastructure STATIC
+    src/infrastructure/platform_info.cpp
+    src/infrastructure/console_logger.cpp
+    src/infrastructure/native_file_system.cpp
+    src/infrastructure/sqlite/database.cpp
+    src/infrastructure/sqlite/statement.cpp
+    src/infrastructure/sqlite/transaction.cpp
+    src/infrastructure/sqlite/migration_runner.cpp
+)
 add_library(ddse::infrastructure ALIAS ddse_infrastructure)
 ddse_set_project_defaults(ddse_infrastructure)
 target_link_libraries(ddse_infrastructure PUBLIC ddse_core)
+target_link_libraries(ddse_infrastructure
+    PUBLIC ddse_application
+    PRIVATE ${DDSE_SQLITE_TARGET})
 
 # Concrete implementations are assembled only at the executable boundary.
 if(DDSE_BUILD_CLI)

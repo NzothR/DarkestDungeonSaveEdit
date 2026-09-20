@@ -1,12 +1,16 @@
-# DDSE backend — Stage 0.2
+# DDSE backend — Stage 0.7
 
-C++20 / CMake project skeleton with GoogleTest tests. No DSON/SQLite business code yet.
+C++20 / CMake backend skeleton with structured errors, logging, a filesystem port and
+native adapter, a small SQLite RAII layer, migrations, and a command-line composition
+root. SQLite here is infrastructure only; domain repositories are not implemented yet.
 
 ## Requirements
 
-- CMake >= 3.20 and a C++20 compiler (Windows 10 + CLion supported).
+- CMake >= 3.20, a C++20 compiler, and the SQLite3 development package (header + library).
 - First CMake configure needs internet access to download GoogleTest v1.15.2, unless
   GTest v1.15.2 is already installed as a CMake package. Subsequent builds reuse it.
+- If SQLite3 is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH` to that
+  installation prefix in CLion's CMake profile.
 
 ## CLion (Windows 10)
 
@@ -15,8 +19,9 @@ Stage 0.1 files. If using MinGW or MSVC, keep the same toolchain selected for th
 project. If a previously configured build directory contains incompatible compiler/cache
 settings, use a fresh build directory or delete its CMake cache and reload.
 
-Choose the `ddse_tests` target or run individual `CoreVersion.*`, `ApplicationInfo.*`,
-`PlatformInfo.*`, or `FixtureLayout.*` GoogleTest cases in CLion.
+Choose the `ddse_tests` target or run individual test cases in CLion. New cases cover
+Result/Error, structured logging, binary filesystem I/O and missing-file errors, SQLite
+transaction rollback, and idempotent migrations.
 
 ## Build and test (PowerShell)
 
@@ -43,9 +48,14 @@ runs GoogleTest's main. CTest discovers each individual GoogleTest test at test 
 
 ## Dependency direction
 
-The dependency graph from Stage 0.1 is unchanged. GoogleTest is only used by
-`ddse_tests`; core, application, infrastructure, and CLI have no testing dependency.
+Core contains only portable error/result types. Application defines logger and filesystem
+ports and links Core. Infrastructure implements those ports and owns SQLite; it depends
+inward on Application and Core. The composition root assembles the concrete pieces.
+GoogleTest is only linked to `ddse_tests`.
+
+The CLI creates `ddse-data/base_content.db` under its working directory and runs the
+bootstrap migration. `--version` exits before initializing infrastructure.
 
 ## Next
 
-Stage 0.3: unified Result/Error types and error contract tests.
+Stage 1: DSON Reader and structural diagnostics.

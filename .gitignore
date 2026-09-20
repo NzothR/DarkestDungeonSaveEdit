@@ -4,6 +4,7 @@
 /.vs/
 /.idea/
 /googletest*/
+/ddse-data/
 .vscode/
 *.user
 *.db
