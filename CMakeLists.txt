@@ -8,6 +8,17 @@ option(DDSE_BUILD_CLI "Build the command-line composition root" ON)
 option(DDSE_ENABLE_WARNINGS "Enable compiler warnings for project targets" ON)
 
 find_package(SQLite3 REQUIRED)
+find_package(nlohmann_json 3.11 CONFIG QUIET)
+if(NOT nlohmann_json_FOUND)
+    include(FetchContent)
+    set(JSON_BuildTests OFF CACHE INTERNAL "Disable nlohmann/json tests")
+    FetchContent_Declare(
+        nlohmann_json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
 if(TARGET SQLite3::SQLite3)
     set(DDSE_SQLITE_TARGET SQLite3::SQLite3)
 else()
@@ -53,10 +64,12 @@ add_library(ddse_application STATIC
     src/application/application_info.cpp
     src/application/logger.cpp
     src/application/save_profile.cpp
+    src/application/content_scanner.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)
 target_link_libraries(ddse_application PUBLIC ddse_core)
+target_link_libraries(ddse_application PRIVATE nlohmann_json::nlohmann_json)
 
 # Adapters depend inward; application must never link this target.
 add_library(ddse_infrastructure STATIC
@@ -67,6 +80,7 @@ add_library(ddse_infrastructure STATIC
     src/infrastructure/sqlite/statement.cpp
     src/infrastructure/sqlite/transaction.cpp
     src/infrastructure/sqlite/migration_runner.cpp
+    src/infrastructure/base_content_database.cpp
 )
 add_library(ddse::infrastructure ALIAS ddse_infrastructure)
 ddse_set_project_defaults(ddse_infrastructure)

@@ -4,6 +4,7 @@
 #include "ddse/core/result.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,6 +25,8 @@ public:
     list_directories(const std::filesystem::path& directory) const = 0;
     [[nodiscard]] virtual core::Result<std::optional<std::filesystem::file_time_type>, core::Error>
     last_modified(const std::filesystem::path& path) const = 0;
+    [[nodiscard]] virtual core::Result<std::uint64_t, core::Error>
+    file_size(const std::filesystem::path& path) const = 0;
 };
 
 } // namespace ddse::application

@@ -1,13 +1,16 @@
 #include "ddse/application/app_configuration.hpp"
 #include "ddse/application/application_info.hpp"
+#include "ddse/application/content_scanner.hpp"
 #include "ddse/application/save_profile.hpp"
 #include "ddse/core/error.hpp"
 #include "ddse/core/dson/dson_reader.hpp"
 #include "ddse/infrastructure/console_logger.hpp"
+#include "ddse/infrastructure/base_content_database.hpp"
 #include "ddse/infrastructure/native_file_system.hpp"
 #include "ddse/infrastructure/platform_info.hpp"
 #include "ddse/infrastructure/sqlite/database.hpp"
 #include "ddse/infrastructure/sqlite/migration_runner.hpp"
+#include "ddse/infrastructure/sqlite/statement.hpp"
 
 #include <filesystem>
 #include <algorithm>
@@ -84,6 +87,82 @@ int inspect_profile(const std::filesystem::path& profile_path) {
     return 0;
 }
 
+int scan_base_content(const std::filesystem::path& game_root, const std::filesystem::path& database_path) {
+    ddse::infrastructure::NativeFileSystem file_system;
+    auto config = ddse::application::BaseContentScanConfig::defaults(game_root);
+    ddse::application::BaseContentScanner scanner{file_system};
+    auto scan = scanner.scan(config);
+    if (!scan) {
+        std::cerr << ddse::core::to_string(scan.error().code) << ": " << scan.error().message << '\n';
+        return 1;
+    }
+    ddse::infrastructure::BaseContentDatabaseBuilder builder;
+    auto built = builder.rebuild(database_path, scan.value());
+    if (!built) {
+        std::cerr << ddse::core::to_string(built.error().code) << ": " << built.error().message << '\n';
+        return 1;
+    }
+    const auto& summary = built.value();
+    std::cout << "base_content.db rebuilt: sources=" << summary.sources
+              << " source_files=" << summary.source_files
+              << " hero_classes=" << summary.hero_classes << " skills=" << summary.skills
+              << " trinkets=" << summary.trinkets << " quirks=" << summary.quirks
+              << " diseases=" << summary.diseases << " resources=" << summary.resources
+              << " buildings=" << summary.buildings << " localization=" << summary.localization_entries
+              << " assets=" << summary.assets << " diagnostics=" << summary.diagnostics << '\n';
+    for (const auto& source : scan.value().sources)
+        std::cout << "  source " << source.id << " type=" << ddse::application::to_string(source.type)
+                  << " name=" << source.name << '\n';
+    for (std::size_t i = 0; i < std::min<std::size_t>(scan.value().diagnostics.size(), 10); ++i) {
+        const auto& diagnostic = scan.value().diagnostics[i];
+        std::cout << "  diagnostic " << diagnostic.source_id << ':' << diagnostic.virtual_path
+                  << " " << diagnostic.message << '\n';
+    }
+
+    auto database = ddse::infrastructure::sqlite::ConnectionFactory{}.open(database_path);
+    if (!database) {
+        std::cerr << ddse::core::to_string(database.error().code) << ": " << database.error().message << '\n';
+        return 1;
+    }
+    auto example = database.value().prepare(
+        "SELECT d.content_id,s.display_name,s.source_type,f.virtual_path,d.localization_key,"
+        "COALESCE((SELECT l.localized_text FROM localization_entries l WHERE l.localization_key=d.localization_key "
+        "AND lower(l.language)=lower(?) ORDER BY l.source_file_id DESC LIMIT 1),'') "
+        "FROM content_definitions d JOIN source_files f USING(source_file_id) "
+        "JOIN content_sources s USING(source_id) WHERE d.definition_type='trinket' ORDER BY d.content_id LIMIT 1");
+    if (!example) {
+        std::cerr << ddse::core::to_string(example.error().code) << ": " << example.error().message << '\n';
+        return 1;
+    }
+    auto statement = std::move(example.value());
+    auto bound = statement.bind(1, config.preferred_language);
+    if (!bound) return 1;
+    auto row = statement.step();
+    if (!row) {
+        std::cerr << ddse::core::to_string(row.error().code) << ": " << row.error().message << '\n';
+        return 1;
+    }
+    if (row.value()) {
+        const auto id = std::string{statement.column_text(0)};
+        std::cout << "sample trinket id=" << id << " source=" << statement.column_text(1)
+                  << '/' << statement.column_text(2) << " file=" << statement.column_text(3)
+                  << " localization_key=" << statement.column_text(4) << " name=";
+        const auto name = statement.column_text(5);
+        std::cout << (name.empty() ? "(unlocalized)" : std::string{name}) << '\n';
+        auto asset = database.value().prepare(
+            "SELECT a.virtual_path FROM assets a WHERE lower(a.virtual_path) LIKE '%'||lower(?)||'%' "
+            "ORDER BY a.virtual_path LIMIT 1");
+        if (asset) {
+            auto asset_statement = std::move(asset.value());
+            if (asset_statement.bind(1, id)) {
+                auto asset_row = asset_statement.step();
+                if (asset_row && asset_row.value()) std::cout << "  asset=" << asset_statement.column_text(0) << '\n';
+            }
+        }
+    } else std::cout << "sample trinket: none found\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -93,6 +172,8 @@ int main(int argc, char* argv[]) {
     }
     if (argc == 3 && std::string_view{argv[1]} == "--inspect-profile")
         return inspect_profile(argv[2]);
+    if (argc == 4 && std::string_view{argv[1]} == "--scan-base-content")
+        return scan_base_content(argv[2], argv[3]);
     if (argc == 3 && std::string_view{argv[1]} == "--discover-profiles") {
         ddse::infrastructure::NativeFileSystem file_system;
         ddse::application::SaveProfileDiscovery discovery{file_system};
@@ -145,7 +226,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     if (argc != 1) {
-        std::cerr << "Usage: ddse_cli [--version | --discover-profiles <directory> | --inspect-profile <directory> | --inspect-dson <file> [--fields]]\n";
+        std::cerr << "Usage: ddse_cli [--version | --scan-base-content <game-root> <database-path> | --discover-profiles <directory> | --inspect-profile <directory> | --inspect-dson <file> [--fields]]\n";
         return 2;
     }
     ddse::infrastructure::ConsoleLogger logger{std::clog};

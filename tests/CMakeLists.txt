@@ -24,6 +24,8 @@ add_executable(ddse_tests
     unit/dson_reader_tests.cpp
     unit/dson_writer_tests.cpp
     unit/save_profile_tests.cpp
+    unit/content_scanner_tests.cpp
+    integration/base_content_database_tests.cpp
     integration/fixture_layout_tests.cpp
 )
 target_link_libraries(ddse_tests PRIVATE

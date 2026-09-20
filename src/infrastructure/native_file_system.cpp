@@ -109,4 +109,11 @@ NativeFileSystem::last_modified(const std::filesystem::path& path) const {
     return core::Result<std::optional<std::filesystem::file_time_type>, core::Error>::success(value);
 }
 
+core::Result<std::uint64_t, core::Error> NativeFileSystem::file_size(const std::filesystem::path& path) const {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) return core::Result<std::uint64_t, core::Error>::failure(fs_error(path, ec));
+    return core::Result<std::uint64_t, core::Error>::success(static_cast<std::uint64_t>(size));
+}
+
 } // namespace ddse::infrastructure

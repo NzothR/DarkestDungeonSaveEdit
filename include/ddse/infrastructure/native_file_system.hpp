@@ -17,6 +17,7 @@ public:
     list_directories(const std::filesystem::path& directory) const override;
     [[nodiscard]] core::Result<std::optional<std::filesystem::file_time_type>, core::Error>
     last_modified(const std::filesystem::path& path) const override;
+    [[nodiscard]] core::Result<std::uint64_t, core::Error> file_size(const std::filesystem::path& path) const override;
 };
 
 } // namespace ddse::infrastructure

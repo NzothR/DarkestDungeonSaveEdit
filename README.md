@@ -1,8 +1,9 @@
-# DDSE backend — Stage 3
+# DDSE backend — Stage 4
 
 C++20 / CMake backend with structured errors, logging, a filesystem port and native
-adapter, a small SQLite RAII layer, DSON read/write support, and Raw Save Profile
-discovery with per-document diagnostics and baseline fingerprints. SQLite here is
+adapter, a small SQLite RAII layer, DSON read/write support, Raw Save Profile
+discovery, and a read-only Vanilla/DLC content scanner that builds an atomic
+`base_content.db`. Mod directories are deliberately excluded. SQLite here is
 infrastructure only; domain repositories are not implemented.
 
 ## Requirements
@@ -77,6 +78,20 @@ This reports detected save domains, the profile baseline fingerprint, registered
 which documents decoded as DSON, and any document-level diagnostics. Unknown filenames
 and non-DSON files are retained in the raw registry.
 
+Build the base content database from the default Darkest Dungeon installation roots:
+
+```powershell
+ddse_cli --scan-base-content "D:\SteamLibrary\steamapps\common\DarkestDungeon" ".\cmake-build-debug\base_content.db"
+```
+
+The default scanner configuration selects the vanilla content directories and direct
+DLC directories, and excludes any nested `mods` or `modes` directories. The database
+output must be outside every scanned game/DLC root. Text definitions and XML string
+tables are parsed; assets are indexed by path, extension, and size without reading their
+contents. Rebuilds use a temporary database and replace the previous database only after
+a successful transaction. The scan summary includes source and content counts plus
+diagnostics for unsupported/binary payloads.
+
 ## Next
 
-Stage 4: Base Content Scanner.
+Stage 5: Mod Environment Scanner and Overlay.
