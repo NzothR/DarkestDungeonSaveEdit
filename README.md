@@ -1,8 +1,8 @@
 # DDSE backend — Stage 0.7
 
-C++20 / CMake backend skeleton with structured errors, logging, a filesystem port and
-native adapter, a small SQLite RAII layer, migrations, and a command-line composition
-root. SQLite here is infrastructure only; domain repositories are not implemented yet.
+C++20 / CMake backend with structured errors, logging, a filesystem port and native
+adapter, a small SQLite RAII layer, migrations, and an initial DSON reader with structural
+diagnostics. SQLite here is infrastructure only; domain repositories are not implemented.
 
 ## Requirements
 
@@ -54,8 +54,17 @@ inward on Application and Core. The composition root assembles the concrete piec
 GoogleTest is only linked to `ddse_tests`.
 
 The CLI creates `ddse-data/base_content.db` under its working directory and runs the
-bootstrap migration. `--version` exits before initializing infrastructure.
+bootstrap migration. `--version` exits before initializing infrastructure. The DSON
+inspector is read-only:
+
+```powershell
+ddse_cli --inspect-dson path/to/persist.game.json
+ddse_cli --inspect-dson path/to/persist.roster.json --fields
+```
+
+The second command also prints ordered field paths, inferred types, source offsets, and
+raw prefixes for unknown field kinds, including fields inside embedded DSON documents.
 
 ## Next
 
-Stage 1: DSON Reader and structural diagnostics.
+Stage 2: DSON Writer and round-trip validation.

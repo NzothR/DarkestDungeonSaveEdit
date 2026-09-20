@@ -21,6 +21,7 @@ add_executable(ddse_tests
     unit/logger_tests.cpp
     unit/file_system_tests.cpp
     unit/sqlite_tests.cpp
+    unit/dson_reader_tests.cpp
     integration/fixture_layout_tests.cpp
 )
 target_link_libraries(ddse_tests PRIVATE
@@ -33,6 +34,8 @@ target_link_libraries(ddse_tests PRIVATE
 target_include_directories(ddse_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
 target_compile_definitions(ddse_tests PRIVATE
     DDSE_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    DDSE_TEST_SAVE_PROFILE_DIR="${PROJECT_SOURCE_DIR}/test_save_profile/profile_0"
+    DDSE_TEST_SAVE_BACKUP_DIR="${PROJECT_SOURCE_DIR}/test_save_profile/backup/profile_0"
 )
 
 include(GoogleTest)

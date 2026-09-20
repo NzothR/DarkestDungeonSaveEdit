@@ -41,6 +41,8 @@ endfunction()
 add_library(ddse_core STATIC
     src/core/version.cpp
     src/core/error.cpp
+    src/core/dson/dson_document.cpp
+    src/core/dson/dson_reader.cpp
 )
 add_library(ddse::core ALIAS ddse_core)
 ddse_set_project_defaults(ddse_core)
