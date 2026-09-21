@@ -193,17 +193,24 @@ TEST(DsonWriter, ClonesAndRenamesAnObjectSubtreeThenRoundTripsIt) {
     auto document = reader.parse(source_bytes, sample.filename().string());
     ASSERT_TRUE(document) << document.error().message;
     const auto original_field_count = document.value().fields.size();
+    std::size_t clone_index = 0;
+    std::string clone_key;
+    do {
+        clone_key = std::to_string(clone_index++);
+    } while (std::any_of(document.value().fields.begin(), document.value().fields.end(), [&](const auto& field) {
+        return field.path == "base_root/trinkets/items/" + clone_key;
+    }));
     const auto appended = DsonDocumentEditor::append_clone(document.value(), "base_root/trinkets/items",
-        document.value(), "base_root/trinkets/items/0", "127");
+        document.value(), "base_root/trinkets/items/0", clone_key);
     ASSERT_TRUE(appended) << appended.error().message;
 
-    const auto cloned_id = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
-        return field.path == "base_root/trinkets/items/127/id";
+    const auto cloned_id = std::find_if(document.value().fields.begin(), document.value().fields.end(), [&](const auto& field) {
+        return field.path == "base_root/trinkets/items/" + clone_key + "/id";
     });
     ASSERT_NE(cloned_id, document.value().fields.end());
     cloned_id->replace_value(std::string{"ddse_structure_test_trinket"});
-    const auto cloned_amount = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
-        return field.path == "base_root/trinkets/items/127/amount";
+    const auto cloned_amount = std::find_if(document.value().fields.begin(), document.value().fields.end(), [&](const auto& field) {
+        return field.path == "base_root/trinkets/items/" + clone_key + "/amount";
     });
     ASSERT_NE(cloned_amount, document.value().fields.end());
     cloned_amount->replace_value(std::int32_t{1});
@@ -215,8 +222,8 @@ TEST(DsonWriter, ClonesAndRenamesAnObjectSubtreeThenRoundTripsIt) {
     auto reparsed = reader.parse(encoded.value(), "structural-round-trip.dson");
     ASSERT_TRUE(reparsed) << reparsed.error().message;
     EXPECT_EQ(reparsed.value().fields.size(), original_field_count + added_field_count);
-    const auto id = std::find_if(reparsed.value().fields.begin(), reparsed.value().fields.end(), [](const auto& field) {
-        return field.path == "base_root/trinkets/items/127/id";
+    const auto id = std::find_if(reparsed.value().fields.begin(), reparsed.value().fields.end(), [&](const auto& field) {
+        return field.path == "base_root/trinkets/items/" + clone_key + "/id";
     });
     ASSERT_NE(id, reparsed.value().fields.end());
     EXPECT_EQ(std::get<std::string>(id->value), "ddse_structure_test_trinket");

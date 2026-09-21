@@ -87,6 +87,18 @@ ddse::application::RawSaveProfile load_profile() {
     return std::move(profile.value());
 }
 
+std::size_t saved_hero_count(const ddse::application::RawSaveProfile& profile) {
+    const auto& roster = profile.documents.at("persist.roster.json");
+    if (!roster.decoded) return 0;
+    const auto heroes = std::find_if(roster.decoded->fields.begin(), roster.decoded->fields.end(), [](const auto& field) {
+        return field.path == "base_root/heroes";
+    });
+    if (heroes == roster.decoded->fields.end()) return 0;
+    return static_cast<std::size_t>(std::count_if(heroes->children.begin(), heroes->children.end(), [&](const auto index) {
+        return index < roster.decoded->fields.size() && roster.decoded->fields[index].kind == ddse::core::dson::ValueKind::Object;
+    }));
+}
+
 std::optional<std::pair<std::string, std::string>> first_hero_class(
     const ddse::application::RawSaveProfile& profile) {
     const auto& roster = profile.documents.at("persist.roster.json");
@@ -143,10 +155,12 @@ TEST(Stage8CampaignModel, ProjectsProfileSummaryAndKeepsRawLocatorsAndContentPro
     const auto profile = load_profile();
     FixtureContentEnvironment content;
     const auto model = ddse::application::CampaignModelBuilder{}.build(profile, content);
+    const auto expected_hero_count = saved_hero_count(profile);
 
     EXPECT_EQ(model.summary.profile_id, "profile_0");
     EXPECT_EQ(model.summary.document_count, profile.documents.size());
-    EXPECT_EQ(model.heroes.size(), 31U);
+    EXPECT_GT(expected_hero_count, 0U);
+    EXPECT_EQ(model.heroes.size(), expected_hero_count);
     EXPECT_EQ(model.resources.size(), 8U);
     EXPECT_GT(model.trinket_inventory.size(), 0U);
     EXPECT_GT(model.town_buildings.size(), 0U);
@@ -187,7 +201,9 @@ TEST(Stage8CampaignModel, MissingModHeroDefinitionPreservesIdAndMarksOnlyThatHer
     content.unresolved_id = first->second;
 
     const auto model = ddse::application::CampaignModelBuilder{}.build(profile, content);
-    ASSERT_EQ(model.heroes.size(), 31U);
+    const auto expected_hero_count = saved_hero_count(profile);
+    ASSERT_GT(expected_hero_count, 0U);
+    ASSERT_EQ(model.heroes.size(), expected_hero_count);
     const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
         return item.persistent_id == first->first;
     });
@@ -198,7 +214,7 @@ TEST(Stage8CampaignModel, MissingModHeroDefinitionPreservesIdAndMarksOnlyThatHer
     EXPECT_EQ(hero->state, ddse::domain::EntityState::Partial);
     EXPECT_EQ(model.state, ddse::domain::ModelState::Partial);
     EXPECT_EQ(model.summary.unresolved_hero_count, 1U);
-    EXPECT_EQ(model.summary.hero_count, 31U);
+    EXPECT_EQ(model.summary.hero_count, expected_hero_count);
 }
 
 TEST(Stage8CampaignModel, OneMalformedHeroDoesNotBlockTheRemainingRoster) {
@@ -207,12 +223,14 @@ TEST(Stage8CampaignModel, OneMalformedHeroDoesNotBlockTheRemainingRoster) {
     FixtureContentEnvironment content;
 
     const auto model = ddse::application::CampaignModelBuilder{}.build(profile, content);
-    ASSERT_EQ(model.heroes.size(), 31U);
+    const auto expected_hero_count = saved_hero_count(profile);
+    ASSERT_GT(expected_hero_count, 0U);
+    ASSERT_EQ(model.heroes.size(), expected_hero_count);
     EXPECT_EQ(model.state, ddse::domain::ModelState::Partial);
     EXPECT_EQ(model.summary.unresolved_hero_count, 1U);
     EXPECT_EQ(std::count_if(model.heroes.begin(), model.heroes.end(), [](const auto& hero) {
         return hero.state == ddse::domain::EntityState::Resolved;
-    }), 30);
+    }), static_cast<std::ptrdiff_t>(expected_hero_count - 1));
     EXPECT_TRUE(std::any_of(model.diagnostics.begin(), model.diagnostics.end(), [](const auto& diagnostic) {
         return diagnostic.code == "hero.embedded_save_missing";
     }));
