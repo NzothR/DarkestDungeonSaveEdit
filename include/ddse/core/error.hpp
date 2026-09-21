@@ -26,6 +26,7 @@ enum class ErrorCode {
     ValidationFailed,
     BackupFailed,
     CommitFailed,
+    PartialCommit,
 };
 
 struct Error {

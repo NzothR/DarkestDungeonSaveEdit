@@ -22,6 +22,7 @@ struct CampaignMappingDescriptor {
     bool semantically_writable{};
     bool game_mutation_verified{};
     std::string notes;
+    bool editable_in_session{};
 };
 
 struct CampaignResourceValue {

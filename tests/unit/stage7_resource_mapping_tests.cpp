@@ -86,3 +86,23 @@ TEST(Stage7ResourceMapping, RegistryDistinguishesObservedShapeFromGameMutationEv
     EXPECT_FALSE(mappings[0].game_mutation_verified);
     EXPECT_FALSE(mappings[1].semantically_writable);
 }
+
+TEST(Stage7ResourceMapping, SessionEditingDoesNotClaimGameSaveWriteEvidence) {
+    const auto resource = std::find_if(ddse::application::stage7_resource_mappings().begin(),
+        ddse::application::stage7_resource_mappings().end(), [](const auto& item) {
+            return item.semantic_property == "Estate.Resource.Amount";
+        });
+    ASSERT_NE(resource, ddse::application::stage7_resource_mappings().end());
+    EXPECT_TRUE(resource->editable_in_session);
+    EXPECT_FALSE(resource->semantically_writable);
+    EXPECT_FALSE(resource->game_mutation_verified);
+
+    const auto hero = std::find_if(ddse::application::stage8_campaign_mappings().begin(),
+        ddse::application::stage8_campaign_mappings().end(), [](const auto& item) {
+            return item.semantic_property == "Hero.Name";
+        });
+    ASSERT_NE(hero, ddse::application::stage8_campaign_mappings().end());
+    EXPECT_TRUE(hero->editable_in_session);
+    EXPECT_FALSE(hero->semantically_writable);
+    EXPECT_FALSE(hero->game_mutation_verified);
+}

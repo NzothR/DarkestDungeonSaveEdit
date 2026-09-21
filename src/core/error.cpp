@@ -27,6 +27,7 @@ std::string_view to_string(ErrorCode code) noexcept {
     case ErrorCode::ValidationFailed: return "ValidationFailed";
     case ErrorCode::BackupFailed: return "BackupFailed";
     case ErrorCode::CommitFailed: return "CommitFailed";
+    case ErrorCode::PartialCommit: return "PartialCommit";
     }
     return "UnknownError";
 }

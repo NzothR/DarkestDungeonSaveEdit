@@ -35,16 +35,8 @@ const CampaignMappingDescriptor* find_mapping(std::string_view property) {
 }
 
 bool is_editable_property(std::string_view property) {
-    static const std::set<std::string, std::less<>> editable{
-        "Estate.Resource.Amount",
-        "Hero.Name",
-        "Hero.ResolveXp",
-        "Hero.Stress",
-        "Hero.CurrentHp",
-        "Hero.WeaponRank",
-        "Hero.ArmourRank",
-    };
-    return editable.contains(property);
+    const auto* mapping = find_mapping(property);
+    return mapping != nullptr && mapping->editable_in_session;
 }
 
 std::vector<SetCampaignValueOperation> flatten(const CampaignOperation& operation) {

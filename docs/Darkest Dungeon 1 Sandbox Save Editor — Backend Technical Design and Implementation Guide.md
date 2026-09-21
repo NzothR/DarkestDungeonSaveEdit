@@ -1729,7 +1729,7 @@ Stage 9 实现了只作用于内存语义模型的资源与英雄标量字段操
 
 ### 为什么现在做
 
-此前所有阶段都可在内存中失败；本阶段第一次触碰真实存档，必须建立在稳定 Mapping 与 Operation 上。
+此前所有阶段都可在内存中失败；本阶段首次把候选字节写入磁盘。Stage 10 的提交目标必须是与源 profile 完全一致的独立副本，不能直接写入用户的源存档。真实游戏存档写入仍须等待后续受控游戏测试，并由 Mapping 单独记录写入证据。
 
 ### 测试与预期结果
 
@@ -1742,11 +1742,13 @@ Stage 9 实现了只作用于内存语义模型的资源与英雄标量字段操
 
 ### Definition of Done
 
-- [ ] 所有写入均经过事务
-- [ ] 完整 profile backup 可恢复
-- [ ] candidate 在写盘前全部生成
-- [ ] read-back validation 存在
-- [ ] 失败不会报告成功
+- [x] 所有写入均经过事务，且只写入调用方明确提供的独立 profile 副本
+- [x] 完整 profile backup 可恢复；包含子目录、未知文件和空目录，并以 fingerprint 校验
+- [x] candidate 在写盘前全部生成并验证
+- [x] read-back validation 存在
+- [x] 写入中断和回读失败会报告失败或 Partial Commit，并返回恢复备份位置
+
+Stage 10 自动测试使用临时 profile 副本，不修改项目提供的测试存档，也不代表游戏内写入已验证。当前没有生成游戏测试脚本；是否及如何做游戏内验证留待单独确定。
 
 ## Stage 11：Application Services
 

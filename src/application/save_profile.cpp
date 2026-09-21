@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <iterator>
+#include <set>
 #include <span>
 #include <string_view>
 
@@ -56,37 +58,62 @@ bool is_core_document(std::string_view filename, const DomainList& domains) {
     return false;
 }
 
-void append_u64(std::string& target, std::uint64_t value) {
-    for (unsigned i = 0; i < 8; ++i) target.push_back(static_cast<char>((value >> (i * 8U)) & 0xffU));
+struct ProfileTree {
+    std::vector<std::filesystem::path> files;
+    std::vector<std::filesystem::path> directories;
+};
+
+core::Result<ProfileTree, core::Error> collect_profile_tree(const IFileSystem& file_system,
+                                                             const std::filesystem::path& root) {
+    auto root_exists = file_system.exists(root);
+    if (!root_exists) return core::Result<ProfileTree, core::Error>::failure(root_exists.error());
+    if (!root_exists.value())
+        return core::Result<ProfileTree, core::Error>::failure(
+            {core::ErrorCode::FileNotFound, "Save profile directory does not exist", "SaveProfile",
+             {{"path", root.string()}}});
+
+    ProfileTree tree;
+    std::vector<std::filesystem::path> pending{root};
+    std::set<std::string, std::less<>> visited;
+    while (!pending.empty()) {
+        const auto directory = std::move(pending.back());
+        pending.pop_back();
+        const auto relative_directory = directory.lexically_relative(root);
+        if (std::distance(relative_directory.begin(), relative_directory.end()) > 64)
+            return core::Result<ProfileTree, core::Error>::failure(
+                {core::ErrorCode::IoError, "Save profile directory nesting exceeds the safe traversal limit",
+                 "SaveProfile", {{"path", directory.string()}}});
+        if (!visited.insert(directory.lexically_normal().generic_string()).second) continue;
+        if (visited.size() > 100000)
+            return core::Result<ProfileTree, core::Error>::failure(
+                {core::ErrorCode::IoError, "Save profile directory tree exceeds the traversal limit", "SaveProfile",
+                 {{"path", root.string()}}});
+
+        auto files = file_system.list_files(directory);
+        if (!files) return core::Result<ProfileTree, core::Error>::failure(files.error());
+        tree.files.insert(tree.files.end(), files.value().begin(), files.value().end());
+        auto directories = file_system.list_directories(directory);
+        if (!directories) return core::Result<ProfileTree, core::Error>::failure(directories.error());
+        for (const auto& child : directories.value()) {
+            tree.directories.push_back(child);
+            pending.push_back(child);
+        }
+    }
+    return core::Result<ProfileTree, core::Error>::success(std::move(tree));
 }
 
-std::uint64_t profile_fingerprint(const IFileSystem& file_system,
-                                  const std::vector<std::filesystem::path>& paths) {
-    std::vector<std::filesystem::path> sorted = paths;
-    std::sort(sorted.begin(), sorted.end());
-    std::uint64_t hash = 14695981039346656037ULL;
-    auto feed = [&](std::string_view bytes) {
-        for (const unsigned char byte : bytes) {
-            hash ^= byte;
-            hash *= 1099511628211ULL;
-        }
-    };
-    for (const auto& path : sorted) {
-        const auto relative_name = path.filename().generic_string();
-        feed(relative_name);
-        feed(std::string_view{"\0", 1});
-        const auto read = file_system.read_file(path);
-        if (!read) {
-            feed("<read-error>");
-            feed(read.error().message);
-            continue;
-        }
-        std::string length;
-        append_u64(length, static_cast<std::uint64_t>(read.value().size()));
-        feed(length);
-        feed(read.value());
+void feed_bytes(std::uint64_t& hash, std::string_view bytes) {
+    for (const unsigned char byte : bytes) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
     }
-    return hash;
+}
+
+void feed_u64(std::uint64_t& hash, std::uint64_t value) {
+    for (unsigned i = 0; i < 8; ++i) {
+        const auto byte = static_cast<char>((value >> (i * 8U)) & 0xffU);
+        feed_bytes(hash, std::string_view{&byte, 1});
+    }
 }
 
 } // namespace
@@ -98,6 +125,40 @@ std::uint64_t SaveProfileDiscovery::fingerprint(std::string_view bytes) noexcept
         hash *= 1099511628211ULL;
     }
     return hash;
+}
+
+core::Result<std::uint64_t, core::Error>
+SaveProfileDiscovery::fingerprint_profile(const IFileSystem& file_system,
+                                          const std::filesystem::path& profile_root) {
+    auto tree = collect_profile_tree(file_system, profile_root);
+    if (!tree) return core::Result<std::uint64_t, core::Error>::failure(tree.error());
+
+    const auto relative_paths = [&](const std::vector<std::filesystem::path>& paths) {
+        std::vector<std::filesystem::path> relative;
+        relative.reserve(paths.size());
+        for (const auto& path : paths) relative.push_back(path.lexically_relative(profile_root));
+        std::sort(relative.begin(), relative.end());
+        return relative;
+    };
+    const auto directories = relative_paths(tree.value().directories);
+    const auto files = relative_paths(tree.value().files);
+
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const auto& path : directories) {
+        feed_bytes(hash, "D");
+        feed_bytes(hash, path.generic_string());
+        feed_bytes(hash, std::string_view{"\0", 1});
+    }
+    for (const auto& relative_path : files) {
+        const auto read = file_system.read_file(profile_root / relative_path);
+        if (!read) return core::Result<std::uint64_t, core::Error>::failure(read.error());
+        feed_bytes(hash, "F");
+        feed_bytes(hash, relative_path.generic_string());
+        feed_bytes(hash, std::string_view{"\0", 1});
+        feed_u64(hash, static_cast<std::uint64_t>(read.value().size()));
+        feed_bytes(hash, read.value());
+    }
+    return core::Result<std::uint64_t, core::Error>::success(hash);
 }
 
 core::Result<std::vector<RawSaveProfile>, core::Error>
@@ -118,6 +179,9 @@ SaveProfileDiscovery::discover(const std::filesystem::path& save_root) const {
 
 core::Result<RawSaveProfile, core::Error>
 SaveProfileDiscovery::load(const std::filesystem::path& profile_root) const {
+    auto baseline_before = fingerprint_profile(file_system_, profile_root);
+    if (!baseline_before)
+        return core::Result<RawSaveProfile, core::Error>::failure(baseline_before.error());
     auto listed = file_system_.list_files(profile_root);
     if (!listed) return core::Result<RawSaveProfile, core::Error>::failure(listed.error());
 
@@ -176,15 +240,21 @@ SaveProfileDiscovery::load(const std::filesystem::path& profile_root) const {
     }
 
     profile.descriptor.detected_domains = std::move(domains);
-    profile.baseline_fingerprint = profile_fingerprint(file_system_, paths);
+    auto baseline_after = fingerprint_profile(file_system_, profile_root);
+    if (!baseline_after) return core::Result<RawSaveProfile, core::Error>::failure(baseline_after.error());
+    if (baseline_before.value() != baseline_after.value())
+        return core::Result<RawSaveProfile, core::Error>::failure(
+            {core::ErrorCode::ConcurrentSaveChanged,
+             "Save profile changed while its documents were being loaded", "SaveProfile",
+             {{"profile_root", profile_root.string()}}});
+    profile.baseline_fingerprint = baseline_before.value();
     return core::Result<RawSaveProfile, core::Error>::success(std::move(profile));
 }
 
 core::Result<bool, core::Error> RawSaveProfile::matches_disk_baseline(const IFileSystem& file_system) const {
-    auto listed = file_system.list_files(descriptor.root_path);
-    if (!listed) return core::Result<bool, core::Error>::failure(listed.error());
-    return core::Result<bool, core::Error>::success(
-        baseline_fingerprint == profile_fingerprint(file_system, listed.value()));
+    auto current = SaveProfileDiscovery::fingerprint_profile(file_system, descriptor.root_path);
+    if (!current) return core::Result<bool, core::Error>::failure(current.error());
+    return core::Result<bool, core::Error>::success(baseline_fingerprint == current.value());
 }
 
 std::string_view to_string(SaveDomain domain) noexcept {

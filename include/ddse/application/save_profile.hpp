@@ -62,6 +62,8 @@ public:
     [[nodiscard]] core::Result<RawSaveProfile, core::Error> load(const std::filesystem::path& profile_root) const;
 
     [[nodiscard]] static std::uint64_t fingerprint(std::string_view bytes) noexcept;
+    [[nodiscard]] static core::Result<std::uint64_t, core::Error>
+    fingerprint_profile(const IFileSystem& file_system, const std::filesystem::path& profile_root);
 
 private:
     const IFileSystem& file_system_;

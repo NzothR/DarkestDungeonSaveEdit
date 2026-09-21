@@ -1,9 +1,18 @@
 #include "ddse/infrastructure/native_file_system.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <iterator>
 #include <system_error>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace ddse::infrastructure {
 namespace {
@@ -53,6 +62,51 @@ core::Result<void, core::Error> NativeFileSystem::write_file(const std::filesyst
     if (!output) return core::Result<void, core::Error>::failure(stream_error(path, false));
     output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
     if (!output) return core::Result<void, core::Error>::failure(stream_error(path, false));
+    return core::Result<void, core::Error>::success();
+}
+
+core::Result<void, core::Error> NativeFileSystem::write_file_atomic(const std::filesystem::path& path,
+                                                                    const std::string& bytes) {
+    static std::atomic<std::uint64_t> sequence{};
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto temporary = path;
+    temporary += ".ddse-tmp-" + std::to_string(stamp) + "-" + std::to_string(sequence.fetch_add(1));
+
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) return core::Result<void, core::Error>::failure(stream_error(temporary, false));
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        output.flush();
+        if (!output) {
+            output.close();
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return core::Result<void, core::Error>::failure(stream_error(temporary, false));
+        }
+        output.close();
+        if (output.fail()) {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+            return core::Result<void, core::Error>::failure(stream_error(temporary, false));
+        }
+    }
+
+#ifdef _WIN32
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const std::error_code ec{static_cast<int>(GetLastError()), std::system_category()};
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return core::Result<void, core::Error>::failure(fs_error(path, ec));
+    }
+#else
+    std::error_code ec;
+    std::filesystem::rename(temporary, path, ec);
+    if (ec) {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        return core::Result<void, core::Error>::failure(fs_error(path, ec));
+    }
+#endif
     return core::Result<void, core::Error>::success();
 }
 
