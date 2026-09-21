@@ -261,7 +261,7 @@ TEST(Stage8CampaignModel, AMalformedWalletEntryDoesNotHideOtherResources) {
     EXPECT_EQ(model.state, ddse::domain::ModelState::Partial);
 }
 
-TEST(Stage8CampaignModel, ObservedSaveMappingsRemainReadOnlyUntilWriteEvidenceExists) {
+TEST(Stage8CampaignModel, MappingRegistryMarksOnlyGameVerifiedOperationsForCommit) {
     const auto& mappings = ddse::application::stage8_campaign_mappings();
     ASSERT_GE(mappings.size(), 10U);
     EXPECT_TRUE(std::any_of(mappings.begin(), mappings.end(), [](const auto& mapping) {
@@ -270,10 +270,24 @@ TEST(Stage8CampaignModel, ObservedSaveMappingsRemainReadOnlyUntilWriteEvidenceEx
     EXPECT_TRUE(std::any_of(mappings.begin(), mappings.end(), [](const auto& mapping) {
         return mapping.semantic_property == "TrinketInventory.Items";
     }));
-    EXPECT_TRUE(std::all_of(mappings.begin(), mappings.end(), [](const auto& mapping) {
-        return mapping.evidence_level == "VERIFIED_SAMPLE" && !mapping.semantically_writable &&
-               !mapping.game_mutation_verified;
-    }));
+    const auto quirk_lock = ddse::application::find_campaign_mapping("Hero.Quirk.Locked");
+    const auto quirk_remove = ddse::application::find_campaign_mapping("Hero.Quirk.Entry");
+    const auto trinket_destroy = ddse::application::find_campaign_mapping("TrinketInventory.Entry");
+    const auto district_built = ddse::application::find_campaign_mapping("Town.District.Built");
+    ASSERT_NE(quirk_lock, nullptr);
+    ASSERT_NE(quirk_remove, nullptr);
+    ASSERT_NE(trinket_destroy, nullptr);
+    ASSERT_NE(district_built, nullptr);
+    for (const auto* mapping : {quirk_lock, quirk_remove, trinket_destroy, district_built}) {
+        EXPECT_TRUE(mapping->semantically_writable);
+        EXPECT_TRUE(mapping->game_mutation_verified);
+        EXPECT_EQ(mapping->evidence_level, "VERIFIED_GAME");
+    }
+    const auto weapon_rank = ddse::application::find_campaign_mapping("Hero.WeaponRank");
+    ASSERT_NE(weapon_rank, nullptr);
+    EXPECT_TRUE(weapon_rank->game_mutation_verified);
+    EXPECT_FALSE(weapon_rank->semantically_writable);
+    EXPECT_EQ(weapon_rank->capability(), ddse::application::CampaignMappingCapability::SessionOnly);
 }
 
 TEST(Stage9CampaignEditSession, StagesARealProfileHeroEditWithoutChangingRawSaveBytes) {

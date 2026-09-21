@@ -13,6 +13,13 @@
 
 namespace ddse::application {
 
+enum class CampaignMappingCapability {
+    ReadOnly,
+    SessionOnly,
+    CandidateWritable,
+    CommitWritable,
+};
+
 struct CampaignMappingDescriptor {
     std::string semantic_property;
     std::string document_id;
@@ -23,7 +30,18 @@ struct CampaignMappingDescriptor {
     bool game_mutation_verified{};
     std::string notes;
     bool editable_in_session{};
+
+    [[nodiscard]] CampaignMappingCapability capability() const noexcept {
+        if (semantically_writable && game_mutation_verified) return CampaignMappingCapability::CommitWritable;
+        if (semantically_writable) return CampaignMappingCapability::CandidateWritable;
+        if (editable_in_session) return CampaignMappingCapability::SessionOnly;
+        return CampaignMappingCapability::ReadOnly;
+    }
 };
+
+// Central lookup used by both Operation validation and the save adapter. Keeping
+// this in one place prevents controller/UI code from inventing raw paths.
+[[nodiscard]] const CampaignMappingDescriptor* find_campaign_mapping(std::string_view semantic_property);
 
 struct CampaignResourceValue {
     std::size_t wallet_index{};

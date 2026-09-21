@@ -191,6 +191,75 @@ std::optional<application::CampaignFieldChange> hero_name_change(
     return std::nullopt;
 }
 
+std::optional<application::CampaignFieldChange> hero_resolve_xp_change(
+    const application::RawSaveProfile& profile, std::int32_t increment = 1) {
+    const auto roster = profile.documents.find("persist.roster.json");
+    if (roster == profile.documents.end() || !roster->second.decoded) return std::nullopt;
+    const auto& outer = *roster->second.decoded;
+    for (std::size_t outer_index = 0; outer_index < outer.fields.size(); ++outer_index) {
+        const auto& embedded = outer.fields[outer_index];
+        if (embedded.name != "raw_data" || embedded.kind != core::dson::ValueKind::EmbeddedDson ||
+            !embedded.embedded_document) continue;
+        constexpr std::string_view hero_prefix{"base_root/heroes/"};
+        if (!embedded.path.starts_with(hero_prefix)) continue;
+        const auto id_end = embedded.path.find('/', hero_prefix.size());
+        if (id_end == std::string::npos) continue;
+        const auto hero_id = embedded.path.substr(hero_prefix.size(), id_end - hero_prefix.size());
+        const auto& inner = *embedded.embedded_document;
+        const auto xp = std::find_if(inner.fields.begin(), inner.fields.end(), [](const auto& field) {
+            return field.path == "base_root/resolveXp" && field.kind == core::dson::ValueKind::Integer;
+        });
+        if (xp == inner.fields.end()) continue;
+        const auto before = std::get_if<std::int32_t>(&xp->value);
+        if (!before || *before > INT32_MAX - increment) continue;
+        auto steps = steps_to_field(outer, outer_index);
+        const auto inner_index = static_cast<std::size_t>(std::distance(inner.fields.begin(), xp));
+        auto inner_steps = steps_to_field(inner, inner_index);
+        steps.insert(steps.end(), inner_steps.begin(), inner_steps.end());
+        domain::RawLocator raw{roster->second.id, std::move(steps), embedded.path + " => " + xp->path};
+        return application::CampaignFieldChange{
+            {"Hero.ResolveXp", hero_id}, std::move(raw), *before, *before + increment};
+    }
+    return std::nullopt;
+}
+
+std::optional<application::CampaignStructuralChange> first_hero_quirk_erase(
+    const application::RawSaveProfile& profile) {
+    const auto roster = profile.documents.find("persist.roster.json");
+    if (roster == profile.documents.end() || !roster->second.decoded) return std::nullopt;
+    const auto& outer = *roster->second.decoded;
+    for (std::size_t outer_index = 0; outer_index < outer.fields.size(); ++outer_index) {
+        const auto& embedded = outer.fields[outer_index];
+        if (embedded.name != "raw_data" || embedded.kind != core::dson::ValueKind::EmbeddedDson ||
+            !embedded.embedded_document) continue;
+        constexpr std::string_view hero_prefix{"base_root/heroes/"};
+        if (!embedded.path.starts_with(hero_prefix)) continue;
+        const auto id_end = embedded.path.find('/', hero_prefix.size());
+        if (id_end == std::string::npos) continue;
+        const auto hero_id = embedded.path.substr(hero_prefix.size(), id_end - hero_prefix.size());
+        const auto& inner = *embedded.embedded_document;
+        const auto quirk = std::find_if(inner.fields.begin(), inner.fields.end(), [](const auto& field) {
+            return field.path.starts_with("base_root/quirks/") &&
+                   field.path.find('/', std::string_view{"base_root/quirks/"}.size()) == std::string::npos &&
+                   field.kind == core::dson::ValueKind::Object;
+        });
+        if (quirk == inner.fields.end()) continue;
+        auto steps = steps_to_field(outer, outer_index);
+        const auto inner_index = static_cast<std::size_t>(std::distance(inner.fields.begin(), quirk));
+        auto inner_steps = steps_to_field(inner, inner_index);
+        steps.insert(steps.end(), inner_steps.begin(), inner_steps.end());
+        domain::RawLocator raw{roster->second.id, std::move(steps), embedded.path + " => " + quirk->path};
+        const auto key = quirk->name;
+        domain::HeroQuirk removed;
+        removed.id = key;
+        removed.raw = raw;
+        return application::CampaignStructuralChange{
+            {"Hero.Quirk.Entry", hero_id, std::nullopt, key}, std::move(raw),
+            core::dson::ValueKind::Object, 0U, std::move(removed)};
+    }
+    return std::nullopt;
+}
+
 application::RawSaveProfile load_profile(application::IFileSystem& file_system,
                                          const std::filesystem::path& root) {
     application::SaveProfileDiscovery discovery{file_system};
@@ -255,6 +324,66 @@ TEST(SaveAdapter, DeepClonesEmbeddedHeroDocumentBeforePatchingIt) {
     EXPECT_FALSE(source_field->dirty);
 }
 
+TEST(SaveAdapter, ErasesOnlyTheMappedQuirkSubtreeAndPreservesTheLoadedSource) {
+    TempDirectory temp;
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto erase = first_hero_quirk_erase(profile);
+    ASSERT_TRUE(erase);
+    const auto original_bytes = profile.documents.at("persist.roster.json").bytes;
+    application::ChangeSet changes;
+    changes.structural_changes.push_back(*erase);
+    changes.affected_documents = {"persist.roster.json"};
+
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, changes);
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    ASSERT_EQ(candidate.value().documents.size(), 1U);
+    EXPECT_EQ(candidate.value().documents.front().expected_field_paths,
+              (std::vector<std::string>{erase->raw.display_path}));
+    EXPECT_EQ(profile.documents.at("persist.roster.json").bytes, original_bytes);
+
+    core::dson::DsonReader reader;
+    const auto& bytes = candidate.value().documents.front().bytes;
+    const auto* data = reinterpret_cast<const std::byte*>(bytes.data());
+    auto decoded = reader.parse(std::span<const std::byte>{data, bytes.size()}, "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    const auto separator = erase->raw.display_path.find(" => ");
+    ASSERT_NE(separator, std::string::npos);
+    const auto inner_path = erase->raw.display_path.substr(separator + 4);
+    const auto embedded = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(), [&](const auto& field) {
+        return field.kind == core::dson::ValueKind::EmbeddedDson && field.embedded_document &&
+               field.path.starts_with("base_root/heroes/" + erase->target.entity_id + "/");
+    });
+    ASSERT_NE(embedded, decoded.value().fields.end());
+    const auto absent = std::find_if(embedded->embedded_document->fields.begin(), embedded->embedded_document->fields.end(),
+                                     [&](const auto& field) { return field.path == inner_path; });
+    EXPECT_EQ(absent, embedded->embedded_document->fields.end());
+}
+
+TEST(SaveAdapter, RejectsAnUnmappedOrUnverifiedStructuralTarget) {
+    application::ChangeSet changes;
+    domain::HeroQuirk removed;
+    removed.id = "unmapped";
+    changes.structural_changes.push_back({{"Hero.PersistentId", "hero-1", std::nullopt, "unmapped"},
+        {"persist.roster.json", {{0, "x", false}}, "base_root/heroes/hero-1/unmapped"},
+        core::dson::ValueKind::Object, 0U, removed});
+    changes.affected_documents = {"persist.roster.json"};
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    TempDirectory temp;
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, changes);
+    ASSERT_FALSE(candidate);
+    EXPECT_EQ(candidate.error().code, core::ErrorCode::MappingNotWritable);
+}
+
 TEST(SafeSaveCommitter, BacksUpCompleteProfileAndWritesOnlyTheExplicitCopy) {
     TempDirectory temp;
     const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
@@ -303,6 +432,54 @@ TEST(SafeSaveCommitter, BacksUpCompleteProfileAndWritesOnlyTheExplicitCopy) {
     EXPECT_EQ(std::get<std::int32_t>(found->value), std::get<std::int32_t>(change->after));
 }
 
+TEST(SafeSaveCommitter, CommitsMappedStructuralEraseToTheCopyAndKeepsBackupAndSource) {
+    TempDirectory temp;
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(source_root, target_root);
+    const auto backup_path = temp.path / "backups" / "quirk-erase";
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto erase = first_hero_quirk_erase(profile);
+    ASSERT_TRUE(erase);
+    const auto original_source = profile.documents.at("persist.roster.json").bytes;
+    application::ChangeSet changes;
+    changes.structural_changes.push_back(*erase);
+    changes.affected_documents = {"persist.roster.json"};
+
+    const auto result = application::SafeSaveCommitter{fs}.commit(profile, changes, target_root, backup_path);
+    ASSERT_TRUE(result) << result.error().message;
+    EXPECT_EQ(read_bytes(source_root / "persist.roster.json"), original_source);
+    EXPECT_EQ(read_bytes(backup_path / "persist.roster.json"), original_source);
+    EXPECT_NE(read_bytes(target_root / "persist.roster.json"), original_source);
+    EXPECT_EQ(result.value().committed_documents, (std::vector<std::string>{"persist.roster.json"}));
+}
+
+TEST(SafeSaveCommitter, RefusesCandidateOnlyMappingsBeforeBackupOrDiskWrite) {
+    TempDirectory temp;
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(source_root, target_root);
+    FaultInjectingFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto name = hero_name_change(profile);
+    ASSERT_TRUE(name);
+    const auto backup_path = temp.path / "backups" / "unverified";
+
+    const auto result = application::SafeSaveCommitter{fs}.commit(profile, change_set({*name}), target_root, backup_path);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code, core::ErrorCode::MappingNotWritable);
+    EXPECT_EQ(fs.atomic_write_count, 0U);
+    EXPECT_FALSE(std::filesystem::exists(backup_path));
+    EXPECT_EQ(read_bytes(target_root / "persist.roster.json"), profile.documents.at("persist.roster.json").bytes);
+}
+
 TEST(SafeSaveCommitter, BackupFailurePerformsZeroTargetWrites) {
     TempDirectory temp;
     const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
@@ -339,7 +516,7 @@ TEST(SafeSaveCommitter, SecondDocumentFailureIsReportedAsPartialCommitWithRecove
     FaultInjectingFileSystem fs;
     const auto profile = load_profile(fs, source_root);
     const auto resource = resource_amount_change(profile);
-    const auto hero_name = hero_name_change(profile);
+    const auto hero_name = hero_resolve_xp_change(profile);
     ASSERT_TRUE(resource);
     ASSERT_TRUE(hero_name);
     const auto changes = change_set({*resource, *hero_name});

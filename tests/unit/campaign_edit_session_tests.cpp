@@ -37,6 +37,22 @@ domain::CampaignModel sample_model() {
     hero.resolve_xp.raw = locator("persist.roster.json", "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/resolveXp");
     hero.stress.value = 15.0F;
     hero.stress.raw = locator("persist.roster.json", "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/m_Stress");
+    domain::HeroQuirk quirk;
+    quirk.id = "mod_positive_quirk";
+    quirk.state = domain::EntityState::Resolved;
+    quirk.polarity = domain::QuirkPolarity::Positive;
+    quirk.is_locked.value = false;
+    quirk.is_locked.raw = locator("persist.roster.json",
+        "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/quirks/mod_positive_quirk/is_locked");
+    quirk.raw = locator("persist.roster.json",
+        "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/quirks/mod_positive_quirk");
+    quirk.definition.definition_payload_json = R"({"can_modify_in_activity":true})";
+    hero.quirks.push_back(std::move(quirk));
+    domain::HeroTrinket equipped;
+    equipped.id = "test_trinket";
+    equipped.raw = locator("persist.roster.json",
+        "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/trinkets/items/2");
+    hero.trinkets.push_back(std::move(equipped));
     model.heroes.push_back(std::move(hero));
 
     domain::Hero unrelated;
@@ -45,6 +61,13 @@ domain::CampaignModel sample_model() {
     unrelated.name.value = "Paracelsus";
     unrelated.name.raw = locator("persist.roster.json", "base_root/heroes/hero-2/hero_file_data/raw_data => base_root/actor/name");
     model.heroes.push_back(std::move(unrelated));
+
+    domain::DistrictState district;
+    district.id = "test_district";
+    district.built.value = false;
+    district.built.raw = locator("persist.town.json", "base_root/districts/buildings/test_district/built");
+    district.raw = locator("persist.town.json", "base_root/districts/buildings/test_district");
+    model.districts.push_back(std::move(district));
     return model;
 }
 
@@ -77,6 +100,9 @@ TEST(CampaignEditSession, ApplyUndoAndRedoAreSymmetricAndRevisioned) {
     ASSERT_EQ(applied.value().changes.changes.front().raw.steps.size(), 2U);
     EXPECT_EQ(applied.value().changes.affected_documents, std::vector<std::string>{"persist.estate.json"});
     EXPECT_EQ(session.model().resources.front().amount.value, 777);
+    ASSERT_EQ(session.pending_changes().changes.size(), 1U);
+    EXPECT_EQ(session.pending_changes().changes.front().before, application::CampaignValue{100});
+    EXPECT_EQ(session.pending_changes().changes.front().after, application::CampaignValue{777});
     EXPECT_EQ(original.resources.front().amount.value, 100);
     EXPECT_EQ(session.model().heroes[1].name.value, "Paracelsus");
     EXPECT_TRUE(session.can_undo());
@@ -88,6 +114,7 @@ TEST(CampaignEditSession, ApplyUndoAndRedoAreSymmetricAndRevisioned) {
     EXPECT_EQ(undone.value().changes.changes.front().before, application::CampaignValue{777});
     EXPECT_EQ(undone.value().changes.changes.front().after, application::CampaignValue{100});
     EXPECT_EQ(session.model().resources.front().amount.value, 100);
+    EXPECT_TRUE(session.pending_changes().empty());
     EXPECT_FALSE(session.can_undo());
     EXPECT_TRUE(session.can_redo());
 
@@ -97,6 +124,21 @@ TEST(CampaignEditSession, ApplyUndoAndRedoAreSymmetricAndRevisioned) {
     EXPECT_EQ(session.model().resources.front().amount.value, 777);
     EXPECT_TRUE(session.can_undo());
     EXPECT_FALSE(session.can_redo());
+}
+
+TEST(CampaignEditSession, PendingChangeSetFoldsRepeatedEditsToTheSessionBaseline) {
+    application::CampaignEditSession session{sample_model()};
+    ASSERT_TRUE(session.apply(resource_amount(4, 200), 0));
+    ASSERT_TRUE(session.apply(resource_amount(4, 300), 1));
+    ASSERT_EQ(session.pending_changes().changes.size(), 1U);
+    EXPECT_EQ(session.pending_changes().changes.front().before, application::CampaignValue{100});
+    EXPECT_EQ(session.pending_changes().changes.front().after, application::CampaignValue{300});
+
+    ASSERT_TRUE(session.undo(2));
+    ASSERT_EQ(session.pending_changes().changes.size(), 1U);
+    EXPECT_EQ(session.pending_changes().changes.front().after, application::CampaignValue{200});
+    ASSERT_TRUE(session.undo(3));
+    EXPECT_TRUE(session.pending_changes().empty());
 }
 
 TEST(CampaignEditSession, CompositeOperationChangesMultipleDocumentsWithOneUndo) {
@@ -234,4 +276,93 @@ TEST(CampaignEditSession, NewEditAfterUndoClearsTheRedoBranch) {
     EXPECT_EQ(new_edit.value().revision, 3U);
     EXPECT_EQ(session.model().heroes.front().name.value, "Aster");
     EXPECT_FALSE(session.can_redo());
+}
+
+TEST(CampaignEditSession, TypedQuirkLockOperationUsesTheMappedBooleanAndSupportsUndo) {
+    application::CampaignEditSession session{sample_model()};
+    const application::CampaignOperation operation = application::SetHeroQuirkLockedOperation{
+        "hero-1", "mod_positive_quirk", true};
+    const auto applied = session.apply(operation, 0);
+    ASSERT_TRUE(applied) << applied.error().message;
+    ASSERT_EQ(applied.value().changes.changes.size(), 1U);
+    EXPECT_EQ(applied.value().changes.changes.front().target.semantic_property, "Hero.Quirk.Locked");
+    EXPECT_EQ(applied.value().changes.changes.front().after, application::CampaignValue{true});
+    EXPECT_TRUE(session.model().heroes.front().quirks.front().is_locked.value.value());
+
+    ASSERT_TRUE(session.undo(1));
+    EXPECT_FALSE(session.model().heroes.front().quirks.front().is_locked.value.value());
+    ASSERT_TRUE(session.redo(2));
+    EXPECT_TRUE(session.model().heroes.front().quirks.front().is_locked.value.value());
+}
+
+TEST(CampaignEditSession, QuirkRemovalIsStructuralAndReversibleInTheWorkingModel) {
+    auto model = sample_model();
+    const auto entry = model.heroes.front().quirks.front();
+    application::CampaignEditSession session{std::move(model)};
+    const application::CampaignOperation operation = application::RemoveHeroQuirkOperation{
+        "hero-1", "mod_positive_quirk"};
+
+    const auto applied = session.apply(operation, 0);
+    ASSERT_TRUE(applied) << applied.error().message;
+    EXPECT_TRUE(applied.value().changes.changes.empty());
+    ASSERT_EQ(applied.value().changes.structural_changes.size(), 1U);
+    EXPECT_EQ(applied.value().changes.structural_changes.front().raw.display_path, entry.raw.display_path);
+    EXPECT_TRUE(session.model().heroes.front().quirks.empty());
+    ASSERT_EQ(session.pending_changes().structural_changes.size(), 1U);
+
+    const auto undone = session.undo(1);
+    ASSERT_TRUE(undone);
+    ASSERT_EQ(undone.value().changes.structural_changes.size(), 1U);
+    EXPECT_EQ(undone.value().changes.structural_changes.front().action,
+              application::CampaignStructuralAction::Restore);
+    EXPECT_TRUE(session.pending_changes().empty());
+    ASSERT_EQ(session.model().heroes.front().quirks.size(), 1U);
+    EXPECT_EQ(session.model().heroes.front().quirks.front().id, entry.id);
+    ASSERT_TRUE(session.redo(2));
+    EXPECT_TRUE(session.model().heroes.front().quirks.empty());
+    ASSERT_EQ(session.pending_changes().structural_changes.size(), 1U);
+}
+
+TEST(CampaignEditSession, DistrictStateUsesAnExplicitSemanticOperation) {
+    application::CampaignEditSession session{sample_model()};
+    const auto result = session.apply(application::SetDistrictBuiltOperation{"test_district", true}, 0);
+    ASSERT_TRUE(result) << result.error().message;
+    ASSERT_EQ(result.value().changes.changes.size(), 1U);
+    EXPECT_EQ(result.value().changes.changes.front().target.semantic_property, "Town.District.Built");
+    EXPECT_EQ(result.value().changes.changes.front().raw.document_id, "persist.town.json");
+    EXPECT_TRUE(session.model().districts.front().built.value.value());
+}
+
+TEST(CampaignEditSession, DestroyEquippedTrinketRemovesItFromTheDraftAndCanBeUndone) {
+    application::CampaignEditSession session{sample_model()};
+    const auto raw_path = session.model().heroes.front().trinkets.front().raw.display_path;
+    const auto result = session.apply(application::DestroyTrinketOperation{"hero-1", raw_path}, 0);
+    ASSERT_TRUE(result) << result.error().message;
+    ASSERT_EQ(result.value().changes.structural_changes.size(), 1U);
+    EXPECT_EQ(result.value().changes.structural_changes.front().target.semantic_property, "Hero.Trinket.Entry");
+    EXPECT_TRUE(session.model().heroes.front().trinkets.empty());
+    ASSERT_TRUE(session.undo(1));
+    ASSERT_EQ(session.model().heroes.front().trinkets.size(), 1U);
+    EXPECT_EQ(session.model().heroes.front().trinkets.front().id, "test_trinket");
+}
+
+TEST(CampaignEditSession, CapabilityCatalogKeepsDeferredAndUnimplementedFeaturesDisabled) {
+    const auto& catalog = application::campaign_operation_capabilities();
+    const auto find = [&](std::string_view id) {
+        return std::find_if(catalog.begin(), catalog.end(), [&](const auto& item) {
+            return item.operation_id == id;
+        });
+    };
+    const auto resource = find("campaign.resource.set_amount");
+    const auto camping_lock = find("campaign.hero.lock_camping_skill");
+    const auto disease = find("campaign.hero.edit_disease");
+    const auto add_hero = find("campaign.hero.add");
+    ASSERT_NE(resource, catalog.end());
+    ASSERT_NE(camping_lock, catalog.end());
+    ASSERT_NE(disease, catalog.end());
+    ASSERT_NE(add_hero, catalog.end());
+    EXPECT_EQ(resource->availability, application::CampaignOperationAvailability::Available);
+    EXPECT_EQ(camping_lock->availability, application::CampaignOperationAvailability::Deferred);
+    EXPECT_EQ(disease->availability, application::CampaignOperationAvailability::Deferred);
+    EXPECT_EQ(add_hero->availability, application::CampaignOperationAvailability::NotImplemented);
 }

@@ -1,6 +1,7 @@
 #include "ddse/application/save_commit.hpp"
 
 #include "ddse/application/campaign_mappings.hpp"
+#include "ddse/core/dson/dson_document_editor.hpp"
 #include "ddse/core/dson/dson_reader.hpp"
 #include "ddse/core/dson/dson_writer.hpp"
 
@@ -25,11 +26,7 @@ struct DirectoryTree {
 };
 
 const CampaignMappingDescriptor* find_mapping(std::string_view property) {
-    for (const auto& mapping : stage7_resource_mappings())
-        if (mapping.semantic_property == property) return &mapping;
-    for (const auto& mapping : stage8_campaign_mappings())
-        if (mapping.semantic_property == property) return &mapping;
-    return nullptr;
+    return find_campaign_mapping(property);
 }
 
 std::string expand_path(std::string path, const CampaignOperationTarget& target) {
@@ -42,6 +39,7 @@ std::string expand_path(std::string path, const CampaignOperationTarget& target)
     };
     if (target.occurrence_index) replace_all("{index}", std::to_string(*target.occurrence_index));
     if (!target.entity_id.empty()) replace_all("{guid}", target.entity_id);
+    if (!target.member_id.empty()) replace_all("{memberId}", target.member_id);
     return path;
 }
 
@@ -93,6 +91,7 @@ bool as_campaign_value(const core::dson::Value& value, CampaignValue& output) {
     if (const auto* integer = std::get_if<std::int32_t>(&value)) output = *integer;
     else if (const auto* number = std::get_if<float>(&value)) output = *number;
     else if (const auto* text = std::get_if<std::string>(&value)) output = *text;
+    else if (const auto* boolean = std::get_if<bool>(&value)) output = *boolean;
     else return false;
     return true;
 }
@@ -105,16 +104,93 @@ bool value_matches(const DsonField& field, const CampaignValue& value) {
 bool type_matches(ValueKind kind, const CampaignValue& value) {
     return (kind == ValueKind::Integer && std::holds_alternative<std::int32_t>(value)) ||
            (kind == ValueKind::Float && std::holds_alternative<float>(value)) ||
-           (kind == ValueKind::String && std::holds_alternative<std::string>(value));
+           (kind == ValueKind::String && std::holds_alternative<std::string>(value)) ||
+           (kind == ValueKind::Boolean && std::holds_alternative<bool>(value));
 }
 
 void replace_field_value(DsonField& field, const CampaignValue& value) {
     std::visit([&](const auto& typed) { field.replace_value(typed); }, value);
 }
 
+std::vector<std::string> locator_path_segments(std::string_view path) {
+    std::vector<std::string> segments;
+    std::size_t start = 0;
+    while (true) {
+        const auto separator = path.find(" => ", start);
+        const auto end = separator == std::string_view::npos ? path.size() : separator;
+        segments.emplace_back(path.substr(start, end - start));
+        if (separator == std::string_view::npos) break;
+        start = separator + 4;
+    }
+    return segments;
+}
+
+std::optional<std::reference_wrapper<DsonField>> locate_field_by_path(
+    DsonDocument& document, std::string_view display_path, std::string& reason) {
+    const auto segments = locator_path_segments(display_path);
+    DsonDocument* current = &document;
+    for (std::size_t segment = 0; segment < segments.size(); ++segment) {
+        DsonField* match = nullptr;
+        for (auto& field : current->fields) {
+            if (field.path != segments[segment]) continue;
+            if (match != nullptr) {
+                reason = "Raw locator path is ambiguous in the current DSON document";
+                return std::nullopt;
+            }
+            match = &field;
+        }
+        if (match == nullptr) {
+            reason = "Raw locator path no longer exists in the current DSON document";
+            return std::nullopt;
+        }
+        if (segment + 1 == segments.size()) return std::ref(*match);
+        if (match->kind != ValueKind::EmbeddedDson || !match->embedded_document) {
+            reason = "Raw locator path expects an embedded DSON document which is unavailable";
+            return std::nullopt;
+        }
+        current = match->embedded_document.get();
+    }
+    reason = "Raw locator path did not resolve a field";
+    return std::nullopt;
+}
+
+std::optional<std::pair<std::reference_wrapper<DsonDocument>, std::string>> locate_document_for_path(
+    DsonDocument& document, std::string_view display_path, std::string& reason) {
+    auto segments = locator_path_segments(display_path);
+    if (segments.empty()) {
+        reason = "Raw locator has no path segments";
+        return std::nullopt;
+    }
+    DsonDocument* current = &document;
+    for (std::size_t segment = 0; segment + 1 < segments.size(); ++segment) {
+        DsonField* match = nullptr;
+        for (auto& field : current->fields) {
+            if (field.path != segments[segment]) continue;
+            if (match != nullptr) {
+                reason = "Raw locator path is ambiguous in the current DSON document";
+                return std::nullopt;
+            }
+            match = &field;
+        }
+        if (match == nullptr || match->kind != ValueKind::EmbeddedDson || !match->embedded_document) {
+            reason = "Raw locator embedded-document path does not resolve";
+            return std::nullopt;
+        }
+        current = match->embedded_document.get();
+    }
+    return std::pair{std::ref(*current), segments.back()};
+}
+
 std::optional<std::reference_wrapper<DsonField>> locate_field(DsonDocument& document,
                                                                const domain::RawLocator& locator,
                                                                std::string& reason) {
+    if (!locator.display_path.empty()) {
+        auto by_path = locate_field_by_path(document, locator.display_path, reason);
+        if (by_path) return by_path;
+        // Keep the indexed resolver as a fallback for legacy locators which
+        // display non-canonical paths, but never use it after a structural edit.
+        if (document.structural_dirty) return std::nullopt;
+    }
     if (locator.steps.empty()) {
         reason = "Raw locator has no field steps";
         return std::nullopt;
@@ -276,6 +352,103 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
     return true;
 }
 
+struct FieldSnapshot {
+    std::string name;
+    ValueKind kind{ValueKind::Unknown};
+    core::dson::Value value;
+    std::vector<std::byte> raw_data;
+};
+
+void collect_field_snapshots(const DsonDocument& document, std::string_view prefix,
+                             std::map<std::string, std::vector<FieldSnapshot>, std::less<>>& output) {
+    for (const auto& field : document.fields) {
+        const auto full_path = prefix.empty() ? field.path : std::string{prefix} + field.path;
+        output[full_path].push_back({field.name, field.kind, field.value, field.raw_data});
+        if (field.embedded_document)
+            collect_field_snapshots(*field.embedded_document, full_path + " => ", output);
+    }
+}
+
+bool path_is_removed(std::string_view field_path, const std::vector<CampaignStructuralChange>& changes) {
+    return std::any_of(changes.begin(), changes.end(), [&](const auto& change) {
+        const auto& removed = change.raw.display_path;
+        return field_path == removed || field_path.starts_with(removed + "/") ||
+               field_path.starts_with(removed + " => ");
+    });
+}
+
+bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument& candidate,
+                                const std::vector<CampaignFieldChange>& changes,
+                                const std::vector<CampaignStructuralChange>& structural_changes,
+                                std::string& reason) {
+    if (structural_changes.empty()) return validate_decoded_candidate(original, candidate, changes, reason);
+    const auto& original_header = original.header;
+    const auto& candidate_header = candidate.header;
+    if (original_header.magic != candidate_header.magic || original_header.revision != candidate_header.revision ||
+        original_header.header_length != candidate_header.header_length ||
+        original_header.reserved_1 != candidate_header.reserved_1 ||
+        original_header.reserved_2 != candidate_header.reserved_2 ||
+        original_header.reserved_3 != candidate_header.reserved_3 ||
+        original_header.reserved_4 != candidate_header.reserved_4) {
+        reason = "Structural candidate changed immutable DSON header fields";
+        return false;
+    }
+    std::map<std::string, std::vector<FieldSnapshot>, std::less<>> before;
+    std::map<std::string, std::vector<FieldSnapshot>, std::less<>> after;
+    collect_field_snapshots(original, {}, before);
+    collect_field_snapshots(candidate, {}, after);
+
+    for (const auto& change : structural_changes) {
+        const auto target = before.find(change.raw.display_path);
+        if (target == before.end() || target->second.size() != 1U || after.contains(change.raw.display_path)) {
+            reason = "Structural candidate did not remove exactly the requested mapped entry";
+            return false;
+        }
+    }
+    for (const auto& [path, fields] : before) {
+        if (path_is_removed(path, structural_changes)) continue;
+        const auto candidate_field = after.find(path);
+        if (candidate_field == after.end() || candidate_field->second.size() != fields.size()) {
+            reason = "Candidate removed a DSON field outside the structural ChangeSet";
+            return false;
+        }
+        const bool scalar_target = std::any_of(changes.begin(), changes.end(), [&](const auto& change) {
+            return change.raw.display_path == path;
+        });
+        for (std::size_t index = 0; index < fields.size(); ++index) {
+            const auto& field = fields[index];
+            const auto& current = candidate_field->second[index];
+            if (field.name != current.name || field.kind != current.kind) {
+                reason = "Candidate changed a DSON field identity outside its mapped ChangeSet: " + path;
+                return false;
+            }
+            if (!scalar_target && field.value != current.value) {
+                reason = "Candidate changed a DSON value outside its mapped ChangeSet: " + path;
+                return false;
+            }
+            if (field.kind == ValueKind::Unknown && !scalar_target && field.raw_data != current.raw_data) {
+                reason = "Candidate changed raw DSON bytes outside its mapped ChangeSet: " + path;
+                return false;
+            }
+        }
+    }
+    for (const auto& [path, fields] : after) {
+        (void)fields;
+        if (!before.contains(path)) {
+            reason = "Candidate added a DSON field outside the structural ChangeSet";
+            return false;
+        }
+    }
+    for (const auto& change : changes) {
+        const auto field = locate_field(candidate, change.raw, reason);
+        if (!field || !value_matches(field->get(), change.after)) {
+            if (reason.empty()) reason = "Read-back value does not match the ChangeSet target value";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool same_path_or_parent(const std::filesystem::path& lhs, const std::filesystem::path& rhs) {
     auto normalize = [](const std::filesystem::path& path) {
         std::error_code ec;
@@ -402,19 +575,20 @@ std::string bytes_to_string(const std::vector<std::byte>& bytes) {
 
 core::Result<SaveCandidate, core::Error>
 SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& changes) const {
-    if (changes.changes.empty())
+    if (changes.empty())
         return core::Result<SaveCandidate, core::Error>::failure(
             adapter_error(core::ErrorCode::ValidationFailed, "Cannot build a save candidate from an empty ChangeSet"));
 
-    std::map<std::string, std::vector<CampaignFieldChange>, std::less<>> grouped;
+    std::map<std::string, std::vector<CampaignFieldChange>, std::less<>> grouped_fields;
+    std::map<std::string, std::vector<CampaignStructuralChange>, std::less<>> grouped_structural;
     std::set<std::string, std::less<>> expected_documents;
     std::set<std::string, std::less<>> unique_targets;
     for (const auto& change : changes.changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);
-        if (mapping == nullptr || !mapping->editable_in_session)
+        if (mapping == nullptr || mapping->capability() < CampaignMappingCapability::CandidateWritable)
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
-                              "ChangeSet contains a property without an enabled semantic mapping",
+                              "ChangeSet contains a property without an implemented writable mapping",
                               {{"property", change.target.semantic_property}}));
         if (mapping->document_id != change.raw.document_id || change.raw.steps.empty() ||
             change.raw.display_path != expand_path(mapping->raw_path_template, change.target))
@@ -441,7 +615,29 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                               {{"path", change.raw.display_path}}));
 
         expected_documents.insert(change.raw.document_id);
-        grouped[change.raw.document_id].push_back(change);
+        grouped_fields[change.raw.document_id].push_back(change);
+    }
+
+    for (const auto& change : changes.structural_changes) {
+        const auto* mapping = find_mapping(change.target.semantic_property);
+        if (mapping == nullptr || mapping->capability() < CampaignMappingCapability::CandidateWritable ||
+            mapping->document_id != change.raw.document_id ||
+            change.raw.display_path != expand_path(mapping->raw_path_template, change.target) ||
+            change.action != CampaignStructuralAction::Erase ||
+            change.expected_kind != mapping->expected_type || change.expected_kind != ValueKind::Object ||
+            change.raw.steps.empty())
+            return core::Result<SaveCandidate, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "Structural ChangeSet does not match a registered writable object mapping",
+                              {{"property", change.target.semantic_property},
+                               {"document", change.raw.document_id}, {"path", change.raw.display_path}}));
+        const auto target_key = change.raw.document_id + "|" + change.raw.display_path;
+        if (!unique_targets.insert(target_key).second)
+            return core::Result<SaveCandidate, core::Error>::failure(
+                adapter_error(core::ErrorCode::ValidationFailed, "ChangeSet contains a duplicate structural target",
+                              {{"path", change.raw.display_path}}));
+        expected_documents.insert(change.raw.document_id);
+        grouped_structural[change.raw.document_id].push_back(change);
     }
 
     const std::set<std::string, std::less<>> declared_documents(changes.affected_documents.begin(),
@@ -449,13 +645,15 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
     if (declared_documents != expected_documents || declared_documents.size() != changes.affected_documents.size())
         return core::Result<SaveCandidate, core::Error>::failure(
             adapter_error(core::ErrorCode::ValidationFailed,
-                          "ChangeSet affected_documents does not exactly match its field changes"));
+                          "ChangeSet affected_documents does not exactly match its value and structural changes"));
 
     SaveCandidate candidate;
     candidate.affected_documents.assign(expected_documents.begin(), expected_documents.end());
     core::dson::DsonWriter writer;
     core::dson::DsonReader reader;
-    for (const auto& [document_id, document_changes] : grouped) {
+    for (const auto& document_id : expected_documents) {
+        const auto& document_changes = grouped_fields[document_id];
+        const auto& structural_changes = grouped_structural[document_id];
         const auto source = profile.documents.find(document_id);
         if (source == profile.documents.end() || !source->second.decoded)
             return core::Result<SaveCandidate, core::Error>::failure(
@@ -492,6 +690,23 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                                   {{"document", document_id}, {"path", change.raw.display_path}}));
             replace_field_value(target, change.after);
         }
+        for (const auto& change : structural_changes) {
+            std::string reason;
+            auto located = locate_field_by_path(cloned, change.raw.display_path, reason);
+            if (!located || located->get().kind != change.expected_kind)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                  reason.empty() ? "Mapped structural target has a different DSON type" : reason,
+                                  {{"document", document_id}, {"path", change.raw.display_path}}));
+            auto containing = locate_document_for_path(cloned, change.raw.display_path, reason);
+            if (!containing)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
+                                  {{"document", document_id}, {"path", change.raw.display_path}}));
+            auto erased = core::dson::DsonDocumentEditor::erase(containing->first.get(), containing->second);
+            if (!erased)
+                return core::Result<SaveCandidate, core::Error>::failure(erased.error());
+        }
 
         auto encoded = writer.encode(cloned);
         if (!encoded)
@@ -502,7 +717,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         if (!decoded)
             return core::Result<SaveCandidate, core::Error>::failure(decoded.error());
         std::string reason;
-        if (!validate_decoded_candidate(original, decoded.value(), document_changes, reason))
+        if (!validate_decoded_candidate(original, decoded.value(), document_changes, structural_changes, reason))
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::ValidationFailed, std::move(reason), {{"document", document_id}}));
 
@@ -517,6 +732,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         output.bytes = bytes;
         output.binary_diff = std::move(diff);
         for (const auto& change : document_changes) output.expected_field_paths.push_back(change.raw.display_path);
+        for (const auto& change : structural_changes) output.expected_field_paths.push_back(change.raw.display_path);
         candidate.documents.push_back(std::move(output));
     }
     return core::Result<SaveCandidate, core::Error>::success(std::move(candidate));
@@ -540,6 +756,24 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
              "SafeSaveCommitter", {{"source_profile", source_root.string()},
                                    {"target_profile", target_profile_root.string()},
                                    {"backup_directory", backup_directory.string()}}});
+
+    for (const auto& change : changes.changes) {
+        const auto* mapping = find_mapping(change.target.semantic_property);
+        if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable)
+            return core::Result<SaveCommitResult, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "Safe commit requires a writable mapping with in-game mutation evidence",
+                              {{"property", change.target.semantic_property}}));
+    }
+    for (const auto& change : changes.structural_changes) {
+        const auto* mapping = find_mapping(change.target.semantic_property);
+        if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable ||
+            change.action != CampaignStructuralAction::Erase)
+            return core::Result<SaveCommitResult, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "Safe commit requires an erase change with a writable mapping and in-game mutation evidence",
+                              {{"property", change.target.semantic_property}}));
+    }
 
     auto source_matches = source_profile.matches_disk_baseline(file_system_);
     if (!source_matches)
@@ -628,8 +862,12 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
         std::vector<CampaignFieldChange> document_changes;
         for (const auto& change : changes.changes)
             if (change.raw.document_id == document.id) document_changes.push_back(change);
+        std::vector<CampaignStructuralChange> document_structural_changes;
+        for (const auto& change : changes.structural_changes)
+            if (change.raw.document_id == document.id) document_structural_changes.push_back(change);
         std::string reason;
-        if (!validate_decoded_candidate(*source_document->second.decoded, decoded.value(), document_changes, reason)) {
+        if (!validate_decoded_candidate(*source_document->second.decoded, decoded.value(), document_changes,
+                                        document_structural_changes, reason)) {
             const auto failure = adapter_error(core::ErrorCode::ValidationFailed, std::move(reason),
                                                {{"document", document.id}});
             return core::Result<SaveCommitResult, core::Error>::failure(

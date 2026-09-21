@@ -76,26 +76,26 @@ TEST(Stage7ResourceMapping, PreservesUnknownResourceIdsInsteadOfUsingAFixedEnum)
     EXPECT_EQ(resources.value().front().id, "modded_currency_id");
 }
 
-TEST(Stage7ResourceMapping, RegistryDistinguishesObservedShapeFromGameMutationEvidence) {
+TEST(Stage7ResourceMapping, RegistryRecordsGameVerifiedResourceMutation) {
     const auto& mappings = ddse::application::stage7_resource_mappings();
     ASSERT_EQ(mappings.size(), 2U);
     EXPECT_EQ(mappings[0].semantic_property, "Estate.Resource.Amount");
     EXPECT_EQ(mappings[0].expected_type, ddse::core::dson::ValueKind::Integer);
-    EXPECT_EQ(mappings[0].evidence_level, "VERIFIED_SAMPLE");
-    EXPECT_FALSE(mappings[0].semantically_writable);
-    EXPECT_FALSE(mappings[0].game_mutation_verified);
+    EXPECT_EQ(mappings[0].evidence_level, "VERIFIED_GAME");
+    EXPECT_TRUE(mappings[0].semantically_writable);
+    EXPECT_TRUE(mappings[0].game_mutation_verified);
     EXPECT_FALSE(mappings[1].semantically_writable);
 }
 
-TEST(Stage7ResourceMapping, SessionEditingDoesNotClaimGameSaveWriteEvidence) {
+TEST(Stage7ResourceMapping, MappingSeparatesCandidateSupportFromGameEvidence) {
     const auto resource = std::find_if(ddse::application::stage7_resource_mappings().begin(),
         ddse::application::stage7_resource_mappings().end(), [](const auto& item) {
             return item.semantic_property == "Estate.Resource.Amount";
         });
     ASSERT_NE(resource, ddse::application::stage7_resource_mappings().end());
     EXPECT_TRUE(resource->editable_in_session);
-    EXPECT_FALSE(resource->semantically_writable);
-    EXPECT_FALSE(resource->game_mutation_verified);
+    EXPECT_TRUE(resource->semantically_writable);
+    EXPECT_TRUE(resource->game_mutation_verified);
 
     const auto hero = std::find_if(ddse::application::stage8_campaign_mappings().begin(),
         ddse::application::stage8_campaign_mappings().end(), [](const auto& item) {
@@ -103,6 +103,6 @@ TEST(Stage7ResourceMapping, SessionEditingDoesNotClaimGameSaveWriteEvidence) {
         });
     ASSERT_NE(hero, ddse::application::stage8_campaign_mappings().end());
     EXPECT_TRUE(hero->editable_in_session);
-    EXPECT_FALSE(hero->semantically_writable);
+    EXPECT_TRUE(hero->semantically_writable);
     EXPECT_FALSE(hero->game_mutation_verified);
 }
