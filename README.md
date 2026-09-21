@@ -1,37 +1,45 @@
-# DDSE backend — Stage 5
+# Darkest Dungeon Save Editor
 
-C++20 / CMake backend with structured errors, logging, a filesystem port and native
-adapter, a small SQLite RAII layer, DSON read/write support, Raw Save Profile
-discovery, and read-only Vanilla/DLC and Mod content scanners that build atomic
-`base_content.db` and `mod_environment.db` catalogs. The mod scanner is configured
-with Workshop roots, extra local mod roots (the game manager's `modes` directory
-in the current setup), an optional save profile, and an optional manager JSON
-export. It inventories installed mods while applying only enabled entries to the
-effective content view. SQLite here is infrastructure only; domain repositories
-are not implemented.
+## Progress
+
+- Backend feature slices through Stage 12 are complete.
+- Stage 13 qualification testing is deferred until after frontend integration, as specified in the frontend guide.
+- Stage 14 starts with frontend F0: the local Drogon host, Gateway status contract, and browser bootstrap.
+- F0 exposes status only; save editing and commit endpoints are not part of this slice.
+
+The C++20 backend includes DSON round-trip support, save profile discovery, Vanilla/DLC and Mod content catalogs, Campaign models, semantic operations, undo/redo, Mapping, candidate generation, backups, and safe writes to explicit profile copies. The local HTTP adapter depends on Application status DTOs and contains no save or content business logic.
+
+The local Mod scanner can use Workshop roots, additional local roots (the game manager's `modes` directory in the current setup), a save profile, and an optional manager JSON export. The frontend environment flow will use Mod order recorded by the save, per the current frontend baseline.
 
 ## Requirements
 
 - CMake >= 3.20, a C++20 compiler, and the SQLite3 development package (header + library).
-- First CMake configure needs internet access to download GoogleTest v1.15.2, unless
-  GTest v1.15.2 is already installed as a CMake package. Subsequent builds reuse it.
+- When no Drogon package is installed, CMake FetchContent downloads Drogon v1.9.13 and JsonCpp v1.9.6. The test configure also downloads GoogleTest v1.15.2 unless it is already installed as a CMake package.
+- First configure therefore needs GitHub access. Subsequent builds reuse the fetched sources.
 - If SQLite3 is installed in a non-standard prefix, set `CMAKE_PREFIX_PATH` to that
   installation prefix in CLion's CMake profile.
 
 ## CLion (Windows 10)
 
-Open this directory as the CMake project. Allow CLion to reload CMake after replacing
-Stage 0.1 files. If using MinGW or MSVC, keep the same toolchain selected for the whole
+Open this directory as the CMake project and allow CLion to reload CMake after the
+frontend Gateway changes. If using MinGW or MSVC, keep the same toolchain selected for the whole
 project. If a previously configured build directory contains incompatible compiler/cache
 settings, use a fresh build directory or delete its CMake cache and reload.
 
-Choose the `ddse_tests` target or run individual test cases in CLion. New cases cover
-Result/Error, structured logging, binary filesystem I/O and missing-file errors, SQLite
-transaction rollback, and idempotent migrations.
+Choose the `ddse_http` target to launch the local browser UI, or `ddse_tests` to run the
+test suite. The HTTP host binds only to `127.0.0.1` and chooses an available port by
+default. Use `--no-browser` to keep it in the terminal for manual HTTP checks.
+
+To try F0 in CLion, select the `ddse_http` run target and start it. The target waits
+until the local listener is ready, then opens the default browser. Set `--no-browser`
+in the run configuration to keep the service in the CLion run console; stop it with
+Ctrl+C.
 
 ## Build and test (PowerShell)
 
 ```powershell
+# These commands assume CMake is available on PATH. CLion users can run the
+# ddse_http/ddse_tests targets directly using CLion's bundled CMake instead.
 cmake -S . -B cmake-build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build cmake-build-debug --config Debug
 ctest --test-dir cmake-build-debug -C Debug --output-on-failure
@@ -122,6 +130,8 @@ must be outside configured mod roots, the save profile, and the base database.
 Rebuild is transactional and atomically replaces the previous output only after
 a successful build.
 
-## Next
+## Next frontend stage
 
-Stage 6: Composition Root and HTTP API.
+F0 is complete with a status-only Gateway and browser bootstrap. Next is F1:
+initialization, settings, and save profile selection. Stage 13 qualification remains
+scheduled after the frontend integration.

@@ -16,6 +16,7 @@ endif()
 add_executable(ddse_tests
     unit/core_version_tests.cpp
     unit/application_info_tests.cpp
+    unit/application_status_tests.cpp
     unit/platform_info_tests.cpp
     unit/error_tests.cpp
     unit/logger_tests.cpp

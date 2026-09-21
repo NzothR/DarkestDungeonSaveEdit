@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Darkest Dungeon Save Editor</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <main class="shell" aria-labelledby="app-title">
+      <div class="crest" aria-hidden="true"><span>DD</span></div>
+      <p class="eyebrow">LOCAL SAVE EDITOR</p>
+      <h1 id="app-title">暗黑地牢存档编辑器</h1>
+      <p class="intro">本机编辑服务正在启动。存档和游戏内容只在本机处理。</p>
+
+      <section class="connection" aria-live="polite" aria-atomic="true">
+        <span id="connection-indicator" class="indicator" aria-hidden="true"></span>
+        <div>
+          <h2 id="connection-title">正在连接本地服务</h2>
+          <p id="connection-message">正在检查编辑器状态…</p>
+        </div>
+      </section>
+
+      <dl id="service-details" class="details" hidden>
+        <div><dt>服务状态</dt><dd id="service-state">—</dd></div>
+        <div><dt>应用版本</dt><dd id="app-version">—</dd></div>
+        <div><dt>Gateway API</dt><dd id="api-version">—</dd></div>
+      </dl>
+
+      <p id="connection-error" class="error" role="alert" hidden></p>
+      <p class="footnote">F0 · Gateway 与浏览器启动骨架</p>
+    </main>
+  </body>
+</html>
