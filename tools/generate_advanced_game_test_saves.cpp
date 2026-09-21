@@ -363,24 +363,30 @@ std::vector<std::byte> change_inner(const application::RawSaveProfile& p,const d
     return encoded_doc(roster,"persist.roster.json");
 }
 
-Scenario make_camping(const application::RawSaveProfile& p,const domain::Hero& hero,std::string skill_id,bool unlock) {
+Scenario make_camping_training(const application::RawSaveProfile& p,const domain::Hero& hero,std::string skill_id,
+                               std::int32_t instance,const std::vector<PurchaseRow>& rows,bool unlock) {
+    auto upgrades=clone_doc(*doc(p,"persist.upgrades.json").decoded);
+    const std::string tree=*hero.class_id.value+"."+skill_id;
+    const bool learned=purchase_state(rows,instance,signed_hash(tree),'0');
+    if(learned==unlock) fail("Camping training state already matches requested state: "+tree);
+    set_purchase(upgrades,instance,tree,'0',unlock);
+    const auto changed_rows=purchase_rows(upgrades);
+    if(purchase_state(changed_rows,instance,signed_hash(tree),'0')!=unlock)
+        fail("Camping training purchase row did not retain requested state: "+tree);
+    auto text="- 英雄：**"+hero_label(hero)+"**\n- 生存技能：`"+skill_id+"`，训练营学习状态："+
+        (unlock?"未学会 → 已学会":"已学会 → 已锁定")+"。\n- 只修改 `persist.upgrades.json` 的英雄技能购买节点，不修改英雄的已装备技能列表。\n";
+    return scenario(unlock?"03_camping_skill_unlock":"04_camping_skill_lock",unlock?"在生存训练营解锁技能":"锁定已学会的生存技能",text,
+                    {{"persist.upgrades.json",encoded_doc(upgrades,"persist.upgrades.json")}});
+}
+
+Scenario make_camping_unequip(const application::RawSaveProfile& p,const domain::Hero& hero,std::string skill_id) {
     auto roster=clone_doc(*doc(p,"persist.roster.json").decoded); auto& inner=hero_data(roster,hero.persistent_id);
-    const std::string map_path="base_root/skills/selected_camping_skills"; const auto entry_path=map_path+"/"+skill_id;
-    const bool present=has_field(inner,entry_path);
-    if(unlock&&present) fail("Camping skill is already stored as unlocked: "+skill_id);
-    if(!unlock&&!present) fail("Camping skill is not currently unlocked: "+skill_id);
-    if(unlock) {
-        const auto& map=field(inner,map_path); if(map.children.empty()) fail("No camping skill entry template exists");
-        const auto template_path=inner.fields.at(map.children.front()).path;
-        auto added=core::dson::DsonDocumentEditor::append_clone(inner,map_path,inner,template_path,skill_id);
-        if(!added) fail("Could not add camping skill to hero: "+added.error().message);
-        set_int(inner,entry_path,0);
-    } else {
-        auto erased=core::dson::DsonDocumentEditor::erase(inner,entry_path);
-        if(!erased) fail("Could not lock camping skill: "+erased.error().message);
-    }
-    auto text="- 英雄：**"+hero_label(hero)+"**\n- 生存技能：`"+skill_id+"`，"+(unlock?"加入已解锁技能集合":"从已解锁技能集合移除")+"。\n- 经验值与其他技能条目不变。\n";
-    return scenario(unlock?"03_camping_skill_unlock":"04_camping_skill_lock",unlock?"解锁一个生存技能":"锁定一个生存技能",text,
+    const auto entry_path="base_root/skills/selected_camping_skills/"+skill_id;
+    if(!has_field(inner,entry_path)) fail("Camping skill is not currently selected: "+skill_id);
+    auto erased=core::dson::DsonDocumentEditor::erase(inner,entry_path);
+    if(!erased) fail("Could not unequip camping skill: "+erased.error().message);
+    auto text="- 英雄：**"+hero_label(hero)+"**\n- 生存技能：`"+skill_id+"`，仅从已装备技能列表中移除；训练营学习状态保留。\n- 经验值与其他技能条目不变。\n";
+    return scenario("04a_unequip_camping_skill","取消装备一个生存技能",text,
                     {{"persist.roster.json",encoded_doc(roster,"persist.roster.json")}});
 }
 
@@ -426,10 +432,13 @@ Scenario make_add_disease(const application::RawSaveProfile& p,const application
             auto a=core::dson::DsonDocumentEditor::append_clone(inner,quirks,inner,template_path,disease.id);
             if(!a) fail("Cannot add disease object: "+a.error().message);
             auto root=quirks+"/"+disease.id;
-            if(has_field(inner,root+"/is_disease")) set_bool(inner,root+"/is_disease",true);
             if(has_field(inner,root+"/is_locked")) set_bool(inner,root+"/is_locked",false);
             if(has_field(inner,root+"/is_new")) set_bool(inner,root+"/is_new",true);
             if(has_field(inner,root+"/trinketId")) set_int(inner,root+"/trinketId",-1);
+            if(has_field(inner,root+"/mission_count")) set_int(inner,root+"/mission_count",0);
+            if(has_field(inner,root+"/replaces_quirk")) set_int(inner,root+"/replaces_quirk",-1);
+            if(has_field(inner,root+"/replaces_quirk_viewed")) set_bool(inner,root+"/replaces_quirk_viewed",false);
+            if(has_field(inner,root+"/evolution_duration_remaining")) set_int(inner,root+"/evolution_duration_remaining",0);
         } else fail("No quirk object template is available to represent the disease");
     });
     auto text="- 英雄：**"+hero_label(hero)+"**\n- 新增原版疾病：**"+pretty(env,disease)+"**（`"+disease.id+"`；定义来源 `"+disease.provenance.source_id+"`）。\n";
@@ -456,6 +465,29 @@ Scenario make_building_downgrade(const application::RawSaveProfile& p) {
     }
     return scenario("15_downgrade_town_upgrade","马车名单容量降至1级并回锁后续节点",
         "- 建筑：**马车（Stagecoach）**，名单容量 `stage_coach.rostersize`。\n- 已购买节点："+std::to_string(before)+" → 1；保留 a，回锁 b–e。\n",
+        {{"persist.upgrades.json",encoded_doc(upgrades,"persist.upgrades.json")}});
+}
+
+Scenario make_building_upgrade(const application::RawSaveProfile& p) {
+    constexpr std::int32_t estate_instance=0;
+    constexpr std::int32_t target_rank=3;
+    const std::string tree="stage_coach.rostersize";
+    const auto source_rows=purchase_rows(*doc(p,"persist.upgrades.json").decoded);
+    std::int32_t before=0;
+    for(char code='a';code<='e';++code)
+        if(purchase_state(source_rows,estate_instance,signed_hash(tree),code)) ++before;
+    auto upgrades=clone_doc(*doc(p,"persist.upgrades.json").decoded);
+    for(char code='a';code<='e';++code)
+        if(code<='c'||purchase_state(source_rows,estate_instance,signed_hash(tree),code))
+            set_purchase(upgrades,estate_instance,tree,code,code<='c');
+    const auto updated=purchase_rows(upgrades);
+    std::int32_t after=0;
+    for(char code='a';code<='e';++code)
+        if(purchase_state(updated,estate_instance,signed_hash(tree),code)) ++after;
+    if(after!=target_rank) fail("Stagecoach roster-size upgrade did not reach level 3");
+    return scenario("14_upgrade_town_upgrade","马车名单容量升级至3级",
+        "- 依赖15先把名单容量降至1级，再用本档检查其3级状态。\n- 建筑：**马车（Stagecoach）**，第二项升级 `stage_coach.rostersize`（英雄名单容量）。\n- 生成档的源状态/目标状态："+
+        std::to_string(before)+" → 3；购买 a–c，回锁 d–e。\n",
         {{"persist.upgrades.json",encoded_doc(upgrades,"persist.upgrades.json")}});
 }
 
@@ -536,14 +568,14 @@ std::string readme(const application::RawSaveProfile& source,const application::
        <<"- 源存档：`"<<absolute_path(opts.source).string()<<"`，指纹 `0x"<<std::hex<<source.baseline_fingerprint<<std::dec<<"`\n"
        <<"- 备份指纹：`0x"<<std::hex<<backup_fingerprint<<std::dec<<"`\n"
        <<"- Mod 顺序取自存档 `persist.game.json/applied_ugcs_1_0`；启用 "<<mods.effective_order.size()<<" 个，扫描到 "<<mods.mods.size()<<" 个已安装 mod，解析诊断 "<<mods.diagnostics.size()<<" 条。\n"
-       <<"- 本次生成：1–9、11、15–18、20。10、12–14、19 按已确认的依赖关系暂缓。\n\n"
+       <<"- 本次生成：1–9（第3、4项为训练营解锁/锁定，另有04a取消装备）、11–19、20。10仍等待9通过。\n\n"
        <<"## 建议检查顺序\n\n"
        <<"1. 用 `00_control/profile_0` 确认当前存档仍可进入城镇。\n2. 一次只替换一个测试 profile；退出游戏后再换下一个。\n"
        <<"3. 逐项检查下面列出的英雄、技能、等级、建筑或饰品；保存后退出并重新载入，确认变更持久。\n"
-       <<"4. 15通过后再生成14；18通过并提供游戏保存后的 profile 后，再生成19及12、13；9通过后再基于通过后的存档生成10。\n\n"
+       <<"4. 12先验证18开放后能建造一项小镇建筑，13在12确认后锁定同一项；14依赖已通过的15；19依赖已通过的18并删除小镇建筑系统状态；9通过后再基于带疾病的存档生成10。\n\n"
        <<"## 测试清单\n\n";
     for(const auto& s:scenarios) out<<"### `"<<s.directory<<"/profile_0` — "<<s.title<<"\n\n"<<s.detail<<"\n**请确认：**存档正常载入、目标改动显示正确、没有关联数据异常；保存并重载后仍成立。\n\n";
-    out<<"## 暂缓项目\n\n- **10**：当前源存档没有疾病英雄；等9通过后从带疾病的游戏保存档生成。\n- **12–13**：具体小镇建筑解锁/锁定，依赖18解锁小镇建筑系统并由你在游戏内确认。\n- **14**：等15的升级节点回锁测试通过后再生成。\n- **19**：等你确认18通过并提供游戏保存后的存档，再基于该状态重新锁定系统。\n\n"
+    out<<"## 依赖提示\n\n- **10**：仍暂缓；当前源存档没有疾病英雄，等9在游戏内通过后再从带疾病的存档生成。\n- **12、13**：依赖已通过的18。两份档案使用同一小镇建筑系统状态；先确认12中的建筑可解锁，再用13确认其锁定。\n- **14**：依赖已通过的15，测试马车第二项升级到3级。\n- **19**：依赖已通过的18；本档移除整个 `base_root/districts` 子树，回到系统锁定状态。\n\n"
        <<"## Mod 启用顺序\n\n";
     for(const auto& entry:mods.save_order) {
         const auto id=entry.matched_mod_id.empty()?entry.identity:entry.matched_mod_id;
@@ -637,29 +669,51 @@ void run(const Options& opts) {
     scenarios.push_back(make_combat_upgrade(profile,env,*beginner,*upgrade_skill,rows,beginner_instance,upgrade_max_levels));
     scenarios.push_back(make_combat_downgrade(profile,*downgrade_hero,*downgrade_skill,rows,downgrade_instance,downgrade_max_levels));
 
-    const domain::Hero* camp_unlock_hero=nullptr; std::string camp_unlock_skill;
-    const domain::Hero* camp_lock_hero=nullptr; std::string camp_lock_skill;
+    const auto applies_camping_skill=[](const application::ContentDefinition& skill,const domain::Hero& hero) {
+        if(!hero.class_id.value||!skill.localization_key.starts_with("camping_skill_name_")) return false;
+        if(skill.id.starts_with(*hero.class_id.value+":")) return true;
+        const auto payload=Json::parse(skill.payload_json,nullptr,false);
+        if(payload.is_discarded()||!payload.is_object()||!payload.contains("hero_classes")||!payload["hero_classes"].is_array()) return false;
+        return std::any_of(payload["hero_classes"].begin(),payload["hero_classes"].end(),[&](const Json& value){
+            return value.is_string()&&value.get<std::string>()==*hero.class_id.value;
+        });
+    };
+    const domain::Hero* camp_unlock_hero=nullptr; std::string camp_unlock_skill; std::int32_t camp_unlock_instance{};
     for(const auto& h:model.heroes) if(h.class_id.value&&h.resolve_xp.value&&*h.resolve_xp.value<=8) {
-        std::set<std::string,std::less<>> unlocked; for(const auto& sk:h.camping_skills) unlocked.insert(sk.id);
-        for(const auto& s:skills) if(s.id.starts_with(*h.class_id.value+":")&&s.localization_key.starts_with("camping_skill_name_")) {
-            const auto suffix=s.id.substr(s.id.find(':')+1);
-            if(!unlocked.contains(suffix)){camp_unlock_hero=&h;camp_unlock_skill=suffix;break;}
-        }
-        if(!camp_unlock_hero) for(const auto& s:skills) if(s.localization_key.starts_with("camping_skill_name_")) {
-            const auto payload=Json::parse(s.payload_json,nullptr,false);
-            if(payload.is_discarded()||!payload.is_object()||!payload.contains("hero_classes")||!payload["hero_classes"].is_array()) continue;
-            const bool class_match=std::any_of(payload["hero_classes"].begin(),payload["hero_classes"].end(),[&](const Json& v){return v.is_string()&&v.get<std::string>()==*h.class_id.value;});
-            const auto suffix=s.id.substr(s.id.find(':')+1);
-            if(class_match&&!unlocked.contains(suffix)){camp_unlock_hero=&h;camp_unlock_skill=suffix;break;}
+        std::int32_t instance{}; try{instance=instance_for(upgrades_source,h);}catch(...){continue;}
+        for(const auto& skill:skills) if(applies_camping_skill(skill,h)) {
+            const auto suffix=skill.id.substr(skill.id.find(':')+1);
+            const auto tree=*h.class_id.value+"."+suffix;
+            if(!purchase_state(rows,instance,signed_hash(tree),'0')) {
+                camp_unlock_hero=&h;camp_unlock_skill=suffix;camp_unlock_instance=instance;break;
+            }
         }
         if(camp_unlock_hero) break;
     }
-    for(const auto& h:model.heroes) if(h.resolve_xp.value&&*h.resolve_xp.value>=36&&!h.camping_skills.empty()) {
-        camp_lock_hero=&h;camp_lock_skill=h.camping_skills.front().id;break;
+    const domain::Hero* camp_lock_hero=nullptr; std::string camp_lock_skill; std::int32_t camp_lock_instance{};
+    const domain::Hero* camp_unequip_hero=nullptr; std::string camp_unequip_skill;
+    for(const auto& h:model.heroes) if(h.class_id.value&&h.resolve_xp.value&&*h.resolve_xp.value>=36) {
+        std::int32_t instance{}; try{instance=instance_for(upgrades_source,h);}catch(...){continue;}
+        for(const auto& selected:h.camping_skills) {
+            const auto tree=*h.class_id.value+"."+selected.id;
+            if(purchase_state(rows,instance,signed_hash(tree),'0')) {
+                if(!camp_lock_hero) {camp_lock_hero=&h;camp_lock_skill=selected.id;camp_lock_instance=instance;}
+                camp_unequip_hero=&h;camp_unequip_skill=selected.id;break;
+            }
+        }
+        if(camp_lock_hero&&camp_unequip_hero) break;
+        if(!camp_lock_hero) for(const auto& skill:skills) if(applies_camping_skill(skill,h)) {
+            const auto suffix=skill.id.substr(skill.id.find(':')+1);
+            if(purchase_state(rows,instance,signed_hash(*h.class_id.value+"."+suffix),'0')) {
+                camp_lock_hero=&h;camp_lock_skill=suffix;camp_lock_instance=instance;break;
+            }
+        }
     }
-    if(!camp_unlock_hero||!camp_lock_hero) fail("Could not find eligible low-level locked and high-level unlocked camping skills in effective content");
-    scenarios.push_back(make_camping(profile,*camp_unlock_hero,camp_unlock_skill,true));
-    scenarios.push_back(make_camping(profile,*camp_lock_hero,camp_lock_skill,false));
+    if(!camp_unlock_hero||!camp_lock_hero||!camp_unequip_hero)
+        fail("Could not find eligible unlearned low-level and learned high-level camping skills in upgrade purchases");
+    scenarios.push_back(make_camping_training(profile,*camp_unlock_hero,camp_unlock_skill,camp_unlock_instance,rows,true));
+    scenarios.push_back(make_camping_training(profile,*camp_lock_hero,camp_lock_skill,camp_lock_instance,rows,false));
+    scenarios.push_back(make_camping_unequip(profile,*camp_unequip_hero,camp_unequip_skill));
 
     const domain::Hero* lock_hero=nullptr; const domain::HeroQuirk* lock_quirk=nullptr;
     for(const auto& h:model.heroes) {
@@ -693,7 +747,9 @@ void run(const Options& opts) {
     if(!vanilla_disease) fail("All scanned vanilla disease IDs already occur on the selected hero");
     scenarios.push_back(make_add_disease(profile,env,*disease_hero,*vanilla_disease));
 
-    scenarios.push_back(make_level_swap(profile,high,low)); scenarios.push_back(make_building_downgrade(profile));
+    scenarios.push_back(make_level_swap(profile,high,low));
+    scenarios.push_back(make_building_upgrade(profile));
+    scenarios.push_back(make_building_downgrade(profile));
 
     std::optional<application::ContentDefinition> generic_value;
     for(const auto& t:base_scan.definitions) if(t.kind=="trinket") {
@@ -773,6 +829,23 @@ void run(const Options& opts) {
     }
     if(field(town,"base_root/districts/buildings").children.empty()) fail("District map did not contain any structures");
     scenarios.push_back(scenario("18_unlock_district_system","解锁小镇建筑（区域建筑）功能", "- 在 `persist.town.json` 建立 `districts/buildings/<districtId>/built` 状态，并将各区域建筑的 `built` 设为 false。\n- 这只开放系统状态，不会建造任何区域建筑。请在游戏中确认区域建筑入口与列表可用。\n",{{"persist.town.json",encoded_doc(town,"persist.town.json")}}));
+    const auto& district_test_id=*district_ids.begin();
+    auto district_unlock=clone_doc(town);
+    set_bool(district_unlock,"base_root/districts/buildings/"+district_test_id+"/built",true);
+    scenarios.push_back(scenario("12_unlock_district_building","解锁一项小镇建筑",
+        "- 依赖18已确认的小镇建筑系统。\n- 解锁：`"+district_test_id+"`，将它的 `built` 从 false 改为 true；其他建筑保持 false。\n",
+        {{"persist.town.json",encoded_doc(district_unlock,"persist.town.json")}}));
+    auto district_lock=clone_doc(district_unlock);
+    set_bool(district_lock,"base_root/districts/buildings/"+district_test_id+"/built",false);
+    scenarios.push_back(scenario("13_lock_district_building","锁定一项小镇建筑",
+        "- 依赖12先解锁并确认同一建筑。\n- 锁定：`"+district_test_id+"`，将它的 `built` 从 true 改为 false；小镇建筑系统仍保持开放。\n",
+        {{"persist.town.json",encoded_doc(district_lock,"persist.town.json")}}));
+    auto district_system_locked=clone_doc(town);
+    auto remove_districts=core::dson::DsonDocumentEditor::erase(district_system_locked,"base_root/districts");
+    if(!remove_districts) fail("Cannot lock district system by removing the districts state: "+remove_districts.error().message);
+    scenarios.push_back(scenario("19_lock_district_system","锁定小镇建筑（区域建筑）功能",
+        "- 依赖18先解锁并确认系统可用。\n- 从系统已开放的结构删除整个 `base_root/districts` 状态；不改动普通城镇建筑或升级。\n- 此测试档最终与本轮源档的锁定状态相同，是18的反向操作。请先确认18，再加载本档确认入口再次锁定。\n",
+        {{"persist.town.json",encoded_doc(district_system_locked,"persist.town.json")}}));
     scenarios.push_back(make_destroy_inventory_trinket(profile,model));
 
     std::filesystem::create_directories(out_abs.parent_path()); auto staging=out_abs; staging += ".building-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
@@ -799,6 +872,21 @@ void run(const Options& opts) {
             if(current_rank(actual_rows,test_instance,tree)!=expected_rank)
                 fail("Combat skill purchase nodes do not match requested level in "+s.directory);
         }
+        if(s.directory=="03_camping_skill_unlock"||s.directory=="04_camping_skill_lock") {
+            const auto actual_rows=purchase_rows(*doc(reread,"persist.upgrades.json").decoded);
+            const auto* test_hero=s.directory=="03_camping_skill_unlock"?camp_unlock_hero:camp_lock_hero;
+            const auto test_instance=s.directory=="03_camping_skill_unlock"?camp_unlock_instance:camp_lock_instance;
+            const auto& test_skill=s.directory=="03_camping_skill_unlock"?camp_unlock_skill:camp_lock_skill;
+            const auto expected=s.directory=="03_camping_skill_unlock";
+            if(!test_hero||purchase_state(actual_rows,test_instance,signed_hash(*test_hero->class_id.value+"."+test_skill),'0')!=expected)
+                fail("Camping training status did not project the requested state in "+s.directory);
+        }
+        if(s.directory=="14_upgrade_town_upgrade") {
+            const auto actual_rows=purchase_rows(*doc(reread,"persist.upgrades.json").decoded);
+            for(char code='a';code<='e';++code)
+                if(purchase_state(actual_rows,0,signed_hash("stage_coach.rostersize"),code)!=(code<='c'))
+                    fail("Stagecoach roster-size upgrade does not have the requested level-3 state");
+        }
         const auto projected=application::CampaignModelBuilder{}.build(reread,env);
         if(projected.state==domain::ModelState::Invalid||projected.heroes.size()!=model.heroes.size()) fail("Generated profile did not rebuild a valid roster model: "+s.directory);
         for(std::size_t hero_index=0;hero_index<model.heroes.size();++hero_index) {
@@ -807,10 +895,25 @@ void run(const Options& opts) {
                 fail("Generated profile changed roster identity/order unexpectedly: "+s.directory);
         }
         const auto changedfp=must(application::SaveProfileDiscovery::fingerprint_profile(fs,dest),"Fingerprint "+s.directory);
-        if(changedfp==profile.baseline_fingerprint) fail("Scenario changed no bytes: "+s.directory);
-        if(s.directory=="18_unlock_district_system") {
+        if(changedfp==profile.baseline_fingerprint&&s.directory!="19_lock_district_system") fail("Scenario changed no bytes: "+s.directory);
+        if(s.directory=="18_unlock_district_system"||s.directory=="12_unlock_district_building"||s.directory=="13_lock_district_building") {
             if(projected.districts.size()!=district_ids.size()) fail("District structure did not project all expected district states");
-            if(std::any_of(projected.districts.begin(),projected.districts.end(),[](const auto& d){return !d.built.value||*d.built.value;})) fail("District unlock profile should contain only built=false states");
+            if(s.directory=="18_unlock_district_system"&&std::any_of(projected.districts.begin(),projected.districts.end(),[](const auto& d){return !d.built.value||*d.built.value;})) fail("District system profile should have no buildings built");
+            const auto target=std::find_if(projected.districts.begin(),projected.districts.end(),[&](const auto& d){return d.id==district_test_id;});
+            if(target==projected.districts.end()||!target->built.value) fail("Target district state did not project");
+            if(s.directory=="12_unlock_district_building"&&!*target->built.value) fail("Target district building did not unlock");
+            if(s.directory=="13_lock_district_building"&&*target->built.value) fail("Target district building did not lock");
+        }
+        if(s.directory=="19_lock_district_system"&&!projected.districts.empty()) fail("District system lock profile still contains district states");
+        if(s.directory=="09_add_vanilla_disease") {
+            auto generated_hero=std::find_if(projected.heroes.begin(),projected.heroes.end(),[&](const auto& h){return h.persistent_id==disease_hero->persistent_id;});
+            if(generated_hero==projected.heroes.end()||std::none_of(generated_hero->quirks.begin(),generated_hero->quirks.end(),[&](const auto& q){return q.is_disease&&q.id==vanilla_disease->id;}))
+                fail("Added disease was not recognized as a disease in the generated campaign model");
+        }
+        if(s.directory=="04a_unequip_camping_skill") {
+            const auto updated_hero=std::find_if(projected.heroes.begin(),projected.heroes.end(),[&](const auto& h){return h.persistent_id==camp_unequip_hero->persistent_id;});
+            if(updated_hero==projected.heroes.end()||std::any_of(updated_hero->camping_skills.begin(),updated_hero->camping_skills.end(),[&](const auto& skill){return skill.id==camp_unequip_skill;}))
+                fail("Unequipped camping skill remains in the selected-skill projection");
         }
     }
     auto source_match=must(profile.matches_disk_baseline(fs),"Verify source unchanged"); if(!source_match) fail("Source profile changed during generation");
