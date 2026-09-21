@@ -36,6 +36,14 @@ struct SaveCommitResult {
     std::vector<core::dson::BinaryDiffReport> binary_diffs;
 };
 
+enum class SaveCommitMode {
+    // Used by the editor's normal save path; requires game-verified mappings.
+    GameVerifiedOnly,
+    // Used only to create isolated acceptance-test profiles for candidate mappings.
+    // It still requires a byte-identical source copy, backup and post-write validation.
+    AcceptanceTestCandidate,
+};
+
 // Commits only to an explicitly supplied profile copy. The loaded source profile remains untouched.
 class SafeSaveCommitter {
 public:
@@ -44,7 +52,8 @@ public:
     [[nodiscard]] core::Result<SaveCommitResult, core::Error>
     commit(const RawSaveProfile& source_profile, const ChangeSet& changes,
            const std::filesystem::path& target_profile_root,
-           const std::filesystem::path& backup_directory) const;
+           const std::filesystem::path& backup_directory,
+           SaveCommitMode mode = SaveCommitMode::GameVerifiedOnly) const;
 
 private:
     IFileSystem& file_system_;

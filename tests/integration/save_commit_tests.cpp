@@ -432,6 +432,20 @@ TEST(SafeSaveCommitter, BacksUpCompleteProfileAndWritesOnlyTheExplicitCopy) {
     EXPECT_EQ(std::get<std::int32_t>(found->value), std::get<std::int32_t>(change->after));
 }
 
+TEST(SaveAdapter, BuildsANameChangeCandidateWithoutChangingOtherEmbeddedHeroFields) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, fixture);
+    const auto name = hero_name_change(profile, "英雄名称测试");
+    ASSERT_TRUE(name);
+
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, change_set({*name}));
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    ASSERT_EQ(candidate.value().documents.size(), 1U);
+    EXPECT_EQ(candidate.value().documents.front().id, "persist.roster.json");
+}
+
 TEST(SafeSaveCommitter, CommitsMappedStructuralEraseToTheCopyAndKeepsBackupAndSource) {
     TempDirectory temp;
     const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
@@ -478,6 +492,31 @@ TEST(SafeSaveCommitter, RefusesCandidateOnlyMappingsBeforeBackupOrDiskWrite) {
     EXPECT_EQ(fs.atomic_write_count, 0U);
     EXPECT_FALSE(std::filesystem::exists(backup_path));
     EXPECT_EQ(read_bytes(target_root / "persist.roster.json"), profile.documents.at("persist.roster.json").bytes);
+}
+
+TEST(SafeSaveCommitter, AcceptanceTestModeWritesCandidateMappingOnlyToVerifiedCopy) {
+    TempDirectory temp;
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(source_root, target_root);
+    const auto backup_path = temp.path / "backups" / "candidate-acceptance";
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto name = hero_name_change(profile);
+    ASSERT_TRUE(name);
+    const auto original_source = profile.documents.at("persist.roster.json").bytes;
+
+    const auto result = application::SafeSaveCommitter{fs}.commit(
+        profile, change_set({*name}), target_root, backup_path,
+        application::SaveCommitMode::AcceptanceTestCandidate);
+    ASSERT_TRUE(result) << result.error().message;
+    EXPECT_EQ(read_bytes(source_root / "persist.roster.json"), original_source);
+    EXPECT_EQ(read_bytes(backup_path / "persist.roster.json"), original_source);
+    EXPECT_NE(read_bytes(target_root / "persist.roster.json"), original_source);
+    EXPECT_EQ(result.value().committed_documents, (std::vector<std::string>{"persist.roster.json"}));
 }
 
 TEST(SafeSaveCommitter, BackupFailurePerformsZeroTargetWrites) {

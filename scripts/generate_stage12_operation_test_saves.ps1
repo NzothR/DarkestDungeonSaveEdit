@@ -4,7 +4,9 @@ param(
     [string]$GameRoot = "D:\SteamLibrary\steamapps\common\DarkestDungeon",
     [string]$WorkshopRoot = "D:\SteamLibrary\steamapps\workshop\content\262060",
     [string]$LocalModRoot = "D:\SteamLibrary\steamapps\common\DarkestDungeon\modes",
-    [string]$OutputRoot = "test_save_profile\stage12_operation_tests"
+    [string]$OutputRoot = "test_save_profile\stage12_operation_tests",
+    [ValidateSet("all", "acceptance-followups")]
+    [string]$Focus = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,7 +67,8 @@ if (-not $generator) { throw "Built generator executable was not found under $bu
     --game-root $gamePath `
     --workshop-root $workshopPath `
     --local-mod-root $localPath `
-    --output-root $outputPath
+    --output-root $outputPath `
+    --focus $Focus
 if ($LASTEXITCODE -ne 0) { throw "Save generation failed with exit code $LASTEXITCODE" }
 
 Write-Host "Finished. Review: $(Join-Path $outputPath 'README.md')"

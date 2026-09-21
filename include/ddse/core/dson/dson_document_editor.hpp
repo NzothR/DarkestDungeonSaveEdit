@@ -17,6 +17,13 @@ public:
                  const DsonDocument& source, std::string_view source_path,
                  std::string_view child_name);
 
+    // Adds a deep copy at the requested ordered-child position. Positions at
+    // children.size() append to the object.
+    [[nodiscard]] static Result<std::size_t, Error>
+    insert_clone_at(DsonDocument& target, std::string_view parent_path,
+                    const DsonDocument& source, std::string_view source_path,
+                    std::string_view child_name, std::size_t child_position);
+
     // Renames a field and all paths below it, preserving its value and children.
     [[nodiscard]] static Result<void, Error>
     rename(DsonDocument& document, std::string_view path, std::string_view new_name);

@@ -1822,7 +1822,9 @@ Regression fixture
 - [x] 购买节点按 `tree_id + instance_number + requirement_code` 定位，并可按有效 Mod 升级树上限处理稀疏存档行。
 - [x] 结构编辑经过 Operation/Mapping allowlist、SaveAdapter 候选回读和 SafeSaveCommitter 完整备份/目标副本写回。
 - [x] 从 33 人 roster、122 个已启用 Mod 的测试存档生成 17 个独立操作验收档与 1 个对照档；生成时 Mod 扫描诊断为 0，源档指纹前后未变。
-- [ ] 玩家仍需按 `test_save_profile/stage12_operation_tests/README.md` 在游戏内逐档验收。
+- [x] 原有 17 个操作档已完成游戏内验收；新增负面怪癖删除再新增、双英雄美德/折磨状态和首位英雄改名 3 个补充档。
+- [ ] 玩家仍需按 `test_save_profile/stage12_followup_tests/README.md` 验收这 3 个补充档。
+- [x] 未验收字段使用显式 `AcceptanceTestCandidate` 生成隔离测试副本；默认 SafeSaveCommitter 仍只接受已通过游戏验收的 Mapping。
 - 暂缓项继续保持不可用：生存技能训练锁定和疾病增删。
 
 自动检查确认候选 DSON 可重新解析、Domain Model 可重新投影、预期变更与购买节点状态一致；它不替代游戏内验收。

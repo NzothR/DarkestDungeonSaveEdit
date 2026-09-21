@@ -1,9 +1,9 @@
 # 核心编辑功能实测与 UI 集成参考
 
-**状态：**Stage 12 已把此前通过游戏验证的核心操作接入 Operation、Mapping 与安全写回，并生成待游戏验收存档；生存技能锁定和疾病增删暂缓。
+**状态：**Stage 12 已把此前通过游戏验证的核心操作接入 Operation、Mapping 与安全写回；负面怪癖删除后新增、英雄改名和美德/折磨状态写回已实现并生成待游戏验收存档。生存技能锁定和疾病增删暂缓。
 **记录日期：**2026-09-21  
 **测试环境：**`test_save_profile/profile_0`，存档内的 Mod 启用顺序为准。最近一轮扫描到 137 个已安装 Mod，其中 122 个启用；内容扫描诊断为 0。  
-**已验证记录：**[Stage 11 测试档说明](../test_save_profile/stage11_advanced_game_tests/README.md)；**Stage 12 待验收档：**[操作写回测试档说明](../test_save_profile/stage12_operation_tests/README.md)
+**已验证记录：**[Stage 11 测试档说明](../test_save_profile/stage11_advanced_game_tests/README.md)；**Stage 12 待验收档：**[操作写回测试档说明](../test_save_profile/stage12_operation_tests/README.md)、[本轮补充测试说明](../test_save_profile/stage12_followup_tests/README.md)
 
 ## 1. 目的与验收边界
 
@@ -11,7 +11,7 @@
 
 游戏内通过表示相应 DSON 存档状态能被当前游戏与 Mod 环境正确读取、显示并保存。它不自动代表相应编辑操作已经接入 `CampaignEditSession`、`SaveAdapter` 或 UI。正式 UI 写入仍须经过 Mapping、Operation、校验、候选存档回读和安全提交流程。
 
-本轮 Stage 12 所有测试档均从源存档独立生成；源存档指纹在生成前后相同，每项另有 SafeSaveCommitter 校验过的写入前备份。Stage 12 存档仍需你导入游戏逐项验收。
+此前 Stage 12 的 17 个操作档已由你确认通过。本轮新增的 3 个补充档也各自从当前源存档独立生成；源存档指纹在生成前后相同，每项另有 SafeSaveCommitter 校验过的写入前备份。补充档仍需你导入游戏验收。
 
 ## 2. 测试结果总览
 
@@ -21,7 +21,7 @@
 |---|---|---|
 | 基础资源修改 | 通过 | 一次修改存档中的全部基础资源，并在游戏中核对目标数值。 |
 | 新增 Mod 英雄 | 通过 | 新英雄加入名单末尾；职业、来源 Mod 和初始技能/装备状态可在游戏中确认。 |
-| 替换正面与负面怪癖 | 通过 | 使用当前 Mod 环境中的怪癖定义。 |
+| 替换正面与负面怪癖 | 原测试通过；负面删除后新增待验收 | 新接口不再把负面怪癖当作可替换定义，而是删除后在原有序位新增。 |
 | 给英雄增加正面与负面怪癖 | 通过 | 按存档和 Mod 环境支持的怪癖容量选择目标英雄。 |
 | 饰品库存新增饰品 | 通过 | 新饰品名称和 Mod 来源可在游戏内核对。 |
 
@@ -101,6 +101,8 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 |---|---|---|
 | `SetCampaignValueOperation` / `Estate.Resource.Amount` | `persist.estate.json` 钱包金额 | 可写候选并可提交；游戏已验证 |
 | `SetCampaignValueOperation` / `Hero.ResolveXp` | 英雄内嵌 DSON 的 `resolveXp` | 可写候选并可提交；等级变化已验证，等级门槛由上层规则决定 |
+| `SetHeroStressConditionsOperation` | 压力值、美德 ID、折磨 ID 与严重度 | 可生成候选档；美德/折磨互斥字段由一个 Operation 原子更新，等待游戏内验收 |
+| `SetCampaignValueOperation` / `Hero.Name` | 英雄内嵌 DSON 的 `actor/name` | 可生成候选档；独立改名等待游戏内验收 |
 | `SetHeroQuirkLockedOperation` | 英雄怪癖 `is_locked` | 可写候选并可提交；Operation 会检查正面、非疾病、定义允许锁定 |
 | `RemoveHeroQuirkOperation` | 完整怪癖对象 | 可写候选并可提交；按 ID 精确移除完整子树 |
 | `SetDistrictBuiltOperation` | `persist.town.json` 的 `built` | 可写候选并可提交；需要存档中已经存在小镇建筑系统状态 |
@@ -108,7 +110,7 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 | `DestroyTrinketOperation`（饰品物品栏） | 庄园 `trinkets/items/{key}` | 可写候选并可提交；按原始键销毁，不重排其他条目 |
 | `UnequipHeroCampingSkillOperation` | 英雄 `selected_camping_skills` 集合 | 可写候选并可提交；只取消装备，不改变训练解锁 |
 | `campaign.hero.add` | 英雄名单及英雄内嵌数据 | 映射操作追加 mod 英雄模板，并清除继承的怪癖和饰品 |
-| `campaign.hero.add_or_replace_quirk` | 英雄怪癖集合 | 新增/替换时保留怪癖极性并初始化记录元数据 |
+| `campaign.hero.add_or_replace_quirk` | 英雄怪癖集合 | 新增时初始化记录元数据；正面替换沿用替换机制，负面替换执行删除再按原顺序位置克隆新增 |
 | `campaign.trinket.add_inventory` | 庄园饰品库存 | 按有效内容定义追加一个库存条目 |
 | `campaign.hero.equip_trinket` | 英雄饰品栏 | 追加装备记录并校验饰品职业限制 |
 | `campaign.hero.set_equipment_ranks` | 英雄武器/防具字段及购买节点 | 复合操作同步；按有效升级树处理稀疏节点 |
@@ -125,9 +127,10 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 
 - 生存技能训练锁定仍为 `Deferred`：不要把它映射为取消装备技能。
 - 疾病增删仍为 `Deferred`：等待包含疾病记录的真实存档样本并完成游戏内验证。
-- 英雄名称、Stress、HP 等虽可在 Session 内修改，但没有对应游戏修改证据，不能安全提交。
+- 英雄名称、Stress、美德 ID、折磨 ID 和折磨严重度可在 Session 中生成候选档，目前没有游戏修改证据。普通安全提交仍会拒绝这些候选映射；`AcceptanceTestCandidate` 只用于写入隔离测试副本，仍执行源副本指纹检查、完整备份和写后回读。
+- HP 和伤害等动态计算状态保持只读，不提供写入 Operation。
 
-其他已通过游戏验证的 Stage 11 行为，以及本轮接通的结构编辑和成长编辑，均已进入能力目录并使用同一个 SafeSaveCommitter 流程。本轮生成的 17 个测试档列在 Stage 12 清单中，包含目标说明、依赖关系和自动结构校验范围。
+其他已通过游戏验证的 Stage 11 行为，以及本轮接通的结构编辑和成长编辑，均已进入能力目录并使用同一个 SafeSaveCommitter 流程。本轮追加 3 个测试档：负面怪癖删除再新增、美德与折磨状态设置、名单首位英雄改名。
 
 ### 4.3 Operation 和提交接口
 
@@ -135,7 +138,7 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 - `apply()` 的返回值用于展示本次操作；提交时读取 `session.pending_changes()`，它是相对本次 Session 初始模型合并后的净变更。连续修改同一字段会折叠成一条 before/after；Undo 到初始值会从净 ChangeSet 移除。
 - `SaveAdapter::build_candidate(profile, pending_changes)` 只接受 Registry 中有候选写入能力的映射。结构删除会在深拷贝后的 DSON AST 上执行，并在重新编码、解码后检查除了目标子树外的字段值和未知原始字段没有变化。
 - 集合编辑由带 operation ID、语义 Mapping、DSON 路径和类型的 `CampaignDocumentMutation` 表示；Operation 校验器和 SaveAdapter 都检查映射作用域与允许的变更类型。UI 不应自行拼接路径或直接构造这些变更，应由 Application 层命令/工厂根据稳定 ID 和当前模型生成 Operation。
-- `SafeSaveCommitter::commit()` 只接受带游戏内修改证据的映射；先检查源和目标副本未漂移，再生成并验证候选、备份整个目标 profile、原子写入目标副本并回读验证。源 profile 不会成为写入目标。
+- `SafeSaveCommitter::commit()` 默认只接受带游戏内修改证据的映射；先检查源和目标副本未漂移，再生成并验证候选、备份整个目标 profile、原子写入目标副本并回读验证。`AcceptanceTestCandidate` 是测试生成器专用显式模式，仅允许候选标量映射写入隔离副本，不会解锁普通 UI 提交。源 profile 不会成为写入目标。
 - 结构变更的 Undo/Redo 作用于内存模型；Undo 后请从 `pending_changes()` 取得净 ChangeSet。不要把 Undo 的单步反向事件直接交给 SaveAdapter。
 
 测试用例本身也应保持语义明确：
@@ -162,4 +165,5 @@ Stage 12 已完成写回纵切片。后续建议转向 UI/Application 命令服�
 - [后端技术设计与实施指南](<Darkest Dungeon 1 Sandbox Save Editor — Backend Technical Design and Implementation Guide.md>)：Operation、Mapping、Save Adapter、安全提交和 Stage 12 功能纵切片。
 - [v1.0 产品与技术设计](Darkest_Dungeon_1_Sandbox_Save_Editor_Development_Design_v1.0.md)：需求、领域语义与 UI 交互基线；技术栈部分以现行后端指南为准。
 - [Stage 11 已验证档及逐项记录](../test_save_profile/stage11_advanced_game_tests/README.md)。
-- [Stage 12 Operation 写回档与验收清单](../test_save_profile/stage12_operation_tests/README.md)：本轮 17 个独立测试档和 1 个对照档。
+- [Stage 12 Operation 写回档与验收清单](../test_save_profile/stage12_operation_tests/README.md)：原有 17 个独立测试档和 1 个对照档。
+- [Stage 12 补充验收清单](../test_save_profile/stage12_followup_tests/README.md)：负面怪癖删除再新增、压力状态和英雄改名各一份独立测试档。

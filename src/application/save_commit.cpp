@@ -376,9 +376,12 @@ bool same_structure_except_targets(const DsonDocument& original, const DsonDocum
             return false;
         }
         const bool target = allowed_here != allowed.end() && allowed_here->second.contains(index);
-        if (!target && before.kind != ValueKind::EmbeddedDson &&
-            (before.value != after.value || before.raw_data != after.raw_data)) {
-            reason = "Candidate changed a DSON field outside the ChangeSet";
+        if (!target && before.kind != ValueKind::EmbeddedDson && before.value != after.value) {
+            reason = "Candidate changed a DSON value outside the ChangeSet: " + before.path;
+            return false;
+        }
+        if (!target && before.kind == ValueKind::Unknown && before.raw_data != after.raw_data) {
+            reason = "Candidate changed unknown raw DSON bytes outside the ChangeSet: " + before.path;
             return false;
         }
         if (before.embedded_document) {
@@ -525,7 +528,8 @@ bool path_is_removed(std::string_view field_path, const std::vector<CampaignDocu
 
 bool path_is_added(std::string_view field_path, const std::vector<CampaignDocumentMutation>& mutations) {
     return std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
-        if (mutation.kind == CampaignDocumentMutationKind::AppendClone)
+        if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+            mutation.kind == CampaignDocumentMutationKind::InsertClone)
             return field_path == mutation.target_path || field_path.starts_with(mutation.target_path + "/") ||
                    field_path.starts_with(mutation.target_path + " => ");
         if (mutation.kind == CampaignDocumentMutationKind::Rename) {
@@ -843,15 +847,24 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Document mutation path is outside the registered game-verified mapping",
                                   {{"property", mutation.semantic_property}, {"path", mutation.target_path}}));
+            if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                 mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
+                !mutation_path_matches_mapping(*mapping, mutation.source_path))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  "Clone source is outside the registered mapping",
+                                  {{"property", mutation.semantic_property}, {"path", mutation.source_path}}));
             if (mutation.semantic_property == "Upgrade.PurchaseNode.Entry" &&
                 !purchase_entry_mutation_allowed(mutation))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Purchase-node document mutation is outside its typed row/field allowlist",
                                   {{"path", mutation.target_path}}));
-            if (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+            if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                 mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                 (mutation.source_path.empty() || !safe_dson_key(mutation.new_key) ||
-                 mutation.expected_kind == ValueKind::Unknown))
+                 mutation.expected_kind == ValueKind::Unknown ||
+                 (mutation.kind == CampaignDocumentMutationKind::InsertClone && !mutation.insertion_index)))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed, "Append-clone mutation payload is invalid"));
             if (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key))
@@ -907,34 +920,41 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                               {{"document", document_id}}));
 
         auto cloned = clone_document(original);
-        const auto append_clone = [&](const CampaignDocumentMutation& mutation) -> core::Result<void, core::Error> {
+        auto source_snapshot = clone_document(original);
+        const auto clone_entry = [&](const CampaignDocumentMutation& mutation, bool insert_at_position)
+            -> core::Result<void, core::Error> {
             std::string reason;
             if (locate_field_by_path(cloned, mutation.target_path, reason))
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::ConcurrentSaveChanged,
-                                  "Append-clone destination already exists",
+                                  "Clone destination already exists",
                                   {{"document", document_id}, {"path", mutation.target_path}}));
-            auto source_field = locate_field_by_path(cloned, mutation.source_path, reason);
+            auto source_field = locate_field_by_path(source_snapshot, mutation.source_path, reason);
             if (!source_field || source_field->get().kind != mutation.expected_kind)
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
-                                  reason.empty() ? "Append-clone source has a different DSON value kind" : reason,
+                                  reason.empty() ? "Clone source has a different DSON value kind" : reason,
                                   {{"document", document_id}, {"path", mutation.source_path}}));
             const auto slash = mutation.target_path.find_last_of('/');
             if (slash == std::string::npos || mutation.target_path.substr(slash + 1) != mutation.new_key)
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed,
-                                  "Append-clone key does not match the mapped destination path",
+                                  "Clone key does not match the mapped destination path",
                                   {{"path", mutation.target_path}}));
             auto destination = locate_document_for_path(cloned, mutation.target_path.substr(0, slash), reason);
-            auto source_document = locate_document_for_path(cloned, mutation.source_path, reason);
+            auto source_document = locate_document_for_path(source_snapshot, mutation.source_path, reason);
             if (!destination || !source_document)
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
                                   {{"document", document_id}, {"path", mutation.target_path}}));
-            auto result = core::dson::DsonDocumentEditor::append_clone(
-                destination->first.get(), destination->second,
-                source_document->first.get(), source_document->second, mutation.new_key);
+            const auto result = insert_at_position
+                ? core::dson::DsonDocumentEditor::insert_clone_at(
+                    destination->first.get(), destination->second,
+                    source_document->first.get(), source_document->second,
+                    mutation.new_key, *mutation.insertion_index)
+                : core::dson::DsonDocumentEditor::append_clone(
+                    destination->first.get(), destination->second,
+                    source_document->first.get(), source_document->second, mutation.new_key);
             if (!result) return core::Result<void, core::Error>::failure(result.error());
             return core::Result<void, core::Error>::success();
         };
@@ -978,8 +998,9 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         }
         for (const auto& mutation : document_mutations) {
             std::string reason;
-            if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
-                auto appended = append_clone(mutation);
+            if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                mutation.kind == CampaignDocumentMutationKind::InsertClone) {
+                auto appended = clone_entry(mutation, mutation.kind == CampaignDocumentMutationKind::InsertClone);
                 if (!appended) return core::Result<SaveCandidate, core::Error>::failure(appended.error());
             } else if (mutation.kind == CampaignDocumentMutationKind::Erase) {
                 auto target = locate_field_by_path(cloned, mutation.target_path, reason);
@@ -1108,7 +1129,8 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
 core::Result<SaveCommitResult, core::Error>
 SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet& changes,
                           const std::filesystem::path& target_profile_root,
-                          const std::filesystem::path& backup_directory) const {
+                          const std::filesystem::path& backup_directory,
+                          SaveCommitMode mode) const {
     const auto& source_root = source_profile.descriptor.root_path;
     if (source_root.empty() || target_profile_root.empty() || backup_directory.empty())
         return core::Result<SaveCommitResult, core::Error>::failure(
@@ -1126,10 +1148,14 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
 
     for (const auto& change : changes.changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);
-        if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable)
+        const bool game_verified = mapping &&
+            mapping->capability() == CampaignMappingCapability::CommitWritable;
+        const bool acceptance_candidate = mapping && mode == SaveCommitMode::AcceptanceTestCandidate &&
+            mapping->capability() == CampaignMappingCapability::CandidateWritable;
+        if (!game_verified && !acceptance_candidate)
             return core::Result<SaveCommitResult, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
-                              "Safe commit requires a writable mapping with in-game mutation evidence",
+                              "This commit mode does not permit the mapping without game evidence",
                               {{"property", change.target.semantic_property}}));
     }
     for (const auto& batch : changes.document_mutation_batches) {

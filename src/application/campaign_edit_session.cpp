@@ -49,6 +49,18 @@ bool is_editable_property(std::string_view property) {
 std::vector<SetCampaignValueOperation> flatten(const CampaignOperation& operation) {
     if (const auto* single = std::get_if<SetCampaignValueOperation>(&operation)) return {*single};
     if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation)) return composite->operations;
+    if (const auto* state = std::get_if<SetHeroStressConditionsOperation>(&operation)) {
+        std::vector<SetCampaignValueOperation> result;
+        result.reserve(state->heroes.size() * 4U);
+        for (const auto& hero : state->heroes) {
+            const bool virtue = hero.condition == HeroStressCondition::Virtue;
+            result.push_back({{"Hero.Stress", hero.hero_id}, 0.0F});
+            result.push_back({{"Hero.AfflictionId", hero.hero_id}, virtue ? std::string{} : hero.condition_id});
+            result.push_back({{"Hero.AfflictionSeverity", hero.hero_id}, virtue ? std::int32_t{0} : std::int32_t{1}});
+            result.push_back({{"Hero.VirtueId", hero.hero_id}, virtue ? hero.condition_id : std::string{}});
+        }
+        return result;
+    }
     if (const auto* quirk = std::get_if<SetHeroQuirkLockedOperation>(&operation))
         return {{{"Hero.Quirk.Locked", quirk->hero_id, std::nullopt, quirk->quirk_id}, quirk->locked}};
     if (const auto* district = std::get_if<SetDistrictBuiltOperation>(&operation))
@@ -62,6 +74,7 @@ std::string operation_label(const CampaignOperation& operation) {
     if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation))
         return composite->label.empty() ? "Composite campaign operation" : composite->label;
     if (std::holds_alternative<SetHeroQuirkLockedOperation>(operation)) return "Set hero quirk lock";
+    if (std::holds_alternative<SetHeroStressConditionsOperation>(operation)) return "Set hero stress conditions";
     if (std::holds_alternative<SetDistrictBuiltOperation>(operation)) return "Set district built state";
     if (std::holds_alternative<RemoveHeroQuirkOperation>(operation)) return "Remove hero quirk";
     if (std::holds_alternative<UnequipHeroCampingSkillOperation>(operation)) return "Unequip camping skill";
@@ -212,6 +225,9 @@ std::optional<ResolvedTarget> resolve_target(Model& model, const CampaignOperati
     if (target.semantic_property == "Hero.Name") return resolve_slot<std::string>(hero->name, hero->state);
     if (target.semantic_property == "Hero.ResolveXp") return resolve_slot<std::int32_t>(hero->resolve_xp, hero->state);
     if (target.semantic_property == "Hero.Stress") return resolve_slot<float>(hero->stress, hero->state);
+    if (target.semantic_property == "Hero.AfflictionId") return resolve_slot<std::string>(hero->affliction_id, hero->state);
+    if (target.semantic_property == "Hero.AfflictionSeverity") return resolve_slot<std::int32_t>(hero->affliction_severity, hero->state);
+    if (target.semantic_property == "Hero.VirtueId") return resolve_slot<std::string>(hero->virtue_id, hero->state);
     if (target.semantic_property == "Hero.CurrentHp") return resolve_slot<float>(hero->current_hp, hero->state);
     if (target.semantic_property == "Hero.WeaponRank") return resolve_slot<std::int32_t>(hero->weapon_rank, hero->state);
     if (target.semantic_property == "Hero.ArmourRank") return resolve_slot<std::int32_t>(hero->armour_rank, hero->state);
@@ -225,7 +241,7 @@ void add_issue(ValidationReport& report, ValidationSeverity severity, std::strin
 }
 
 void validate_one(const CampaignModel& model, const SetCampaignValueOperation& operation,
-                  ValidationReport& report) {
+                  ValidationReport& report, bool allow_stress_condition_fields = false) {
     const auto& target = operation.target;
     const auto* mapping = find_mapping(target.semantic_property);
     if (mapping == nullptr) {
@@ -233,7 +249,9 @@ void validate_one(const CampaignModel& model, const SetCampaignValueOperation& o
                   "No campaign mapping exists for this semantic property", target, true);
         return;
     }
-    if (!is_editable_property(target.semantic_property)) {
+    const bool stress_condition_field = target.semantic_property == "Hero.AfflictionId" ||
+        target.semantic_property == "Hero.AfflictionSeverity" || target.semantic_property == "Hero.VirtueId";
+    if (!is_editable_property(target.semantic_property) && !(allow_stress_condition_fields && stress_condition_field)) {
         add_issue(report, ValidationSeverity::Error, "mapping.not_editable_in_session",
                   "The mapped property does not have an in-memory operation yet", target, true);
         return;
@@ -278,7 +296,8 @@ void validate_one(const CampaignModel& model, const SetCampaignValueOperation& o
                   "The value must be a finite non-negative number", target, true);
         return;
     }
-    if (const auto* name = std::get_if<std::string>(&operation.value); name && name->empty()) {
+    if (target.semantic_property == "Hero.Name" &&
+        std::holds_alternative<std::string>(operation.value) && std::get<std::string>(operation.value).empty()) {
         add_issue(report, ValidationSeverity::Error, "value.empty_name",
                   "A hero name cannot be empty", target, true);
         return;
@@ -708,6 +727,11 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
          {"Estate.Resource.Amount"}, "可编辑并通过安全提交写入。"},
         {"campaign.hero.set_resolve_xp", "修改英雄经验", CampaignOperationAvailability::Available,
          {"Hero.ResolveXp"}, "经验可写入；等级阈值与 UI 等级转换由上层规则负责。"},
+        {"campaign.hero.rename", "修改英雄名称", CampaignOperationAvailability::Available,
+         {"Hero.Name"}, "可生成隔离验收档；游戏内确认前不允许普通安全提交。"},
+        {"campaign.hero.set_stress_condition", "设置英雄美德或折磨状态", CampaignOperationAvailability::Available,
+         {"Hero.Stress", "Hero.AfflictionId", "Hero.AfflictionSeverity", "Hero.VirtueId"},
+         "压力状态由压力值、折磨 ID/严重度和美德 ID 组成；候选写回待游戏内验收。"},
         {"campaign.hero.set_quirk_locked", "锁定正面怪癖", CampaignOperationAvailability::Available,
          {"Hero.Quirk.Locked"}, "要求有效定义标记 can_modify_in_activity。"},
         {"campaign.hero.remove_quirk", "移除怪癖", CampaignOperationAvailability::Available,
@@ -731,7 +755,7 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
         {"campaign.hero.edit_disease", "编辑疾病", CampaignOperationAvailability::Deferred,
          {}, "等待包含真实疾病记录的存档样本。"},
         {"campaign.hero.add_or_replace_quirk", "增加或替换怪癖", CampaignOperationAvailability::Available,
-         {"Hero.Quirks"}, "插入与替换操作先校验有效定义的怪癖极性，并初始化记录元数据。"},
+         {"Hero.Quirks"}, "先校验有效定义的怪癖极性并初始化元数据；负面替换删除旧记录后克隆新增到原序位。"},
         {"campaign.trinket.add_inventory", "增加库存饰品", CampaignOperationAvailability::Available,
          {"TrinketInventory.Items"}, "按有效饰品定义追加一个库存条目，不对重复 ID 去重。"},
         {"campaign.hero.equip_trinket", "装备饰品", CampaignOperationAvailability::Available,
@@ -787,12 +811,21 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                           "A DSON mutation is outside its game-verified mapping", target, true);
                 continue;
             }
+            if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                 mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
+                !path_is_within_mapping(*mapping, mutation.source_path)) {
+                add_issue(report, ValidationSeverity::Error, "mutation.source_mapping_mismatch",
+                          "A cloned DSON template must come from the same registered mapping", target, true);
+                continue;
+            }
             const bool kind_allowed =
                 (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
                   mutation.semantic_property == "Town.DistrictSystem" || mutation.semantic_property == "Town.Districts" ||
                   mutation.semantic_property == "Upgrade.PurchaseNode.Entry")) ||
+                (mutation.kind == CampaignDocumentMutationKind::InsertClone &&
+                 mutation.semantic_property == "Hero.Quirks") ||
                 (mutation.kind == CampaignDocumentMutationKind::Erase &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
@@ -852,9 +885,11 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                     }
                 }
             }
-            if ((mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+            if (((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                  (mutation.source_path.empty() || !safe_dson_key(mutation.new_key) ||
-                  mutation.expected_kind == core::dson::ValueKind::Unknown)) ||
+                  mutation.expected_kind == core::dson::ValueKind::Unknown ||
+                  (mutation.kind == CampaignDocumentMutationKind::InsertClone && !mutation.insertion_index))) ||
                 (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key)) ||
                 (mutation.kind == CampaignDocumentMutationKind::SetValue &&
                  (!mutation.before || !mutation.after ||
@@ -949,9 +984,41 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
             }
         }
     }
+    if (const auto* state = std::get_if<SetHeroStressConditionsOperation>(&operation)) {
+        if (state->heroes.empty()) {
+            add_issue(report, ValidationSeverity::Error, "stress_state.empty",
+                      "At least one hero stress condition must be supplied", {}, true);
+            return report;
+        }
+        std::set<std::string, std::less<>> hero_ids;
+        for (const auto& edit : state->heroes) {
+            CampaignOperationTarget target{"Hero.Stress", edit.hero_id};
+            if (!safe_dson_key(edit.condition_id) || !hero_ids.insert(edit.hero_id).second) {
+                add_issue(report, ValidationSeverity::Error, "stress_state.invalid_id",
+                          "Condition IDs must be safe, non-empty DSON identifiers and each hero may appear once", target, true);
+                return report;
+            }
+            const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+                return item.persistent_id == edit.hero_id;
+            });
+            if (hero == model.heroes.end() || !hero->stress.raw || !hero->affliction_id.raw ||
+                !hero->affliction_severity.raw || !hero->virtue_id.raw) {
+                add_issue(report, ValidationSeverity::Error, "stress_state.mapping_missing",
+                          "The hero must have all four serialized stress-state fields available", target, true);
+                return report;
+            }
+            if (hero->state == EntityState::Invalid || hero->state == EntityState::Unresolved) {
+                add_issue(report, ValidationSeverity::Error, "stress_state.hero_unavailable",
+                          "The target hero is invalid or unresolved", target, true);
+                return report;
+            }
+        }
+    }
+
     const auto operations = flatten(operation);
     if (!operations.empty()) {
-        for (const auto& edit : operations) validate_one(model, edit, report);
+        const bool stress_condition_operation = std::holds_alternative<SetHeroStressConditionsOperation>(operation);
+        for (const auto& edit : operations) validate_one(model, edit, report, stress_condition_operation);
         return report;
     }
 

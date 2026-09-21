@@ -105,4 +105,23 @@ TEST(Stage7ResourceMapping, MappingSeparatesCandidateSupportFromGameEvidence) {
     EXPECT_TRUE(hero->editable_in_session);
     EXPECT_TRUE(hero->semantically_writable);
     EXPECT_FALSE(hero->game_mutation_verified);
+
+    const auto* stress = ddse::application::find_campaign_mapping("Hero.Stress");
+    ASSERT_NE(stress, nullptr);
+    EXPECT_TRUE(stress->semantically_writable);
+    EXPECT_TRUE(stress->editable_in_session);
+    EXPECT_EQ(stress->capability(), ddse::application::CampaignMappingCapability::CandidateWritable);
+
+    for (const auto property : {"Hero.AfflictionId", "Hero.AfflictionSeverity", "Hero.VirtueId"}) {
+        const auto* mapping = ddse::application::find_campaign_mapping(property);
+        ASSERT_NE(mapping, nullptr) << property;
+        EXPECT_TRUE(mapping->semantically_writable) << property;
+        EXPECT_FALSE(mapping->game_mutation_verified) << property;
+        EXPECT_FALSE(mapping->editable_in_session) << property;
+        EXPECT_EQ(mapping->capability(), ddse::application::CampaignMappingCapability::CandidateWritable) << property;
+    }
+    const auto* current_hp = ddse::application::find_campaign_mapping("Hero.CurrentHp");
+    ASSERT_NE(current_hp, nullptr);
+    EXPECT_FALSE(current_hp->semantically_writable);
+    EXPECT_EQ(current_hp->capability(), ddse::application::CampaignMappingCapability::ReadOnly);
 }

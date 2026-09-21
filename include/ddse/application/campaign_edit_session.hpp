@@ -44,6 +44,18 @@ struct SetHeroQuirkLockedOperation {
     bool locked{};
 };
 
+enum class HeroStressCondition { Virtue, Affliction };
+
+struct HeroStressConditionEdit {
+    std::string hero_id;
+    HeroStressCondition condition{HeroStressCondition::Virtue};
+    std::string condition_id;
+};
+
+struct SetHeroStressConditionsOperation {
+    std::vector<HeroStressConditionEdit> heroes;
+};
+
 struct SetDistrictBuiltOperation {
     std::string district_id;
     bool built{};
@@ -66,12 +78,24 @@ struct DestroyTrinketOperation {
     std::string item_key;
 };
 
-enum class CampaignDocumentMutationKind { AppendClone, Erase, Rename, ClearChildren, SetValue };
+enum class CampaignDocumentMutationKind { AppendClone, InsertClone, Erase, Rename, ClearChildren, SetValue };
 
 // Structured, allowlisted DSON edits used by the larger verified slices whose
 // save representation is a collection rather than one scalar field. Paths are
 // produced by application services and checked again by SaveAdapter.
 struct CampaignDocumentMutation {
+    CampaignDocumentMutation() = default;
+    CampaignDocumentMutation(CampaignDocumentMutationKind mutation_kind, std::string property,
+                             std::string document, std::string target, std::string source,
+                             std::string key, core::dson::ValueKind kind,
+                             std::optional<CampaignValue> old_value = std::nullopt,
+                             std::optional<CampaignValue> new_value = std::nullopt,
+                             std::optional<std::size_t> child_index = std::nullopt)
+        : kind(mutation_kind), semantic_property(std::move(property)), document_id(std::move(document)),
+          target_path(std::move(target)), source_path(std::move(source)), new_key(std::move(key)),
+          expected_kind(kind), before(std::move(old_value)), after(std::move(new_value)),
+          insertion_index(child_index) {}
+
     CampaignDocumentMutationKind kind{CampaignDocumentMutationKind::SetValue};
     std::string semantic_property;
     std::string document_id;
@@ -81,6 +105,7 @@ struct CampaignDocumentMutation {
     core::dson::ValueKind expected_kind{core::dson::ValueKind::Unknown};
     std::optional<CampaignValue> before;
     std::optional<CampaignValue> after;
+    std::optional<std::size_t> insertion_index;
 };
 
 struct CampaignDocumentMutationBatch {
@@ -117,7 +142,8 @@ struct CampaignOperationCapabilityDescriptor {
 [[nodiscard]] const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_capabilities();
 
 using CampaignOperation = std::variant<SetCampaignValueOperation, CompositeCampaignOperation,
-                                       SetHeroQuirkLockedOperation, SetDistrictBuiltOperation,
+                                       SetHeroQuirkLockedOperation, SetHeroStressConditionsOperation,
+                                       SetDistrictBuiltOperation,
                                        RemoveHeroQuirkOperation, UnequipHeroCampingSkillOperation,
                                        DestroyTrinketOperation, ApplyCampaignDocumentMutationsOperation>;
 

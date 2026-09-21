@@ -230,6 +230,61 @@ TEST(DsonWriter, ClonesAndRenamesAnObjectSubtreeThenRoundTripsIt) {
     EXPECT_NE(encoded.value(), source_bytes);
 }
 
+TEST(DsonWriter, InsertsClonedObjectAtTheRequestedSiblingPosition) {
+    DsonDocument document;
+    DsonField root;
+    root.name = "base_root";
+    root.path = "base_root";
+    root.kind = ValueKind::Object;
+    root.children = {1};
+    document.fields.push_back(std::move(root));
+
+    DsonField items;
+    items.name = "items";
+    items.path = "base_root/items";
+    items.kind = ValueKind::Object;
+    items.parent_index = 0;
+    items.children = {2, 4};
+    document.fields.push_back(std::move(items));
+
+    DsonField old_item;
+    old_item.name = "old";
+    old_item.path = "base_root/items/old";
+    old_item.kind = ValueKind::Object;
+    old_item.parent_index = 1;
+    old_item.children = {3};
+    document.fields.push_back(std::move(old_item));
+
+    DsonField old_value;
+    old_value.name = "value";
+    old_value.path = "base_root/items/old/value";
+    old_value.kind = ValueKind::Integer;
+    old_value.value = std::int32_t{7};
+    old_value.parent_index = 2;
+    document.fields.push_back(std::move(old_value));
+
+    DsonField next_item;
+    next_item.name = "next";
+    next_item.path = "base_root/items/next";
+    next_item.kind = ValueKind::Object;
+    next_item.parent_index = 1;
+    document.fields.push_back(std::move(next_item));
+
+    const auto inserted = DsonDocumentEditor::insert_clone_at(
+        document, "base_root/items", document, "base_root/items/old", "replacement", 1);
+    ASSERT_TRUE(inserted) << inserted.error().message;
+    const auto& children = document.fields[1].children;
+    ASSERT_EQ(children.size(), 3U);
+    EXPECT_EQ(document.fields[children[0]].name, "old");
+    EXPECT_EQ(document.fields[children[1]].name, "replacement");
+    EXPECT_EQ(document.fields[children[2]].name, "next");
+    const auto cloned_value = std::find_if(document.fields.begin(), document.fields.end(), [](const auto& field) {
+        return field.path == "base_root/items/replacement/value";
+    });
+    ASSERT_NE(cloned_value, document.fields.end());
+    EXPECT_EQ(std::get<std::int32_t>(cloned_value->value), 7);
+}
+
 TEST(DsonWriter, ClonesRosterHeroWithIndependentEmbeddedDocument) {
     const std::filesystem::path sample = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.roster.json";
     if (!std::filesystem::exists(sample)) GTEST_SKIP() << "Optional local save sample is not present";

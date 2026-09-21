@@ -58,6 +58,17 @@ Result<std::size_t, Error> DsonDocumentEditor::append_clone(
     DsonDocument& target, std::string_view parent_path,
     const DsonDocument& source, std::string_view source_path,
     std::string_view child_name) {
+    const auto parent_index = find_field(target, parent_path);
+    if (!parent_index || target.fields[*parent_index].kind != ValueKind::Object)
+        return Result<std::size_t, Error>::failure(edit_error("Destination path is not an object", std::string{parent_path}));
+    return insert_clone_at(target, parent_path, source, source_path, child_name,
+                           target.fields[*parent_index].children.size());
+}
+
+Result<std::size_t, Error> DsonDocumentEditor::insert_clone_at(
+    DsonDocument& target, std::string_view parent_path,
+    const DsonDocument& source, std::string_view source_path,
+    std::string_view child_name, std::size_t child_position) {
     if (child_name.empty() || child_name.find('/') != std::string_view::npos)
         return Result<std::size_t, Error>::failure(edit_error("New field name is empty or contains a path separator"));
 
@@ -73,6 +84,9 @@ Result<std::size_t, Error> DsonDocumentEditor::append_clone(
         }))
         return Result<std::size_t, Error>::failure(edit_error("Destination object already has a child with that name",
                                                               std::string{parent_path} + "/" + std::string{child_name}));
+    if (child_position > parent.children.size())
+        return Result<std::size_t, Error>::failure(edit_error("Ordered child insertion position is outside the destination object",
+                                                              std::string{parent_path}));
 
     std::vector<std::size_t> source_order;
     std::function<bool(std::size_t)> gather = [&](std::size_t index) {
@@ -91,7 +105,8 @@ Result<std::size_t, Error> DsonDocumentEditor::append_clone(
     const auto source_root_path = source.fields[*source_index].path;
     const auto new_root_path = target.fields[*parent_index].path + "/" + std::string{child_name};
     std::map<std::size_t, std::size_t> new_index;
-    const auto insertion_index = subtree_end(target, *parent_index);
+    const auto insertion_index = child_position == parent.children.size()
+        ? subtree_end(target, *parent_index) : parent.children[child_position];
     for (std::size_t offset = 0; offset < source_order.size(); ++offset)
         new_index.emplace(source_order[offset], insertion_index + offset);
 
@@ -141,7 +156,8 @@ Result<std::size_t, Error> DsonDocumentEditor::append_clone(
     cloned.front().parent_index = inserted_parent_index;
     target.fields.insert(target.fields.begin() + static_cast<std::ptrdiff_t>(insertion_index),
                          std::make_move_iterator(cloned.begin()), std::make_move_iterator(cloned.end()));
-    target.fields[inserted_parent_index].children.push_back(insertion_index);
+    auto& inserted_children = target.fields[inserted_parent_index].children;
+    inserted_children.insert(inserted_children.begin() + static_cast<std::ptrdiff_t>(child_position), insertion_index);
     target.structural_dirty = true;
     return Result<std::size_t, Error>::success(insertion_index);
 }
