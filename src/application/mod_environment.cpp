@@ -322,6 +322,8 @@ void remap_content_source(BaseContentScanResult& destination, BaseContentScanRes
     for (auto& row : source.definitions) { row.source_id = mod_id; destination.definitions.push_back(std::move(row)); }
     for (auto& row : source.localizations) { row.source_id = mod_id; destination.localizations.push_back(std::move(row)); }
     for (auto& row : source.assets) { row.source_id = mod_id; destination.assets.push_back(std::move(row)); }
+    for (auto& row : source.asset_references) { row.source_id = mod_id; destination.asset_references.push_back(std::move(row)); }
+    for (auto& row : source.relationships) { row.source_id = mod_id; destination.relationships.push_back(std::move(row)); }
     for (auto& row : source.diagnostics) { row.source_id = mod_id; destination.diagnostics.push_back(std::move(row)); }
 }
 
@@ -462,6 +464,18 @@ ModEnvironmentScanner::scan(const ModEnvironmentScanConfig& config) const {
     });
     std::sort(result.content.assets.begin(), result.content.assets.end(), [](const auto& a, const auto& b) {
         return std::tie(a.source_id, a.virtual_path) < std::tie(b.source_id, b.virtual_path);
+    });
+    std::sort(result.content.asset_references.begin(), result.content.asset_references.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.definition_type, a.content_id, a.source_id, a.definition_virtual_path,
+                        a.asset_role, a.reference_type, a.virtual_path, a.reference_origin) <
+               std::tie(b.definition_type, b.content_id, b.source_id, b.definition_virtual_path,
+                        b.asset_role, b.reference_type, b.virtual_path, b.reference_origin);
+    });
+    std::sort(result.content.relationships.begin(), result.content.relationships.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.parent_type, a.parent_id, a.relationship_type, a.child_type, a.child_id,
+                        a.source_id, a.virtual_path) <
+               std::tie(b.parent_type, b.parent_id, b.relationship_type, b.child_type, b.child_id,
+                        b.source_id, b.virtual_path);
     });
     std::sort(result.diagnostics.begin(), result.diagnostics.end(), [](const auto& a, const auto& b) {
         return std::tie(a.mod_id, a.virtual_path, a.message) < std::tie(b.mod_id, b.virtual_path, b.message);

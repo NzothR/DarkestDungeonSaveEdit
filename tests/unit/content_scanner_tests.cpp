@@ -48,14 +48,14 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     const auto game = temp.path / "game";
     std::filesystem::create_directories(game);
     auto config = BaseContentScanConfig::defaults(game);
-    config.vanilla_directories = {"heroes", "trinkets", "shared", "campaign", "localization", "inventory", "mods", "modes"};
+    config.vanilla_directories = {"heroes", "trinkets", "shared", "campaign", "localization", "inventory", "panels", "mods", "modes"};
 
     put(fs, game, "heroes/crusader/crusader.info.darkest",
         "resistances: .stun 40% .poison 30%\n"
         "combat_skill: .id \"smite\" .level 0 .type \"melee\"\n"
         "combat_skill: .id \"smite\" .level 1 .type \"melee\"\n");
     put(fs, game, "trinkets/base.entries.trinkets.json",
-        R"({"entries":[{"id":"test_trinket","price":100,"name":"Test"}]})");
+        R"({"entries":[{"id":"test_trinket","price":100,"name":"Test","hero_class_requirements":["crusader"]}]})");
     put(fs, game, "shared/quirk/quirk_library.json",
         R"({"quirks":[{"id":"tough","is_disease":false},{"id":"rabies","is_disease":true}]})");
     put(fs, game, "campaign/town/buildings/abbey/abbey.building.json", R"({"activities":[]})");
@@ -70,6 +70,9 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
         "inventory_item: .type \"gold\" .id \"\" .base_stack_limit 1750\n"
         "inventory_item: .type \"heirloom\" .id \"portrait\" .base_stack_limit 3\n");
     put(fs, game, "heroes/crusader/crusader.sprite.png", "png-metadata-only");
+    put(fs, game, "heroes/crusader/crusader.camping_skills.json",
+        R"({"skills":[{"id":"stand_tall","buffs":[]}]})");
+    put(fs, game, "panels/icons_equip/trinket/inv_trinket+test_trinket.png", "trinket-icon");
     put(fs, game, "mods/not_scanned/secret.entries.trinkets.json", R"({"entries":[{"id":"mod_only"}]})");
     put(fs, game, "modes/not_scanned/secret.entries.trinkets.json", R"({"entries":[{"id":"mode_only"}]})");
 
@@ -87,8 +90,10 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     ASSERT_EQ(first.value().sources.size(), 2U);
     EXPECT_EQ(first.value().sources[0].id, "vanilla");
     EXPECT_EQ(first.value().sources[1].id, "dlc:580100_crimson_court");
-    ASSERT_EQ(first.value().assets.size(), 1U);
-    EXPECT_EQ(first.value().assets.front().virtual_path, "heroes/crusader/crusader.sprite.png");
+    ASSERT_EQ(first.value().assets.size(), 2U);
+    EXPECT_TRUE(std::any_of(first.value().assets.begin(), first.value().assets.end(), [](const auto& asset) {
+        return asset.virtual_path == "heroes/crusader/crusader.sprite.png";
+    }));
 
     const auto* hero = find_definition(first.value(), "hero_class", "crusader");
     ASSERT_NE(hero, nullptr);
@@ -97,6 +102,7 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     EXPECT_NE(find_definition(first.value(), "hero_class", "flagellant"), nullptr);
     EXPECT_NE(find_definition(first.value(), "skill", "crusader:smite"), nullptr);
     EXPECT_NE(find_definition(first.value(), "skill", "flagellant:exsanguinate"), nullptr);
+    EXPECT_NE(find_definition(first.value(), "skill", "crusader:stand_tall"), nullptr);
     EXPECT_NE(find_definition(first.value(), "trinket", "test_trinket"), nullptr);
     EXPECT_NE(find_definition(first.value(), "trinket", "cc_trinket"), nullptr);
     EXPECT_NE(find_definition(first.value(), "quirk", "tough"), nullptr);
@@ -104,6 +110,23 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     EXPECT_NE(find_definition(first.value(), "building", "abbey"), nullptr);
     EXPECT_NE(find_definition(first.value(), "resource", "heirloom:portrait"), nullptr);
     EXPECT_NE(find_definition(first.value(), "resource", "blood"), nullptr);
+    EXPECT_FALSE(hero->payload_json.empty());
+    EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(), [](const auto& ref) {
+        return ref.definition_type == "hero_class" && ref.content_id == "crusader" &&
+               ref.reference_type == "directory" && ref.virtual_path == "heroes/crusader/";
+    }));
+    EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(), [](const auto& ref) {
+        return ref.definition_type == "trinket" && ref.content_id == "test_trinket" &&
+               ref.virtual_path == "panels/icons_equip/trinket/inv_trinket+test_trinket.png";
+    }));
+    EXPECT_TRUE(std::any_of(first.value().relationships.begin(), first.value().relationships.end(), [](const auto& relation) {
+        return relation.parent_type == "hero_class" && relation.parent_id == "crusader" &&
+               relation.relationship_type == "camping_skill" && relation.child_id == "crusader:stand_tall";
+    }));
+    EXPECT_TRUE(std::any_of(first.value().relationships.begin(), first.value().relationships.end(), [](const auto& relation) {
+        return relation.parent_type == "trinket" && relation.parent_id == "test_trinket" &&
+               relation.relationship_type == "restricted_to" && relation.child_id == "crusader";
+    }));
     EXPECT_EQ(find_definition(first.value(), "trinket", "mod_only"), nullptr);
     EXPECT_EQ(find_definition(first.value(), "trinket", "mode_only"), nullptr);
 

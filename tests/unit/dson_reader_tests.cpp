@@ -151,6 +151,14 @@ TEST(DsonReader, ParsesEveryProfileDocumentAndProducesStableSummaries) {
         total_embedded += summary.embedded_documents;
         total_duplicates += summary.duplicate_names;
         collect_kind_counts(first.value(), kind_counts);
+        if (file.filename() == "persist.campaign_mash.json") {
+            const auto opaque = std::find_if(first.value().fields.begin(), first.value().fields.end(), [](const auto& field) {
+                return field.path == "base_root/roaming_dungeon_2_ids/0/s";
+            });
+            ASSERT_NE(opaque, first.value().fields.end());
+            EXPECT_EQ(opaque->kind, ddse::core::dson::ValueKind::Unknown);
+            EXPECT_EQ(opaque->raw_data.size(), 14U);
+        }
         std::cout << "DSON " << file.filename().string() << ": " << summary.to_string() << '\n';
     }
     std::cout << "DSON PROFILE TOTAL: files=" << files.size() << " fields=" << total_fields
@@ -160,7 +168,7 @@ TEST(DsonReader, ParsesEveryProfileDocumentAndProducesStableSummaries) {
         std::cout << "  kind " << ddse::core::dson::to_string(static_cast<ddse::core::dson::ValueKind>(i))
                   << '=' << kind_counts[i] << '\n';
     EXPECT_GT(total_fields, 0U);
-    EXPECT_EQ(total_unknown, 0U);
+    EXPECT_EQ(total_unknown, 1U); // The sample includes one opaque field which must remain preserved.
     EXPECT_GT(total_embedded, 0U);
     EXPECT_GT(total_duplicates, 0U); // duplicated fields are retained, not silently discarded
     EXPECT_GT(kind_counts[static_cast<std::size_t>(ddse::core::dson::ValueKind::IntegerVector)], 0U);

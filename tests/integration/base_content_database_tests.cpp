@@ -41,6 +41,11 @@ ddse::application::BaseContentScanResult sample_scan() {
     scan.localizations.push_back({"english", "trinket_name_sample_token", "Sample Token", "vanilla",
                                   "localization/trinkets.string_table.xml"});
     scan.assets.push_back({"vanilla", "heroes/crusader/trinket.png", ".png", 1024});
+    scan.asset_references.push_back({"vanilla", "trinket", "sample_token",
+        "trinkets/base.entries.trinkets.json", "inventory_icon", "file",
+        "panels/icons_equip/trinket/inv_trinket+sample_token.png", "convention"});
+    scan.relationships.push_back({"vanilla", "trinket", "sample_token", "restricted_to",
+        "hero_class", "crusader", "trinkets/base.entries.trinkets.json"});
     return scan;
 }
 
@@ -62,13 +67,17 @@ TEST(BaseContentDatabase, BuildsQueryableSourceLocalizationAssetAndHashIndexes) 
     EXPECT_EQ(built.value().trinkets, 1U);
     EXPECT_EQ(built.value().localization_entries, 1U);
     EXPECT_EQ(built.value().assets, 1U);
+    EXPECT_EQ(built.value().asset_references, 1U);
+    EXPECT_EQ(built.value().relationships, 1U);
     ASSERT_TRUE(std::filesystem::exists(path));
     EXPECT_FALSE(std::filesystem::exists(path.string() + ".new"));
 
     auto database = ddse::infrastructure::sqlite::ConnectionFactory{}.open(path);
     ASSERT_TRUE(database) << database.error().message;
     auto statement_result = database.value().prepare(
-        "SELECT d.content_id,s.display_name,f.virtual_path,l.localized_text,a.virtual_path,h.hash_value "
+        "SELECT d.content_id,s.display_name,f.virtual_path,l.localized_text,a.virtual_path,h.hash_value,"
+        "(SELECT r.virtual_path FROM content_asset_references r WHERE r.content_id=d.content_id LIMIT 1),"
+        "(SELECT r.child_id FROM content_relationships r WHERE r.parent_id=d.content_id LIMIT 1) "
         "FROM content_definitions d JOIN source_files f USING(source_file_id) "
         "JOIN content_sources s USING(source_id) "
         "JOIN localization_entries l ON l.localization_key=d.localization_key "
@@ -86,6 +95,8 @@ TEST(BaseContentDatabase, BuildsQueryableSourceLocalizationAssetAndHashIndexes) 
     EXPECT_EQ(statement.column_text(3), "Sample Token");
     EXPECT_EQ(statement.column_text(4), "heroes/crusader/trinket.png");
     EXPECT_EQ(statement.column_int64(5), ddse::core::dson::string_hash("sample_token"));
+    EXPECT_EQ(statement.column_text(6), "panels/icons_equip/trinket/inv_trinket+sample_token.png");
+    EXPECT_EQ(statement.column_text(7), "crusader");
 }
 
 TEST(BaseContentDatabase, FailedRebuildLeavesExistingDatabaseByteIdentical) {

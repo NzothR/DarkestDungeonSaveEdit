@@ -119,6 +119,8 @@ BaseContentDatabaseBuilder::rebuild(const std::filesystem::path& database_path,
     summary.sources = scan.sources.size();
     summary.source_files = scan.source_files.size();
     summary.assets = scan.assets.size();
+    summary.asset_references = scan.asset_references.size();
+    summary.relationships = scan.relationships.size();
     summary.diagnostics = scan.diagnostics.size();
     for (const auto& definition : scan.definitions) {
         if (definition.kind == "hero_class") ++summary.hero_classes;
@@ -167,6 +169,18 @@ CREATE TABLE assets (
  asset_id INTEGER PRIMARY KEY, source_file_id INTEGER NOT NULL UNIQUE REFERENCES source_files(source_file_id),
  virtual_path TEXT NOT NULL, extension TEXT NOT NULL, size_bytes INTEGER NOT NULL
 );
+CREATE TABLE content_asset_references (
+ asset_reference_id INTEGER PRIMARY KEY, definition_type TEXT NOT NULL, content_id TEXT NOT NULL,
+ source_file_id INTEGER NOT NULL REFERENCES source_files(source_file_id), asset_role TEXT NOT NULL,
+ reference_type TEXT NOT NULL, virtual_path TEXT NOT NULL, reference_origin TEXT NOT NULL,
+ UNIQUE(definition_type,content_id,source_file_id,asset_role,reference_type,virtual_path)
+);
+CREATE TABLE content_relationships (
+ relationship_id INTEGER PRIMARY KEY, parent_type TEXT NOT NULL, parent_id TEXT NOT NULL,
+ relationship_type TEXT NOT NULL, child_type TEXT NOT NULL, child_id TEXT NOT NULL,
+ source_file_id INTEGER NOT NULL REFERENCES source_files(source_file_id),
+ UNIQUE(parent_type,parent_id,relationship_type,child_type,child_id,source_file_id)
+);
 CREATE TABLE content_hash_index (
  hash_value INTEGER NOT NULL, definition_type TEXT NOT NULL, content_id TEXT NOT NULL,
  source_file_id INTEGER NOT NULL REFERENCES source_files(source_file_id),
@@ -179,6 +193,8 @@ CREATE INDEX idx_definitions_type_id ON content_definitions(definition_type, con
 CREATE INDEX idx_localization_language_key ON localization_entries(language, localization_key);
 CREATE INDEX idx_hash_value ON content_hash_index(hash_value);
 CREATE INDEX idx_assets_virtual_path ON assets(virtual_path);
+CREATE INDEX idx_asset_references_entity ON content_asset_references(definition_type,content_id,source_file_id);
+CREATE INDEX idx_content_relationships_parent ON content_relationships(parent_type,parent_id,relationship_type);
 )SQL";
         auto created = database.execute(schema);
         if (!created) return core::Result<void, core::Error>::failure(created.error());
@@ -206,7 +222,7 @@ CREATE INDEX idx_assets_virtual_path ON assets(virtual_path);
             [&](sqlite::Statement& s, std::size_t row) {
                 auto r = bind_text(s, 1, row == 0 ? std::string_view{"schema_version"} : std::string_view{"scanner_version"});
                 if (!r) return r;
-                return bind_text(s, 2, row == 0 ? std::string_view{"1"} : std::string_view{"stage4"});
+                return bind_text(s, 2, row == 0 ? std::string_view{"2"} : std::string_view{"stage6"});
             });
         if (!inserted) return inserted;
 
@@ -298,6 +314,39 @@ CREATE INDEX idx_assets_virtual_path ON assets(virtual_path);
                 r = bind_text(s, 2, row.virtual_path); if (!r) return r;
                 r = bind_text(s, 3, row.extension); if (!r) return r;
                 return s.bind(4, static_cast<std::int64_t>(row.size_bytes));
+            });
+        if (!inserted) return inserted;
+
+        inserted = insert_rows("INSERT INTO content_asset_references(definition_type,content_id,source_file_id,asset_role,reference_type,virtual_path,reference_origin) VALUES(?,?,?,?,?,?,?)",
+            scan.asset_references.size(), [&](sqlite::Statement& s, std::size_t i) {
+                const auto& row = scan.asset_references[i];
+                const auto found = source_file_ids.find(file_key(row.source_id, row.definition_virtual_path));
+                if (found == source_file_ids.end()) return core::Result<void, core::Error>::failure(
+                    {core::ErrorCode::ValidationFailed, "Asset reference has no source definition file", "BaseContentDatabase",
+                     {{"source", row.source_id}, {"path", row.definition_virtual_path}}});
+                auto r = bind_text(s, 1, row.definition_type); if (!r) return r;
+                r = bind_text(s, 2, row.content_id); if (!r) return r;
+                r = s.bind(3, found->second); if (!r) return r;
+                r = bind_text(s, 4, row.asset_role); if (!r) return r;
+                r = bind_text(s, 5, row.reference_type); if (!r) return r;
+                r = bind_text(s, 6, row.virtual_path); if (!r) return r;
+                return bind_text(s, 7, row.reference_origin);
+            });
+        if (!inserted) return inserted;
+
+        inserted = insert_rows("INSERT INTO content_relationships(parent_type,parent_id,relationship_type,child_type,child_id,source_file_id) VALUES(?,?,?,?,?,?)",
+            scan.relationships.size(), [&](sqlite::Statement& s, std::size_t i) {
+                const auto& row = scan.relationships[i];
+                const auto found = source_file_ids.find(file_key(row.source_id, row.virtual_path));
+                if (found == source_file_ids.end()) return core::Result<void, core::Error>::failure(
+                    {core::ErrorCode::ValidationFailed, "Content relationship has no source definition file", "BaseContentDatabase",
+                     {{"source", row.source_id}, {"path", row.virtual_path}}});
+                auto r = bind_text(s, 1, row.parent_type); if (!r) return r;
+                r = bind_text(s, 2, row.parent_id); if (!r) return r;
+                r = bind_text(s, 3, row.relationship_type); if (!r) return r;
+                r = bind_text(s, 4, row.child_type); if (!r) return r;
+                r = bind_text(s, 5, row.child_id); if (!r) return r;
+                return s.bind(6, found->second);
             });
         if (!inserted) return inserted;
 

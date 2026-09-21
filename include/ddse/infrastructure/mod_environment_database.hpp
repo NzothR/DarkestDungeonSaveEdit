@@ -18,6 +18,8 @@ struct ModEnvironmentBuildSummary {
     std::size_t definitions{};
     std::size_t localization_entries{};
     std::size_t assets{};
+    std::size_t asset_references{};
+    std::size_t relationships{};
     std::size_t effective_paths{};
     std::size_t overridden_paths{};
     std::size_t diagnostics{};

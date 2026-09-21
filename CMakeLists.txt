@@ -66,6 +66,7 @@ add_library(ddse_application STATIC
     src/application/save_profile.cpp
     src/application/content_scanner.cpp
     src/application/mod_environment.cpp
+    src/application/campaign_mappings.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)
@@ -83,6 +84,7 @@ add_library(ddse_infrastructure STATIC
     src/infrastructure/sqlite/migration_runner.cpp
     src/infrastructure/base_content_database.cpp
     src/infrastructure/mod_environment_database.cpp
+    src/infrastructure/sqlite_content_environment.cpp
 )
 add_library(ddse::infrastructure ALIAS ddse_infrastructure)
 ddse_set_project_defaults(ddse_infrastructure)

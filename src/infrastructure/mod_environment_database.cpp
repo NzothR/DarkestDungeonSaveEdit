@@ -62,6 +62,27 @@ struct BaseLocalization {
     std::string virtual_path;
 };
 
+struct BaseAssetReference {
+    std::string definition_type;
+    std::string content_id;
+    std::string source_id;
+    std::string definition_virtual_path;
+    std::string asset_role;
+    std::string reference_type;
+    std::string virtual_path;
+    std::string reference_origin;
+};
+
+struct BaseRelationship {
+    std::string parent_type;
+    std::string parent_id;
+    std::string relationship_type;
+    std::string child_type;
+    std::string child_id;
+    std::string source_id;
+    std::string virtual_path;
+};
+
 struct LayerCandidate {
     std::string virtual_path;
     std::string layer;
@@ -229,6 +250,55 @@ read_base_localizations(const std::filesystem::path& path) {
     return core::Result<std::vector<BaseLocalization>, core::Error>::success(std::move(rows));
 }
 
+core::Result<std::vector<BaseAssetReference>, core::Error>
+read_base_asset_references(const std::filesystem::path& path) {
+    auto opened = sqlite::ConnectionFactory{}.open(path);
+    if (!opened) return core::Result<std::vector<BaseAssetReference>, core::Error>::failure(opened.error());
+    auto database = std::move(opened.value());
+    auto prepared = database.prepare(
+        "SELECT r.definition_type,r.content_id,f.source_id,f.virtual_path,r.asset_role,"
+        "r.reference_type,r.virtual_path,r.reference_origin "
+        "FROM content_asset_references r JOIN source_files f USING(source_file_id) "
+        "ORDER BY r.definition_type,r.content_id,f.source_id,f.virtual_path,r.asset_role,r.virtual_path");
+    if (!prepared) return core::Result<std::vector<BaseAssetReference>, core::Error>::failure(prepared.error());
+    auto statement = std::move(prepared.value());
+    std::vector<BaseAssetReference> rows;
+    while (true) {
+        auto row = statement.step();
+        if (!row) return core::Result<std::vector<BaseAssetReference>, core::Error>::failure(row.error());
+        if (!row.value()) break;
+        rows.push_back({std::string{statement.column_text(0)}, std::string{statement.column_text(1)},
+                        std::string{statement.column_text(2)}, std::string{statement.column_text(3)},
+                        std::string{statement.column_text(4)}, std::string{statement.column_text(5)},
+                        std::string{statement.column_text(6)}, std::string{statement.column_text(7)}});
+    }
+    return core::Result<std::vector<BaseAssetReference>, core::Error>::success(std::move(rows));
+}
+
+core::Result<std::vector<BaseRelationship>, core::Error>
+read_base_relationships(const std::filesystem::path& path) {
+    auto opened = sqlite::ConnectionFactory{}.open(path);
+    if (!opened) return core::Result<std::vector<BaseRelationship>, core::Error>::failure(opened.error());
+    auto database = std::move(opened.value());
+    auto prepared = database.prepare(
+        "SELECT r.parent_type,r.parent_id,r.relationship_type,r.child_type,r.child_id,f.source_id,f.virtual_path "
+        "FROM content_relationships r JOIN source_files f USING(source_file_id) "
+        "ORDER BY r.parent_type,r.parent_id,r.relationship_type,r.child_type,r.child_id,f.source_id");
+    if (!prepared) return core::Result<std::vector<BaseRelationship>, core::Error>::failure(prepared.error());
+    auto statement = std::move(prepared.value());
+    std::vector<BaseRelationship> rows;
+    while (true) {
+        auto row = statement.step();
+        if (!row) return core::Result<std::vector<BaseRelationship>, core::Error>::failure(row.error());
+        if (!row.value()) break;
+        rows.push_back({std::string{statement.column_text(0)}, std::string{statement.column_text(1)},
+                        std::string{statement.column_text(2)}, std::string{statement.column_text(3)},
+                        std::string{statement.column_text(4)}, std::string{statement.column_text(5)},
+                        std::string{statement.column_text(6)}});
+    }
+    return core::Result<std::vector<BaseRelationship>, core::Error>::success(std::move(rows));
+}
+
 } // namespace
 
 core::Result<ModEnvironmentBuildSummary, core::Error>
@@ -268,9 +338,15 @@ ModEnvironmentDatabaseBuilder::rebuild(const std::filesystem::path& database_pat
     if (!base_definitions_result) return core::Result<ModEnvironmentBuildSummary, core::Error>::failure(base_definitions_result.error());
     auto base_localizations_result = read_base_localizations(base_content_database_path);
     if (!base_localizations_result) return core::Result<ModEnvironmentBuildSummary, core::Error>::failure(base_localizations_result.error());
+    auto base_asset_references_result = read_base_asset_references(base_content_database_path);
+    if (!base_asset_references_result) return core::Result<ModEnvironmentBuildSummary, core::Error>::failure(base_asset_references_result.error());
+    auto base_relationships_result = read_base_relationships(base_content_database_path);
+    if (!base_relationships_result) return core::Result<ModEnvironmentBuildSummary, core::Error>::failure(base_relationships_result.error());
     const auto& base_files = base_files_result.value();
     const auto& base_definitions = base_definitions_result.value();
     const auto& base_localizations = base_localizations_result.value();
+    const auto& base_asset_references = base_asset_references_result.value();
+    const auto& base_relationships = base_relationships_result.value();
 
     const auto parent = database_path.parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
@@ -288,6 +364,8 @@ ModEnvironmentDatabaseBuilder::rebuild(const std::filesystem::path& database_pat
     summary.source_files = scan.content.source_files.size();
     summary.definitions = scan.content.definitions.size();
     summary.assets = scan.content.assets.size();
+    summary.asset_references = base_asset_references.size() + scan.content.asset_references.size();
+    summary.relationships = base_relationships.size() + scan.content.relationships.size();
     summary.save_order_matches_manager = scan.comparison.exact_enabled_order_match;
     summary.shared_order_matches = scan.comparison.shared_enabled_order_match;
     for (const auto& mod : scan.mods) {
@@ -346,6 +424,18 @@ CREATE TABLE assets (
  asset_id INTEGER PRIMARY KEY, source_file_id INTEGER NOT NULL UNIQUE REFERENCES source_files(source_file_id),
  virtual_path TEXT NOT NULL, extension TEXT NOT NULL, size_bytes INTEGER NOT NULL
 );
+CREATE TABLE content_asset_references (
+ asset_reference_id INTEGER PRIMARY KEY, definition_type TEXT NOT NULL, content_id TEXT NOT NULL,
+ definition_source_id TEXT NOT NULL, definition_virtual_path TEXT NOT NULL, asset_role TEXT NOT NULL,
+ reference_type TEXT NOT NULL, virtual_path TEXT NOT NULL, reference_origin TEXT NOT NULL,
+ UNIQUE(definition_type,content_id,definition_source_id,definition_virtual_path,asset_role,reference_type,virtual_path)
+);
+CREATE TABLE content_relationships (
+ relationship_id INTEGER PRIMARY KEY, parent_type TEXT NOT NULL, parent_id TEXT NOT NULL,
+ relationship_type TEXT NOT NULL, child_type TEXT NOT NULL, child_id TEXT NOT NULL,
+ definition_source_id TEXT NOT NULL, definition_virtual_path TEXT NOT NULL,
+ UNIQUE(parent_type,parent_id,relationship_type,child_type,child_id,definition_source_id,definition_virtual_path)
+);
 CREATE TABLE mod_content_hash_index (
  hash_value INTEGER NOT NULL, definition_type TEXT NOT NULL, content_id TEXT NOT NULL,
  mod_id TEXT NOT NULL REFERENCES mod_sources(mod_id), source_file_id INTEGER NOT NULL REFERENCES source_files(source_file_id),
@@ -400,6 +490,8 @@ CREATE INDEX idx_mod_files_path ON source_files(virtual_path);
 CREATE INDEX idx_mod_definitions_id ON content_definitions(definition_type,content_id);
 CREATE INDEX idx_mod_localization_key ON localization_entries(language,localization_key);
 CREATE INDEX idx_mod_hash_value ON mod_content_hash_index(hash_value);
+CREATE INDEX idx_mod_asset_references_entity ON content_asset_references(definition_type,content_id,definition_source_id);
+CREATE INDEX idx_mod_relationships_parent ON content_relationships(parent_type,parent_id,relationship_type);
 CREATE INDEX idx_effective_vfs_winner ON effective_vfs(winner_mod_id,virtual_path);
 )SQL";
         auto created = database.execute(schema);
@@ -425,7 +517,7 @@ CREATE INDEX idx_effective_vfs_winner ON effective_vfs(winner_mod_id,virtual_pat
         auto inserted = insert_rows("INSERT INTO environment_info(key,value) VALUES(?,?)", 5,
             [&](Statement& s, std::size_t i) {
                 static const std::vector<std::pair<std::string_view, std::string>> values{
-                    {"schema_version", "1"}, {"scanner_version", "stage5"},
+                    {"schema_version", "2"}, {"scanner_version", "stage6"},
                     {"effective_order_source", scan.effective_order_source},
                     {"installed_mods", std::to_string(summary.installed_mods)},
                     {"enabled_mods", std::to_string(summary.enabled_mods)}};
@@ -564,6 +656,44 @@ CREATE INDEX idx_effective_vfs_winner ON effective_vfs(winner_mod_id,virtual_pat
                 r = bind_text(s, 2, row.virtual_path); if (!r) return r;
                 r = bind_text(s, 3, row.extension); if (!r) return r;
                 return s.bind(4, static_cast<std::int64_t>(row.size_bytes));
+            });
+        if (!inserted) return inserted;
+
+        std::vector<BaseAssetReference> effective_asset_references = base_asset_references;
+        for (const auto& row : scan.content.asset_references) {
+            effective_asset_references.push_back({row.definition_type, row.content_id, row.source_id,
+                row.definition_virtual_path, row.asset_role, row.reference_type, row.virtual_path,
+                row.reference_origin});
+        }
+        inserted = insert_rows("INSERT INTO content_asset_references(definition_type,content_id,definition_source_id,definition_virtual_path,asset_role,reference_type,virtual_path,reference_origin) VALUES(?,?,?,?,?,?,?,?)",
+            effective_asset_references.size(), [&](Statement& s, std::size_t i) {
+                const auto& row = effective_asset_references[i];
+                auto r = bind_text(s, 1, row.definition_type); if (!r) return r;
+                r = bind_text(s, 2, row.content_id); if (!r) return r;
+                r = bind_text(s, 3, row.source_id); if (!r) return r;
+                r = bind_text(s, 4, row.definition_virtual_path); if (!r) return r;
+                r = bind_text(s, 5, row.asset_role); if (!r) return r;
+                r = bind_text(s, 6, row.reference_type); if (!r) return r;
+                r = bind_text(s, 7, row.virtual_path); if (!r) return r;
+                return bind_text(s, 8, row.reference_origin);
+            });
+        if (!inserted) return inserted;
+
+        std::vector<BaseRelationship> effective_relationships = base_relationships;
+        for (const auto& row : scan.content.relationships) {
+            effective_relationships.push_back({row.parent_type, row.parent_id, row.relationship_type,
+                row.child_type, row.child_id, row.source_id, row.virtual_path});
+        }
+        inserted = insert_rows("INSERT INTO content_relationships(parent_type,parent_id,relationship_type,child_type,child_id,definition_source_id,definition_virtual_path) VALUES(?,?,?,?,?,?,?)",
+            effective_relationships.size(), [&](Statement& s, std::size_t i) {
+                const auto& row = effective_relationships[i];
+                auto r = bind_text(s, 1, row.parent_type); if (!r) return r;
+                r = bind_text(s, 2, row.parent_id); if (!r) return r;
+                r = bind_text(s, 3, row.relationship_type); if (!r) return r;
+                r = bind_text(s, 4, row.child_type); if (!r) return r;
+                r = bind_text(s, 5, row.child_id); if (!r) return r;
+                r = bind_text(s, 6, row.source_id); if (!r) return r;
+                return bind_text(s, 7, row.virtual_path);
             });
         if (!inserted) return inserted;
 

@@ -25,6 +25,7 @@ add_executable(ddse_tests
     unit/dson_writer_tests.cpp
     unit/save_profile_tests.cpp
     unit/content_scanner_tests.cpp
+    unit/stage7_resource_mapping_tests.cpp
     integration/base_content_database_tests.cpp
     integration/mod_environment_tests.cpp
     integration/fixture_layout_tests.cpp

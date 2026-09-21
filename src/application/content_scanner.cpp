@@ -84,6 +84,27 @@ void add_definition(BaseContentScanResult& result, std::string kind, std::string
                                   std::move(localization_key), std::move(payload_json)});
 }
 
+void add_asset_reference(BaseContentScanResult& result, std::string_view source_id,
+                         std::string_view definition_type, std::string_view content_id,
+                         std::string_view definition_virtual_path, std::string_view role,
+                         std::string_view reference_type, std::string virtual_path,
+                         std::string_view origin) {
+    if (content_id.empty() || virtual_path.empty()) return;
+    result.asset_references.push_back({std::string{source_id}, std::string{definition_type},
+        std::string{content_id}, std::string{definition_virtual_path}, std::string{role},
+        std::string{reference_type}, std::move(virtual_path), std::string{origin}});
+}
+
+void add_relationship(BaseContentScanResult& result, std::string_view source_id,
+                      std::string_view parent_type, std::string_view parent_id,
+                      std::string_view relationship_type, std::string_view child_type,
+                      std::string_view child_id, std::string_view virtual_path) {
+    if (parent_id.empty() || child_id.empty()) return;
+    result.relationships.push_back({std::string{source_id}, std::string{parent_type},
+        std::string{parent_id}, std::string{relationship_type}, std::string{child_type},
+        std::string{child_id}, std::string{virtual_path}});
+}
+
 std::string json_string(const Json& value, std::string_view key) {
     const auto it = value.find(std::string{key});
     if (it == value.end() || !it->is_string()) return {};
@@ -128,6 +149,18 @@ void collect_json_definitions(const Json& node, const ContentSourceRoot& source,
                 lower_path.find(".entries.trinkets.json") != std::string::npos) {
                 add_definition(result, "trinket", id, source, virtual_path,
                                "str_inventory_title_trinket" + id, {}, json_dump(node));
+                add_asset_reference(result, source.id, "trinket", id, virtual_path,
+                                    "inventory_icon", "file",
+                                    "panels/icons_equip/trinket/inv_trinket+" + id + ".png",
+                                    "convention");
+                if (const auto requirements = node.find("hero_class_requirements");
+                    requirements != node.end() && requirements->is_array()) {
+                    for (const auto& requirement : *requirements) {
+                        if (requirement.is_string())
+                            add_relationship(result, source.id, "trinket", id, "restricted_to",
+                                             "hero_class", requirement.get<std::string>(), virtual_path);
+                    }
+                }
             } else if (lower_path.find("quirk/") != std::string::npos &&
                        lower_path.find("quirk_library") != std::string::npos &&
                        (context_key == "quirks" || node.contains("is_disease"))) {
@@ -141,10 +174,14 @@ void collect_json_definitions(const Json& node, const ContentSourceRoot& source,
             } else if (lower_path.find("camping_skills") != std::string::npos &&
                        !lower_path.ends_with("default.camping_skills.json")) {
                 const auto hero = parent_component(virtual_path, "heroes/");
-                add_definition(result, "skill", (hero.empty() ? std::string{"shared"} : hero) + ":" + id,
-                               source, virtual_path,
-                               "camping_skill_name_" + (hero.empty() ? std::string{"shared"} : hero) + "_" + id,
+                const auto owner = hero.empty() ? std::string{"shared"} : hero;
+                const auto skill_id = owner + ":" + id;
+                add_definition(result, "skill", skill_id, source, virtual_path,
+                               "camping_skill_name_" + owner + "_" + id,
                                {}, json_dump(node));
+                if (!hero.empty())
+                    add_relationship(result, source.id, "hero_class", hero, "camping_skill",
+                                     "skill", skill_id, virtual_path);
             } else if ((lower_path.find("/inventory/") != std::string::npos ||
                         lower_path.find("estate_items") != std::string::npos) &&
                        (context_key == "items" || context_key == "entries")) {
@@ -398,7 +435,17 @@ void collect_darkest_definitions(const std::vector<DarkestRecord>& records,
     if (lower_path.find("heroes/") != std::string::npos && lower_path.ends_with(".info.darkest")) {
         const auto hero = path_parent_name(virtual_path);
         const auto loc_key = "hero_class_name_" + hero;
-        add_definition(result, "hero_class", hero, source, virtual_path, loc_key, {}, "{}");
+        Json hero_payload = Json::object();
+        Json::array_t hero_records;
+        for (const auto& record : records) {
+            Json fields = Json::object();
+            for (const auto& [field_name, values] : record.fields) fields[field_name] = values;
+            hero_records.push_back(Json{{"type", record.type}, {"fields", std::move(fields)}});
+        }
+        hero_payload["records"] = std::move(hero_records);
+        add_definition(result, "hero_class", hero, source, virtual_path, loc_key, {}, hero_payload.dump());
+        add_asset_reference(result, source.id, "hero_class", hero, virtual_path,
+                            "class_asset_bundle", "directory", "heroes/" + hero + "/", "convention");
         std::map<std::string, Json::array_t, std::less<>> skill_levels;
         for (const auto& record : records) {
             if (record.type != "combat_skill" && record.type != "combat_move_skill") continue;
@@ -413,6 +460,8 @@ void collect_darkest_definitions(const std::vector<DarkestRecord>& records,
             const auto localization_key = "combat_skill_name_" + hero + "_" + id;
             add_definition(result, "skill", skill_id, source, virtual_path, localization_key,
                            {}, Json{{"levels", std::move(levels)}}.dump());
+            add_relationship(result, source.id, "hero_class", hero, "combat_skill", "skill",
+                             skill_id, virtual_path);
         }
     }
     for (const auto& record : records) {
@@ -602,6 +651,32 @@ BaseContentScanner::scan(const BaseContentScanConfig& config) const {
     std::sort(result.assets.begin(), result.assets.end(), [](const auto& a, const auto& b) {
         return std::tie(a.source_id, a.virtual_path) < std::tie(b.source_id, b.virtual_path);
     });
+    std::sort(result.asset_references.begin(), result.asset_references.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.definition_type, a.content_id, a.source_id, a.definition_virtual_path,
+                        a.asset_role, a.reference_type, a.virtual_path, a.reference_origin) <
+               std::tie(b.definition_type, b.content_id, b.source_id, b.definition_virtual_path,
+                        b.asset_role, b.reference_type, b.virtual_path, b.reference_origin);
+    });
+    result.asset_references.erase(std::unique(result.asset_references.begin(), result.asset_references.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.definition_type, a.content_id, a.source_id, a.definition_virtual_path,
+                            a.asset_role, a.reference_type, a.virtual_path, a.reference_origin) ==
+                   std::tie(b.definition_type, b.content_id, b.source_id, b.definition_virtual_path,
+                            b.asset_role, b.reference_type, b.virtual_path, b.reference_origin);
+        }), result.asset_references.end());
+    std::sort(result.relationships.begin(), result.relationships.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.parent_type, a.parent_id, a.relationship_type, a.child_type, a.child_id,
+                        a.source_id, a.virtual_path) <
+               std::tie(b.parent_type, b.parent_id, b.relationship_type, b.child_type, b.child_id,
+                        b.source_id, b.virtual_path);
+    });
+    result.relationships.erase(std::unique(result.relationships.begin(), result.relationships.end(),
+        [](const auto& a, const auto& b) {
+            return std::tie(a.parent_type, a.parent_id, a.relationship_type, a.child_type, a.child_id,
+                            a.source_id, a.virtual_path) ==
+                   std::tie(b.parent_type, b.parent_id, b.relationship_type, b.child_type, b.child_id,
+                            b.source_id, b.virtual_path);
+        }), result.relationships.end());
     std::sort(result.diagnostics.begin(), result.diagnostics.end(), [](const auto& a, const auto& b) {
         return std::tie(a.source_id, a.virtual_path) < std::tie(b.source_id, b.virtual_path);
     });

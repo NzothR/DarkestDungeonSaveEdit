@@ -21,6 +21,8 @@ struct BaseContentBuildSummary {
     std::size_t buildings{};
     std::size_t localization_entries{};
     std::size_t assets{};
+    std::size_t asset_references{};
+    std::size_t relationships{};
     std::size_t diagnostics{};
 };
 

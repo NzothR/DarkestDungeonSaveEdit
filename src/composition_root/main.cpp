@@ -139,7 +139,8 @@ int scan_base_content(const std::filesystem::path& game_root, const std::filesys
               << " trinkets=" << summary.trinkets << " quirks=" << summary.quirks
               << " diseases=" << summary.diseases << " resources=" << summary.resources
               << " buildings=" << summary.buildings << " localization=" << summary.localization_entries
-              << " assets=" << summary.assets << " diagnostics=" << summary.diagnostics << '\n';
+              << " assets=" << summary.assets << " asset_references=" << summary.asset_references
+              << " relationships=" << summary.relationships << " diagnostics=" << summary.diagnostics << '\n';
     for (const auto& source : scan.value().sources)
         std::cout << "  source " << source.id << " type=" << ddse::application::to_string(source.type)
                   << " name=" << source.name << '\n';
@@ -229,7 +230,8 @@ int scan_mod_environment(char* argv[]) {
               << " enabled=" << summary.enabled_mods << " workshop=" << summary.workshop_mods
               << " local=" << summary.local_mods << " source_files=" << summary.source_files
               << " definitions=" << summary.definitions << " localization=" << summary.localization_entries
-              << " assets=" << summary.assets << " effective_paths=" << summary.effective_paths
+              << " assets=" << summary.assets << " asset_references=" << summary.asset_references
+              << " relationships=" << summary.relationships << " effective_paths=" << summary.effective_paths
               << " overridden_paths=" << summary.overridden_paths
               << " diagnostics=" << summary.diagnostics << '\n'
               << "  effective order source=" << scan.value().effective_order_source

@@ -75,6 +75,27 @@ struct ScannedAsset {
     std::uint64_t size_bytes{};
 };
 
+struct ScannedAssetReference {
+    std::string source_id;
+    std::string definition_type;
+    std::string content_id;
+    std::string definition_virtual_path;
+    std::string asset_role;
+    std::string reference_type;
+    std::string virtual_path;
+    std::string reference_origin;
+};
+
+struct ScannedContentRelationship {
+    std::string source_id;
+    std::string parent_type;
+    std::string parent_id;
+    std::string relationship_type;
+    std::string child_type;
+    std::string child_id;
+    std::string virtual_path;
+};
+
 struct ContentScanDiagnostic {
     std::string source_id;
     std::string virtual_path;
@@ -87,6 +108,8 @@ struct BaseContentScanResult {
     std::vector<ScannedDefinition> definitions;
     std::vector<ScannedLocalization> localizations;
     std::vector<ScannedAsset> assets;
+    std::vector<ScannedAssetReference> asset_references;
+    std::vector<ScannedContentRelationship> relationships;
     std::vector<ContentScanDiagnostic> diagnostics;
 };
 

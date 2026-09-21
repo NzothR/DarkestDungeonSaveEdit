@@ -1,0 +1,88 @@
+#include "ddse/application/campaign_mappings.hpp"
+#include "ddse/core/dson/dson_reader.hpp"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <set>
+#include <string>
+#include <vector>
+
+namespace {
+
+std::string read_bytes(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+}
+
+ddse::core::Result<ddse::core::dson::DsonDocument, ddse::core::Error>
+parse_estate(const std::filesystem::path& path, const std::string& bytes) {
+    ddse::core::dson::DsonReader reader;
+    const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+    return reader.parse(std::span<const std::byte>{begin, bytes.size()}, path.string());
+}
+} // namespace
+
+TEST(Stage7ResourceMapping, ReadsAllWalletEntriesFromRealProfileAndMatchesBackup) {
+    const auto current_path = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.estate.json";
+    const auto backup_path = std::filesystem::path{DDSE_TEST_SAVE_BACKUP_DIR} / "persist.estate.json";
+    const auto current_bytes = read_bytes(current_path);
+    const auto backup_bytes = read_bytes(backup_path);
+    ASSERT_FALSE(current_bytes.empty());
+    ASSERT_EQ(current_bytes, backup_bytes);
+
+    auto parsed = parse_estate(current_path, current_bytes);
+    ASSERT_TRUE(parsed) << parsed.error().message;
+    auto resources = ddse::application::read_campaign_resources(parsed.value());
+    ASSERT_TRUE(resources) << resources.error().message;
+    ASSERT_EQ(resources.value().size(), 8U);
+
+    std::set<std::string> ids;
+    for (const auto& resource : resources.value()) {
+        EXPECT_GE(resource.amount, 0);
+        EXPECT_EQ(resource.raw_object_path,
+                  "base_root/wallet/" + std::to_string(resource.wallet_index));
+        EXPECT_TRUE(ids.insert(resource.id).second);
+    }
+    EXPECT_EQ(ids, (std::set<std::string>{"gold", "bust", "portrait", "deed", "crest", "shard", "memory", "blueprint"}));
+
+    auto backup = parse_estate(backup_path, backup_bytes);
+    ASSERT_TRUE(backup) << backup.error().message;
+    auto backup_resources = ddse::application::read_campaign_resources(backup.value());
+    ASSERT_TRUE(backup_resources) << backup_resources.error().message;
+    EXPECT_EQ(backup_resources.value().size(), resources.value().size());
+    for (std::size_t i = 0; i < resources.value().size(); ++i) {
+        EXPECT_EQ(backup_resources.value()[i].id, resources.value()[i].id);
+        EXPECT_EQ(backup_resources.value()[i].amount, resources.value()[i].amount);
+    }
+}
+
+TEST(Stage7ResourceMapping, PreservesUnknownResourceIdsInsteadOfUsingAFixedEnum) {
+    const auto path = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.estate.json";
+    auto parsed = parse_estate(path, read_bytes(path));
+    ASSERT_TRUE(parsed) << parsed.error().message;
+    auto changed_copy = parsed.value();
+    const auto field = std::find_if(changed_copy.fields.begin(), changed_copy.fields.end(), [](const auto& item) {
+        return item.path == "base_root/wallet/0/type";
+    });
+    ASSERT_NE(field, changed_copy.fields.end());
+    field->replace_value(std::string{"modded_currency_id"});
+
+    auto resources = ddse::application::read_campaign_resources(changed_copy);
+    ASSERT_TRUE(resources) << resources.error().message;
+    EXPECT_EQ(resources.value().front().id, "modded_currency_id");
+}
+
+TEST(Stage7ResourceMapping, RegistryDistinguishesObservedShapeFromGameMutationEvidence) {
+    const auto& mappings = ddse::application::stage7_resource_mappings();
+    ASSERT_EQ(mappings.size(), 2U);
+    EXPECT_EQ(mappings[0].semantic_property, "Estate.Resource.Amount");
+    EXPECT_EQ(mappings[0].expected_type, ddse::core::dson::ValueKind::Integer);
+    EXPECT_EQ(mappings[0].evidence_level, "VERIFIED_SAMPLE");
+    EXPECT_FALSE(mappings[0].semantically_writable);
+    EXPECT_FALSE(mappings[0].game_mutation_verified);
+    EXPECT_FALSE(mappings[1].semantically_writable);
+}
