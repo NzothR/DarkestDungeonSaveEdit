@@ -1688,10 +1688,10 @@ Mapping 与内容查询已提供可靠输入，此时 Domain 不再建立在猜�
 
 ### Definition of Done
 
-- [ ] Domain 无 SQLite/Drogon 类型
-- [ ] Partial Entity 权限正确
-- [ ] 最大等级等规则无硬编码
-- [ ] 只读投影与原始字段可追踪
+- [x] Domain 无 SQLite/Drogon 类型
+- [x] Partial Entity 权限正确
+- [x] 最大等级等规则无硬编码
+- [x] 只读投影与原始字段可追踪
 
 ## Stage 9：Operation、Undo、Validation
 
@@ -1705,19 +1705,21 @@ Mapping 与内容查询已提供可靠输入，此时 Domain 不再建立在猜�
 
 ### 测试与预期结果
 
-- 每个 Operation 的 apply/revert 对称；
-- Composite Operation 一次 Undo；
-- invalid target 不改变模型；
-- missing mapping 拒绝操作；
-- ChangeSet 精确列出 affected documents；
-- 未相关实体保持不变。
+- [x] 每个 Operation 的 apply/revert 对称；
+- [x] Composite Operation 一次 Undo；
+- [x] invalid target 不改变模型；
+- [x] missing mapping 拒绝操作；
+- [x] ChangeSet 精确列出 affected documents；
+- [x] 未相关实体保持不变。
 
 ### Definition of Done
 
-- [ ] GUI 无关的操作测试全绿
-- [ ] Undo/Redo 无状态漂移
-- [ ] Risk 与 Validation 分离
-- [ ] Session revision 可阻止陈旧修改
+- [x] GUI 无关的操作测试全绿
+- [x] Undo/Redo 无状态漂移
+- [x] Risk 与 Validation 分离
+- [x] Session revision 可阻止陈旧修改
+
+Stage 9 实现了只作用于内存语义模型的资源与英雄标量字段操作。所有字段仍没有游戏内修改证据；风险分析会明确报告这一点，Stage 10 才负责将 ChangeSet 安全写回存档。
 
 ## Stage 10：Save Adapter 与 Safe Commit
 

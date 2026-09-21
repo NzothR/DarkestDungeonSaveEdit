@@ -1,5 +1,6 @@
 #include "ddse/application/campaign_model_builder.hpp"
 #include "ddse/application/campaign_mappings.hpp"
+#include "ddse/application/campaign_edit_session.hpp"
 #include "ddse/application/save_profile.hpp"
 #include "ddse/infrastructure/native_file_system.hpp"
 
@@ -255,4 +256,35 @@ TEST(Stage8CampaignModel, ObservedSaveMappingsRemainReadOnlyUntilWriteEvidenceEx
         return mapping.evidence_level == "VERIFIED_SAMPLE" && !mapping.semantically_writable &&
                !mapping.game_mutation_verified;
     }));
+}
+
+TEST(Stage9CampaignEditSession, StagesARealProfileHeroEditWithoutChangingRawSaveBytes) {
+    auto profile = load_profile();
+    FixtureContentEnvironment content;
+    auto model = ddse::application::CampaignModelBuilder{}.build(profile, content);
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [](const auto& item) {
+        return item.name.value && item.name.raw && item.state != ddse::domain::EntityState::Invalid;
+    });
+    ASSERT_NE(hero, model.heroes.end());
+    const auto hero_id = hero->persistent_id;
+    const auto original_name = *hero->name.value;
+    const auto locator = *hero->name.raw;
+    const auto original_document_bytes = profile.documents.at(locator.document_id).bytes;
+
+    ddse::application::CampaignEditSession session{std::move(model)};
+    const ddse::application::CampaignOperation operation = ddse::application::SetCampaignValueOperation{
+        {"Hero.Name", hero_id, std::nullopt}, original_name + "_stage9"};
+    const auto applied = session.apply(operation, 0);
+
+    ASSERT_TRUE(applied) << applied.error().message;
+    ASSERT_EQ(applied.value().changes.changes.size(), 1U);
+    EXPECT_EQ(applied.value().changes.changes.front().raw.display_path, locator.display_path);
+    EXPECT_EQ(applied.value().changes.affected_documents,
+              (std::vector<std::string>{"persist.roster.json"}));
+    const auto changed = std::find_if(session.model().heroes.begin(), session.model().heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    ASSERT_NE(changed, session.model().heroes.end());
+    EXPECT_EQ(changed->name.value, original_name + "_stage9");
+    EXPECT_EQ(profile.documents.at(locator.document_id).bytes, original_document_bytes);
 }

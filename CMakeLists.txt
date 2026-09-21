@@ -76,6 +76,7 @@ add_library(ddse_application STATIC
     src/application/mod_environment.cpp
     src/application/campaign_mappings.cpp
     src/application/campaign_model_builder.cpp
+    src/application/campaign_edit_session.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)

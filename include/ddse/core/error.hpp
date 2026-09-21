@@ -22,6 +22,7 @@ enum class ErrorCode {
     ContentParseFailed,
     MappingNotWritable,
     ConcurrentSaveChanged,
+    StaleSessionRevision,
     ValidationFailed,
     BackupFailed,
     CommitFailed,

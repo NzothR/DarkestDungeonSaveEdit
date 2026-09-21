@@ -179,6 +179,7 @@ struct CampaignSummary {
 
 struct CampaignModel {
     ModelState state{ModelState::Partial};
+    // The save projection is not directly persisted; edit sessions stage changes in a private copy.
     bool read_only{true};
     CampaignSummary summary;
     ProgressionSummary progression;

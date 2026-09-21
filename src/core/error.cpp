@@ -23,6 +23,7 @@ std::string_view to_string(ErrorCode code) noexcept {
     case ErrorCode::ContentParseFailed: return "ContentParseFailed";
     case ErrorCode::MappingNotWritable: return "MappingNotWritable";
     case ErrorCode::ConcurrentSaveChanged: return "ConcurrentSaveChanged";
+    case ErrorCode::StaleSessionRevision: return "StaleSessionRevision";
     case ErrorCode::ValidationFailed: return "ValidationFailed";
     case ErrorCode::BackupFailed: return "BackupFailed";
     case ErrorCode::CommitFailed: return "CommitFailed";
