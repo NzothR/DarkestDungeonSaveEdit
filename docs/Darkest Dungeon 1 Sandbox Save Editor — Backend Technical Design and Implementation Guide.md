@@ -1816,6 +1816,17 @@ Regression fixture
 
 只完成 Domain class 而没有安全写回，不算功能完成。
 
+### Stage 12 实施记录（2026-09-21）
+
+- [x] 接通已通过游戏验证的英雄、怪癖、饰品、技能、装备等级、小镇升级和小镇建筑系统操作。
+- [x] 购买节点按 `tree_id + instance_number + requirement_code` 定位，并可按有效 Mod 升级树上限处理稀疏存档行。
+- [x] 结构编辑经过 Operation/Mapping allowlist、SaveAdapter 候选回读和 SafeSaveCommitter 完整备份/目标副本写回。
+- [x] 从 33 人 roster、122 个已启用 Mod 的测试存档生成 17 个独立操作验收档与 1 个对照档；生成时 Mod 扫描诊断为 0，源档指纹前后未变。
+- [ ] 玩家仍需按 `test_save_profile/stage12_operation_tests/README.md` 在游戏内逐档验收。
+- 暂缓项继续保持不可用：生存技能训练锁定和疾病增删。
+
+自动检查确认候选 DSON 可重新解析、Domain Model 可重新投影、预期变更与购买节点状态一致；它不替代游戏内验收。
+
 ## Stage 13：总体资格测试
 
 ### 目标

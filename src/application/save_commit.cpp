@@ -6,7 +6,9 @@
 #include "ddse/core/dson/dson_writer.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
+#include <functional>
 #include <map>
 #include <set>
 #include <span>
@@ -40,6 +42,7 @@ std::string expand_path(std::string path, const CampaignOperationTarget& target)
     if (target.occurrence_index) replace_all("{index}", std::to_string(*target.occurrence_index));
     if (!target.entity_id.empty()) replace_all("{guid}", target.entity_id);
     if (!target.member_id.empty()) replace_all("{memberId}", target.member_id);
+    if (!target.member_id.empty()) replace_all("{skillId}", target.member_id);
     return path;
 }
 
@@ -92,6 +95,7 @@ bool as_campaign_value(const core::dson::Value& value, CampaignValue& output) {
     else if (const auto* number = std::get_if<float>(&value)) output = *number;
     else if (const auto* text = std::get_if<std::string>(&value)) output = *text;
     else if (const auto* boolean = std::get_if<bool>(&value)) output = *boolean;
+    else if (const auto* character = std::get_if<char>(&value)) output = *character;
     else return false;
     return true;
 }
@@ -105,7 +109,58 @@ bool type_matches(ValueKind kind, const CampaignValue& value) {
     return (kind == ValueKind::Integer && std::holds_alternative<std::int32_t>(value)) ||
            (kind == ValueKind::Float && std::holds_alternative<float>(value)) ||
            (kind == ValueKind::String && std::holds_alternative<std::string>(value)) ||
-           (kind == ValueKind::Boolean && std::holds_alternative<bool>(value));
+           (kind == ValueKind::Boolean && std::holds_alternative<bool>(value)) ||
+           (kind == ValueKind::Character && std::holds_alternative<char>(value));
+}
+
+std::optional<std::reference_wrapper<DsonField>> locate_field_by_path(
+    DsonDocument& document, std::string_view display_path, std::string& reason);
+
+bool purchase_target_matches(DsonDocument& document, const CampaignOperationTarget& target,
+                             std::string_view purchase_path, std::string& reason) {
+    if (target.semantic_property != "Upgrade.PurchaseNode") return true;
+    std::int32_t expected_instance{};
+    const auto [instance_end, instance_error] = std::from_chars(
+        target.entity_id.data(), target.entity_id.data() + target.entity_id.size(), expected_instance);
+    const auto separator = target.member_id.find('|');
+    if (instance_error != std::errc{} || instance_end != target.entity_id.data() + target.entity_id.size() ||
+        separator == std::string::npos || target.member_id.size() - separator != 2U) {
+        reason = "Purchase-node target does not contain a valid instance/tree/code identity";
+        return false;
+    }
+    std::int32_t expected_tree{};
+    const auto tree_text = std::string_view{target.member_id}.substr(0, separator);
+    const auto [tree_end, tree_error] = std::from_chars(tree_text.data(), tree_text.data() + tree_text.size(), expected_tree);
+    if (tree_error != std::errc{} || tree_end != tree_text.data() + tree_text.size()) {
+        reason = "Purchase-node target tree identifier is invalid";
+        return false;
+    }
+    const auto slash = purchase_path.find_last_of('/');
+    if (slash == std::string_view::npos) {
+        reason = "Purchase-node path has no row parent";
+        return false;
+    }
+    const auto row_path = purchase_path.substr(0, slash);
+    auto sibling = [&](std::string_view name) -> std::optional<std::reference_wrapper<DsonField>> {
+        auto found = locate_field_by_path(document, std::string{row_path} + "/" + std::string{name}, reason);
+        return found;
+    };
+    const auto instance = sibling("instance_number");
+    const auto tree = sibling("tree_id");
+    const auto code = sibling("requirement_code");
+    if (!instance || !tree || !code) {
+        reason = "Purchase-node row identity fields are missing";
+        return false;
+    }
+    const auto* actual_instance = std::get_if<std::int32_t>(&instance->get().value);
+    const auto* actual_tree = std::get_if<std::int32_t>(&tree->get().value);
+    const auto* actual_code = std::get_if<char>(&code->get().value);
+    if (!actual_instance || !actual_tree || !actual_code || *actual_instance != expected_instance ||
+        *actual_tree != expected_tree || *actual_code != target.member_id.back()) {
+        reason = "Purchase-node row identity differs from the mapped instance/tree/requirement code";
+        return false;
+    }
+    return true;
 }
 
 void replace_field_value(DsonField& field, const CampaignValue& value) {
@@ -377,11 +432,119 @@ bool path_is_removed(std::string_view field_path, const std::vector<CampaignStru
     });
 }
 
+std::vector<std::string_view> split_path_parts(std::string_view path) {
+    std::vector<std::string_view> result;
+    std::size_t start = 0;
+    while (true) {
+        const auto arrow = path.find(" => ", start);
+        const auto end = arrow == std::string_view::npos ? path.size() : arrow;
+        result.push_back(path.substr(start, end - start));
+        if (arrow == std::string_view::npos) break;
+        start = arrow + 4;
+    }
+    return result;
+}
+
+bool path_part_matches_prefix(std::string_view pattern, std::string_view value) {
+    std::size_t pattern_start = 0, value_start = 0;
+    while (pattern_start <= pattern.size()) {
+        const auto pattern_end = pattern.find('/', pattern_start);
+        const auto value_end = value.find('/', value_start);
+        const auto pattern_segment = pattern.substr(pattern_start,
+            pattern_end == std::string_view::npos ? pattern.size() - pattern_start : pattern_end - pattern_start);
+        const auto value_segment = value.substr(value_start,
+            value_end == std::string_view::npos ? value.size() - value_start : value_end - value_start);
+        if (pattern_segment.size() >= 2 && pattern_segment.front() == '{' && pattern_segment.back() == '}') {
+            if (value_segment.empty()) return false;
+        } else if (pattern_segment != value_segment) return false;
+        if (pattern_end == std::string_view::npos) return true;
+        if (value_end == std::string_view::npos) return false;
+        pattern_start = pattern_end + 1;
+        value_start = value_end + 1;
+    }
+    return true;
+}
+
+bool mutation_path_matches_mapping(const CampaignMappingDescriptor& mapping, std::string_view path) {
+    const auto pattern_parts = split_path_parts(mapping.raw_path_template);
+    const auto path_parts = split_path_parts(path);
+    if (path_parts.size() < pattern_parts.size()) return false;
+    for (std::size_t index = 0; index < pattern_parts.size(); ++index)
+        if (!path_part_matches_prefix(pattern_parts[index], path_parts[index])) return false;
+    return true;
+}
+
+bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
+    constexpr std::string_view prefix{"base_root/purchases/"};
+    if (mutation.semantic_property != "Upgrade.PurchaseNode.Entry" ||
+        !mutation.target_path.starts_with(prefix)) return false;
+    const auto tail = std::string_view{mutation.target_path}.substr(prefix.size());
+    const auto separator = tail.find('/');
+    const auto key = tail.substr(0, separator);
+    std::size_t index{};
+    const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), index);
+    if (key.empty() || error != std::errc{} || end != key.data() + key.size()) return false;
+    if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+        if (separator != std::string_view::npos || mutation.new_key != key ||
+            !mutation.source_path.starts_with(prefix)) return false;
+        const auto source_key = std::string_view{mutation.source_path}.substr(prefix.size());
+        if (source_key.empty() || source_key.find('/') != std::string_view::npos) return false;
+        std::size_t source_index{};
+        const auto [source_end, source_error] = std::from_chars(
+            source_key.data(), source_key.data() + source_key.size(), source_index);
+        return source_error == std::errc{} && source_end == source_key.data() + source_key.size() &&
+               mutation.expected_kind == ValueKind::Object;
+    }
+    if (mutation.kind != CampaignDocumentMutationKind::SetValue || separator == std::string_view::npos)
+        return false;
+    const auto field = tail.substr(separator + 1);
+    const auto expected = field == "requirement_code" ? ValueKind::Character :
+        field == "is_purchased" ? ValueKind::Boolean :
+        (field == "instance_number" || field == "tree_id") ? ValueKind::Integer : ValueKind::Unknown;
+    return expected != ValueKind::Unknown && mutation.expected_kind == expected;
+}
+
+bool safe_dson_key(std::string_view key) {
+    return !key.empty() && std::all_of(key.begin(), key.end(), [](unsigned char value) {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+               (value >= '0' && value <= '9') || value == '_' || value == '-' || value == '.' || value == ':';
+    });
+}
+
+bool path_is_removed(std::string_view field_path, const std::vector<CampaignDocumentMutation>& mutations) {
+    return std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
+        const auto& root = mutation.target_path;
+        if (mutation.kind == CampaignDocumentMutationKind::Erase ||
+            mutation.kind == CampaignDocumentMutationKind::Rename)
+            return field_path == root || field_path.starts_with(root + "/") || field_path.starts_with(root + " => ");
+        if (mutation.kind == CampaignDocumentMutationKind::ClearChildren)
+            return field_path.starts_with(root + "/") || field_path.starts_with(root + " => ");
+        return false;
+    });
+}
+
+bool path_is_added(std::string_view field_path, const std::vector<CampaignDocumentMutation>& mutations) {
+    return std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
+        if (mutation.kind == CampaignDocumentMutationKind::AppendClone)
+            return field_path == mutation.target_path || field_path.starts_with(mutation.target_path + "/") ||
+                   field_path.starts_with(mutation.target_path + " => ");
+        if (mutation.kind == CampaignDocumentMutationKind::Rename) {
+            const auto slash = mutation.target_path.find_last_of('/');
+            if (slash == std::string::npos) return false;
+            const auto renamed = mutation.target_path.substr(0, slash + 1) + mutation.new_key;
+            return field_path == renamed || field_path.starts_with(renamed + "/") ||
+                   field_path.starts_with(renamed + " => ");
+        }
+        return false;
+    });
+}
+
 bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument& candidate,
                                 const std::vector<CampaignFieldChange>& changes,
                                 const std::vector<CampaignStructuralChange>& structural_changes,
+                                const std::vector<CampaignDocumentMutation>& mutations,
                                 std::string& reason) {
-    if (structural_changes.empty()) return validate_decoded_candidate(original, candidate, changes, reason);
+    if (structural_changes.empty() && mutations.empty()) return validate_decoded_candidate(original, candidate, changes, reason);
     const auto& original_header = original.header;
     const auto& candidate_header = candidate.header;
     if (original_header.magic != candidate_header.magic || original_header.revision != candidate_header.revision ||
@@ -406,7 +569,7 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
         }
     }
     for (const auto& [path, fields] : before) {
-        if (path_is_removed(path, structural_changes)) continue;
+        if (path_is_removed(path, structural_changes) || path_is_removed(path, mutations)) continue;
         const auto candidate_field = after.find(path);
         if (candidate_field == after.end() || candidate_field->second.size() != fields.size()) {
             reason = "Candidate removed a DSON field outside the structural ChangeSet";
@@ -414,6 +577,8 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
         }
         const bool scalar_target = std::any_of(changes.begin(), changes.end(), [&](const auto& change) {
             return change.raw.display_path == path;
+        }) || std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
+            return mutation.kind == CampaignDocumentMutationKind::SetValue && mutation.target_path == path;
         });
         for (std::size_t index = 0; index < fields.size(); ++index) {
             const auto& field = fields[index];
@@ -435,8 +600,20 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
     for (const auto& [path, fields] : after) {
         (void)fields;
         if (!before.contains(path)) {
-            reason = "Candidate added a DSON field outside the structural ChangeSet";
-            return false;
+            if (!path_is_added(path, mutations)) {
+                reason = "Candidate added a DSON field outside the structural ChangeSet";
+                return false;
+            }
+        }
+    }
+    for (const auto& mutation : mutations) {
+        if (mutation.kind == CampaignDocumentMutationKind::SetValue) {
+            const auto value = locate_field_by_path(const_cast<DsonDocument&>(candidate), mutation.target_path, reason);
+            if (!value || value->get().kind != mutation.expected_kind || !mutation.after ||
+                !value_matches(value->get(), *mutation.after)) {
+                if (reason.empty()) reason = "Read-back value does not match a mapped document mutation";
+                return false;
+            }
         }
     }
     for (const auto& change : changes) {
@@ -581,6 +758,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
 
     std::map<std::string, std::vector<CampaignFieldChange>, std::less<>> grouped_fields;
     std::map<std::string, std::vector<CampaignStructuralChange>, std::less<>> grouped_structural;
+    std::map<std::string, std::vector<CampaignDocumentMutation>, std::less<>> grouped_mutations;
     std::set<std::string, std::less<>> expected_documents;
     std::set<std::string, std::less<>> unique_targets;
     for (const auto& change : changes.changes) {
@@ -624,7 +802,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             mapping->document_id != change.raw.document_id ||
             change.raw.display_path != expand_path(mapping->raw_path_template, change.target) ||
             change.action != CampaignStructuralAction::Erase ||
-            change.expected_kind != mapping->expected_type || change.expected_kind != ValueKind::Object ||
+            change.expected_kind != mapping->expected_type ||
             change.raw.steps.empty())
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
@@ -638,6 +816,60 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                               {{"path", change.raw.display_path}}));
         expected_documents.insert(change.raw.document_id);
         grouped_structural[change.raw.document_id].push_back(change);
+    }
+
+    for (const auto& batch : changes.document_mutation_batches) {
+        if (batch.cancel || batch.mutations.empty())
+            return core::Result<SaveCandidate, core::Error>::failure(
+                adapter_error(core::ErrorCode::ValidationFailed,
+                              "Canceled or empty document mutation batch reached the SaveAdapter",
+                              {{"operation", batch.operation_id}}));
+        const auto capability = std::find_if(campaign_operation_capabilities().begin(),
+            campaign_operation_capabilities().end(), [&](const auto& item) {
+                return item.operation_id == batch.operation_id &&
+                       item.availability == CampaignOperationAvailability::Available;
+            });
+        if (capability == campaign_operation_capabilities().end())
+            return core::Result<SaveCandidate, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "Document mutation operation has not passed its in-game validation gate",
+                              {{"operation", batch.operation_id}}));
+        for (const auto& mutation : batch.mutations) {
+            const auto* mapping = find_mapping(mutation.semantic_property);
+            if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable ||
+                mapping->document_id != mutation.document_id || mutation.target_path.empty() ||
+                !mutation_path_matches_mapping(*mapping, mutation.target_path))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  "Document mutation path is outside the registered game-verified mapping",
+                                  {{"property", mutation.semantic_property}, {"path", mutation.target_path}}));
+            if (mutation.semantic_property == "Upgrade.PurchaseNode.Entry" &&
+                !purchase_entry_mutation_allowed(mutation))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  "Purchase-node document mutation is outside its typed row/field allowlist",
+                                  {{"path", mutation.target_path}}));
+            if (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                (mutation.source_path.empty() || !safe_dson_key(mutation.new_key) ||
+                 mutation.expected_kind == ValueKind::Unknown))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed, "Append-clone mutation payload is invalid"));
+            if (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed, "Rename mutation key is invalid"));
+            if (mutation.kind == CampaignDocumentMutationKind::SetValue &&
+                (!mutation.before || !mutation.after ||
+                 !type_matches(mutation.expected_kind, *mutation.before) ||
+                 !type_matches(mutation.expected_kind, *mutation.after)))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed, "Set-value mutation payload is invalid"));
+            if ((mutation.kind == CampaignDocumentMutationKind::Erase && mutation.expected_kind == ValueKind::Unknown) ||
+                (mutation.kind == CampaignDocumentMutationKind::ClearChildren && mutation.expected_kind != ValueKind::Object))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed, "Structural mutation value kind is invalid"));
+            expected_documents.insert(mutation.document_id);
+            grouped_mutations[mutation.document_id].push_back(mutation);
+        }
     }
 
     const std::set<std::string, std::less<>> declared_documents(changes.affected_documents.begin(),
@@ -654,6 +886,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
     for (const auto& document_id : expected_documents) {
         const auto& document_changes = grouped_fields[document_id];
         const auto& structural_changes = grouped_structural[document_id];
+        const auto& document_mutations = grouped_mutations[document_id];
         const auto source = profile.documents.find(document_id);
         if (source == profile.documents.end() || !source->second.decoded)
             return core::Result<SaveCandidate, core::Error>::failure(
@@ -674,15 +907,51 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                               {{"document", document_id}}));
 
         auto cloned = clone_document(original);
+        const auto append_clone = [&](const CampaignDocumentMutation& mutation) -> core::Result<void, core::Error> {
+            std::string reason;
+            if (locate_field_by_path(cloned, mutation.target_path, reason))
+                return core::Result<void, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                  "Append-clone destination already exists",
+                                  {{"document", document_id}, {"path", mutation.target_path}}));
+            auto source_field = locate_field_by_path(cloned, mutation.source_path, reason);
+            if (!source_field || source_field->get().kind != mutation.expected_kind)
+                return core::Result<void, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  reason.empty() ? "Append-clone source has a different DSON value kind" : reason,
+                                  {{"document", document_id}, {"path", mutation.source_path}}));
+            const auto slash = mutation.target_path.find_last_of('/');
+            if (slash == std::string::npos || mutation.target_path.substr(slash + 1) != mutation.new_key)
+                return core::Result<void, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed,
+                                  "Append-clone key does not match the mapped destination path",
+                                  {{"path", mutation.target_path}}));
+            auto destination = locate_document_for_path(cloned, mutation.target_path.substr(0, slash), reason);
+            auto source_document = locate_document_for_path(cloned, mutation.source_path, reason);
+            if (!destination || !source_document)
+                return core::Result<void, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
+                                  {{"document", document_id}, {"path", mutation.target_path}}));
+            auto result = core::dson::DsonDocumentEditor::append_clone(
+                destination->first.get(), destination->second,
+                source_document->first.get(), source_document->second, mutation.new_key);
+            if (!result) return core::Result<void, core::Error>::failure(result.error());
+            return core::Result<void, core::Error>::success();
+        };
+        std::vector<const CampaignFieldChange*> deferred_field_changes;
         for (const auto& change : document_changes) {
             std::string reason;
             auto field = locate_field(cloned, change.raw, reason);
-            if (!field)
+            if (!field) {
+                deferred_field_changes.push_back(&change);
+                continue;
+            }
+            auto& target = field->get();
+            const auto* mapping = find_mapping(change.target.semantic_property);
+            if (!purchase_target_matches(cloned, change.target, change.raw.display_path, reason))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
                                   {{"document", document_id}, {"path", change.raw.display_path}}));
-            auto& target = field->get();
-            const auto* mapping = find_mapping(change.target.semantic_property);
             if (target.kind != mapping->expected_type || !value_matches(target, change.before))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ConcurrentSaveChanged,
@@ -707,6 +976,102 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             if (!erased)
                 return core::Result<SaveCandidate, core::Error>::failure(erased.error());
         }
+        for (const auto& mutation : document_mutations) {
+            std::string reason;
+            if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+                auto appended = append_clone(mutation);
+                if (!appended) return core::Result<SaveCandidate, core::Error>::failure(appended.error());
+            } else if (mutation.kind == CampaignDocumentMutationKind::Erase) {
+                auto target = locate_field_by_path(cloned, mutation.target_path, reason);
+                if (!target || target->get().kind != mutation.expected_kind)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                      reason.empty() ? "Erase target has a different DSON value kind" : reason,
+                                      {{"document", document_id}, {"path", mutation.target_path}}));
+                auto containing = locate_document_for_path(cloned, mutation.target_path, reason);
+                if (!containing)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason)));
+                auto erased = core::dson::DsonDocumentEditor::erase(containing->first.get(), containing->second);
+                if (!erased) return core::Result<SaveCandidate, core::Error>::failure(erased.error());
+            } else if (mutation.kind == CampaignDocumentMutationKind::Rename) {
+                auto target = locate_field_by_path(cloned, mutation.target_path, reason);
+                if (!target || target->get().kind != mutation.expected_kind)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                      reason.empty() ? "Rename target has a different DSON value kind" : reason,
+                                      {{"document", document_id}, {"path", mutation.target_path}}));
+                const auto slash = mutation.target_path.find_last_of('/');
+                if (slash == std::string::npos)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ValidationFailed, "Rename target has no collection parent"));
+                const auto new_path = mutation.target_path.substr(0, slash + 1) + mutation.new_key;
+                if (locate_field_by_path(cloned, new_path, reason))
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ConcurrentSaveChanged, "Rename destination already exists",
+                                      {{"path", new_path}}));
+                auto containing = locate_document_for_path(cloned, mutation.target_path, reason);
+                if (!containing)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason)));
+                auto renamed = core::dson::DsonDocumentEditor::rename(
+                    containing->first.get(), containing->second, mutation.new_key);
+                if (!renamed) return core::Result<SaveCandidate, core::Error>::failure(renamed.error());
+            } else if (mutation.kind == CampaignDocumentMutationKind::ClearChildren) {
+                auto container = locate_field_by_path(cloned, mutation.target_path, reason);
+                if (!container || container->get().kind != ValueKind::Object)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable,
+                                      reason.empty() ? "Clear-children target is not an object" : reason,
+                                      {{"path", mutation.target_path}}));
+                auto containing = locate_document_for_path(cloned, mutation.target_path, reason);
+                if (!containing)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason)));
+                while (true) {
+                    auto current = locate_field_by_path(cloned, mutation.target_path, reason);
+                    if (!current || current->get().children.empty()) break;
+                    const auto child_index = current->get().children.front();
+                    const auto local_child_path = containing->first.get().fields.at(child_index).path;
+                    auto erased = core::dson::DsonDocumentEditor::erase(containing->first.get(), local_child_path);
+                    if (!erased) return core::Result<SaveCandidate, core::Error>::failure(erased.error());
+                }
+            } else if (mutation.kind == CampaignDocumentMutationKind::SetValue) {
+                auto target = locate_field_by_path(cloned, mutation.target_path, reason);
+                if (!target || target->get().kind != mutation.expected_kind || !mutation.before || !mutation.after ||
+                    !value_matches(target->get(), *mutation.before))
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                      reason.empty() ? "Set-value target no longer matches its mapped before-value" : reason,
+                                      {{"document", document_id}, {"path", mutation.target_path}}));
+                replace_field_value(target->get(), *mutation.after);
+            }
+        }
+        // A later edit in the same session may target a row created by an earlier
+        // pending collection mutation. Resolve those scalar edits after the ordered
+        // structural operations have materialized their targets.
+        for (const auto* change : deferred_field_changes) {
+            std::string reason;
+            auto field = locate_field(cloned, change->raw, reason);
+            if (!field)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
+                                  {{"document", document_id}, {"path", change->raw.display_path}}));
+            auto& target = field->get();
+            const auto* mapping = find_mapping(change->target.semantic_property);
+            if (mapping == nullptr || !purchase_target_matches(cloned, change->target,
+                                                               change->raw.display_path, reason))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  mapping == nullptr ? "The changed field has no registered mapping" : std::move(reason),
+                                  {{"document", document_id}, {"path", change->raw.display_path}}));
+            if (target.kind != mapping->expected_type || !value_matches(target, change->before))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                  "DSON field no longer matches the ChangeSet before-value after collection edits",
+                                  {{"document", document_id}, {"path", change->raw.display_path}}));
+            replace_field_value(target, change->after);
+        }
 
         auto encoded = writer.encode(cloned);
         if (!encoded)
@@ -717,7 +1082,8 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         if (!decoded)
             return core::Result<SaveCandidate, core::Error>::failure(decoded.error());
         std::string reason;
-        if (!validate_decoded_candidate(original, decoded.value(), document_changes, structural_changes, reason))
+        if (!validate_decoded_candidate(original, decoded.value(), document_changes, structural_changes,
+                                        document_mutations, reason))
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::ValidationFailed, std::move(reason), {{"document", document_id}}));
 
@@ -733,6 +1099,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         output.binary_diff = std::move(diff);
         for (const auto& change : document_changes) output.expected_field_paths.push_back(change.raw.display_path);
         for (const auto& change : structural_changes) output.expected_field_paths.push_back(change.raw.display_path);
+        for (const auto& mutation : document_mutations) output.expected_field_paths.push_back(mutation.target_path);
         candidate.documents.push_back(std::move(output));
     }
     return core::Result<SaveCandidate, core::Error>::success(std::move(candidate));
@@ -764,6 +1131,26 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
                 adapter_error(core::ErrorCode::MappingNotWritable,
                               "Safe commit requires a writable mapping with in-game mutation evidence",
                               {{"property", change.target.semantic_property}}));
+    }
+    for (const auto& batch : changes.document_mutation_batches) {
+        const auto capability = std::find_if(campaign_operation_capabilities().begin(),
+            campaign_operation_capabilities().end(), [&](const auto& item) {
+                return item.operation_id == batch.operation_id &&
+                       item.availability == CampaignOperationAvailability::Available;
+            });
+        if (batch.cancel || capability == campaign_operation_capabilities().end())
+            return core::Result<SaveCommitResult, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "Safe commit requires an active game-verified document operation",
+                              {{"operation", batch.operation_id}}));
+        for (const auto& mutation : batch.mutations) {
+            const auto* mapping = find_mapping(mutation.semantic_property);
+            if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable)
+                return core::Result<SaveCommitResult, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  "Safe commit requires every document mutation to use a game-verified mapping",
+                                  {{"property", mutation.semantic_property}}));
+        }
     }
     for (const auto& change : changes.structural_changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);
@@ -865,9 +1252,13 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
         std::vector<CampaignStructuralChange> document_structural_changes;
         for (const auto& change : changes.structural_changes)
             if (change.raw.document_id == document.id) document_structural_changes.push_back(change);
+        std::vector<CampaignDocumentMutation> document_mutations;
+        for (const auto& batch : changes.document_mutation_batches)
+            for (const auto& mutation : batch.mutations)
+                if (mutation.document_id == document.id) document_mutations.push_back(mutation);
         std::string reason;
         if (!validate_decoded_candidate(*source_document->second.decoded, decoded.value(), document_changes,
-                                        document_structural_changes, reason)) {
+                                        document_structural_changes, document_mutations, reason)) {
             const auto failure = adapter_error(core::ErrorCode::ValidationFailed, std::move(reason),
                                                {{"document", document.id}});
             return core::Result<SaveCommitResult, core::Error>::failure(

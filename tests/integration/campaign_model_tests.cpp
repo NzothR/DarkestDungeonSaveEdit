@@ -286,8 +286,8 @@ TEST(Stage8CampaignModel, MappingRegistryMarksOnlyGameVerifiedOperationsForCommi
     const auto weapon_rank = ddse::application::find_campaign_mapping("Hero.WeaponRank");
     ASSERT_NE(weapon_rank, nullptr);
     EXPECT_TRUE(weapon_rank->game_mutation_verified);
-    EXPECT_FALSE(weapon_rank->semantically_writable);
-    EXPECT_EQ(weapon_rank->capability(), ddse::application::CampaignMappingCapability::SessionOnly);
+    EXPECT_TRUE(weapon_rank->semantically_writable);
+    EXPECT_EQ(weapon_rank->capability(), ddse::application::CampaignMappingCapability::CommitWritable);
 }
 
 TEST(Stage9CampaignEditSession, StagesARealProfileHeroEditWithoutChangingRawSaveBytes) {

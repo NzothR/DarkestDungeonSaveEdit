@@ -33,6 +33,7 @@ using domain::RawLocatorStep;
 using domain::SemanticDiagnostic;
 using domain::TownBuilding;
 using domain::TrinketInventoryEntry;
+using domain::UpgradePurchaseNode;
 
 struct FieldView {
     const DsonDocument* document{};
@@ -535,6 +536,45 @@ void read_roster(const RawSaveProfile& profile, ContentLookupCache& cache, Campa
         model.heroes.push_back(read_hero(entries[position], position, document_id, cache, model));
 }
 
+void read_upgrade_purchases(const RawSaveProfile& profile, CampaignModel& model) {
+    constexpr std::string_view document_id{"persist.upgrades.json"};
+    const auto root = document_base(profile, document_id);
+    const auto purchases = root ? child_named(*root, "purchases") : std::nullopt;
+    if (!purchases) return;
+    const auto rows = child_fields(*purchases);
+    model.upgrade_purchase_nodes.reserve(rows.size());
+    for (std::size_t position = 0; position < rows.size(); ++position) {
+        const auto& row = rows[position];
+        const auto instance = child_named(row, "instance_number");
+        const auto tree = child_named(row, "tree_id");
+        const auto code = child_named(row, "requirement_code");
+        const auto purchased = child_named(row, "is_purchased");
+        const auto* instance_value = instance ? std::get_if<std::int32_t>(&instance->field().value) : nullptr;
+        const auto* tree_value = tree ? std::get_if<std::int32_t>(&tree->field().value) : nullptr;
+        const auto* code_value = code ? std::get_if<char>(&code->field().value) : nullptr;
+        const auto* purchased_value = purchased ? std::get_if<bool>(&purchased->field().value) : nullptr;
+        if (!instance_value || !tree_value || !code_value || !purchased_value) {
+            add_diagnostic(model, DiagnosticSeverity::Warning, "upgrade.purchase_row_incomplete",
+                "A purchase-history row is missing a typed key or state", std::string{document_id}, row.display_path);
+            continue;
+        }
+        UpgradePurchaseNode node;
+        node.index = position;
+        const auto& raw_index = row.field().name;
+        std::size_t parsed_index{};
+        const auto [index_end, index_error] = std::from_chars(
+            raw_index.data(), raw_index.data() + raw_index.size(), parsed_index);
+        if (index_error == std::errc{} && index_end == raw_index.data() + raw_index.size())
+            node.index = parsed_index;
+        node.instance_number = *instance_value;
+        node.tree_id = *tree_value;
+        node.requirement_code = *code_value;
+        node.row_raw = row.locator(document_id);
+        node.is_purchased = {*purchased_value, purchased->locator(document_id)};
+        model.upgrade_purchase_nodes.push_back(std::move(node));
+    }
+}
+
 } // namespace
 
 domain::CampaignModel CampaignModelBuilder::build(const RawSaveProfile& profile,
@@ -564,6 +604,7 @@ domain::CampaignModel CampaignModelBuilder::build(const RawSaveProfile& profile,
     read_town(profile, cache, model);
     read_progression(profile, model);
     read_roster(profile, cache, model);
+    read_upgrade_purchases(profile, model);
 
     model.summary.hero_count = model.heroes.size();
     model.summary.resolved_hero_count = static_cast<std::size_t>(std::count_if(

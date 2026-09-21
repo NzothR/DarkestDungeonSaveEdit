@@ -15,7 +15,7 @@
 
 namespace ddse::application {
 
-using CampaignValue = std::variant<std::int32_t, float, std::string, bool>;
+using CampaignValue = std::variant<std::int32_t, float, std::string, bool, char>;
 
 struct CampaignOperationTarget {
     CampaignOperationTarget() = default;
@@ -38,11 +38,6 @@ struct SetCampaignValueOperation {
     CampaignValue value;
 };
 
-struct CompositeCampaignOperation {
-    std::string label;
-    std::vector<SetCampaignValueOperation> operations;
-};
-
 struct SetHeroQuirkLockedOperation {
     std::string hero_id;
     std::string quirk_id;
@@ -59,11 +54,54 @@ struct RemoveHeroQuirkOperation {
     std::string quirk_id;
 };
 
+struct UnequipHeroCampingSkillOperation {
+    std::string hero_id;
+    std::string skill_id;
+};
+
 struct DestroyTrinketOperation {
     // Empty hero_id selects the estate inventory; otherwise item_key is the
     // stable raw key/path for an equipped slot on that hero.
     std::string hero_id;
     std::string item_key;
+};
+
+enum class CampaignDocumentMutationKind { AppendClone, Erase, Rename, ClearChildren, SetValue };
+
+// Structured, allowlisted DSON edits used by the larger verified slices whose
+// save representation is a collection rather than one scalar field. Paths are
+// produced by application services and checked again by SaveAdapter.
+struct CampaignDocumentMutation {
+    CampaignDocumentMutationKind kind{CampaignDocumentMutationKind::SetValue};
+    std::string semantic_property;
+    std::string document_id;
+    std::string target_path;
+    std::string source_path;
+    std::string new_key;
+    core::dson::ValueKind expected_kind{core::dson::ValueKind::Unknown};
+    std::optional<CampaignValue> before;
+    std::optional<CampaignValue> after;
+};
+
+struct CampaignDocumentMutationBatch {
+    std::string operation_id;
+    std::string transaction_id;
+    std::vector<CampaignDocumentMutation> mutations;
+    bool cancel{};
+};
+
+struct ApplyCampaignDocumentMutationsOperation {
+    std::string operation_id;
+    std::vector<CampaignDocumentMutation> mutations;
+};
+
+struct CompositeCampaignOperation {
+    std::string label;
+    std::vector<SetCampaignValueOperation> operations;
+    // Optional structural row creation in the same transaction as mapped
+    // scalar changes (for sparse purchase-history tables).
+    std::string mapped_operation_id;
+    std::vector<CampaignDocumentMutation> document_mutations;
 };
 
 enum class CampaignOperationAvailability { Available, NotImplemented, Deferred };
@@ -80,7 +118,35 @@ struct CampaignOperationCapabilityDescriptor {
 
 using CampaignOperation = std::variant<SetCampaignValueOperation, CompositeCampaignOperation,
                                        SetHeroQuirkLockedOperation, SetDistrictBuiltOperation,
-                                       RemoveHeroQuirkOperation, DestroyTrinketOperation>;
+                                       RemoveHeroQuirkOperation, UnequipHeroCampingSkillOperation,
+                                       DestroyTrinketOperation, ApplyCampaignDocumentMutationsOperation>;
+
+// Domain-aware factories translate user intent into mapped Operation targets.
+// They deliberately receive the projected model so callers cannot supply raw
+// DSON paths or bypass the effective upgrade-purchase mapping.
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_set_hero_equipment_ranks_operation(const domain::CampaignModel& model,
+                                        std::string_view hero_id,
+                                        std::int32_t weapon_rank,
+                                        std::int32_t armour_rank,
+                                        std::int32_t effective_weapon_max_rank,
+                                        std::int32_t effective_armour_max_rank);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_set_hero_combat_skill_rank_operation(const domain::CampaignModel& model,
+                                          std::string_view hero_id,
+                                          std::string_view skill_id,
+                                          std::int32_t rank,
+                                          std::int32_t effective_max_rank);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_set_hero_camping_skill_learned_operation(const domain::CampaignModel& model,
+                                              std::string_view hero_id,
+                                              std::string_view skill_id,
+                                              bool learned);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_set_town_upgrade_rank_operation(const domain::CampaignModel& model,
+                                     std::string_view tree_id,
+                                     std::int32_t rank,
+                                     std::int32_t effective_max_rank);
 
 enum class ValidationSeverity { Warning, Error };
 
@@ -122,16 +188,20 @@ struct CampaignStructuralChange {
     // pending erase. The pre-edit model entry makes it reversible in-session.
     core::dson::ValueKind expected_kind{core::dson::ValueKind::Object};
     std::size_t original_index{};
-    std::variant<domain::HeroQuirk, domain::HeroTrinket, domain::TrinketInventoryEntry> removed_entry;
+    std::variant<domain::HeroQuirk, domain::HeroTrinket, domain::TrinketInventoryEntry,
+                 domain::HeroSkillSelection> removed_entry;
     CampaignStructuralAction action{CampaignStructuralAction::Erase};
 };
 
 struct ChangeSet {
     std::vector<CampaignFieldChange> changes;
     std::vector<CampaignStructuralChange> structural_changes;
+    std::vector<CampaignDocumentMutationBatch> document_mutation_batches;
     std::vector<std::string> affected_documents;
 
-    [[nodiscard]] bool empty() const noexcept { return changes.empty() && structural_changes.empty(); }
+    [[nodiscard]] bool empty() const noexcept {
+        return changes.empty() && structural_changes.empty() && document_mutation_batches.empty();
+    }
 };
 
 struct CampaignEditResult {

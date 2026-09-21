@@ -131,6 +131,14 @@ if(WIN32)
     target_link_libraries(ddse_generate_advanced_game_test_saves PRIVATE shell32)
 endif()
 
+add_executable(ddse_generate_stage12_operation_test_saves tools/generate_stage12_operation_test_saves.cpp)
+target_link_libraries(ddse_generate_stage12_operation_test_saves PRIVATE
+    ddse_application ddse_infrastructure nlohmann_json::nlohmann_json
+    ddse_project_options ddse_project_warnings)
+if(WIN32)
+    target_link_libraries(ddse_generate_stage12_operation_test_saves PRIVATE shell32)
+endif()
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()

@@ -1,8 +1,10 @@
 #include "ddse/application/campaign_edit_session.hpp"
 
 #include "ddse/application/campaign_mappings.hpp"
+#include "ddse/core/dson/dson_document.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -31,6 +33,14 @@ const CampaignMappingDescriptor* find_mapping(std::string_view property) {
     return find_campaign_mapping(property);
 }
 
+bool campaign_value_matches_kind(core::dson::ValueKind kind, const CampaignValue& value) {
+    return (kind == core::dson::ValueKind::Integer && std::holds_alternative<std::int32_t>(value)) ||
+           (kind == core::dson::ValueKind::Float && std::holds_alternative<float>(value)) ||
+           (kind == core::dson::ValueKind::String && std::holds_alternative<std::string>(value)) ||
+           (kind == core::dson::ValueKind::Boolean && std::holds_alternative<bool>(value)) ||
+           (kind == core::dson::ValueKind::Character && std::holds_alternative<char>(value));
+}
+
 bool is_editable_property(std::string_view property) {
     const auto* mapping = find_mapping(property);
     return mapping != nullptr && mapping->editable_in_session;
@@ -54,7 +64,64 @@ std::string operation_label(const CampaignOperation& operation) {
     if (std::holds_alternative<SetHeroQuirkLockedOperation>(operation)) return "Set hero quirk lock";
     if (std::holds_alternative<SetDistrictBuiltOperation>(operation)) return "Set district built state";
     if (std::holds_alternative<RemoveHeroQuirkOperation>(operation)) return "Remove hero quirk";
+    if (std::holds_alternative<UnequipHeroCampingSkillOperation>(operation)) return "Unequip camping skill";
+    if (std::holds_alternative<ApplyCampaignDocumentMutationsOperation>(operation))
+        return std::get<ApplyCampaignDocumentMutationsOperation>(operation).operation_id;
     return "Destroy trinket";
+}
+
+std::vector<std::string_view> split_mapping_path(std::string_view path) {
+    std::vector<std::string_view> parts;
+    std::size_t start = 0;
+    while (true) {
+        const auto split = path.find(" => ", start);
+        const auto end = split == std::string_view::npos ? path.size() : split;
+        parts.push_back(path.substr(start, end - start));
+        if (split == std::string_view::npos) break;
+        start = split + 4;
+    }
+    return parts;
+}
+
+std::vector<std::string_view> split_segments(std::string_view path) {
+    std::vector<std::string_view> segments;
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto end = path.find('/', start);
+        segments.push_back(path.substr(start, end == std::string_view::npos ? path.size() - start : end - start));
+        if (end == std::string_view::npos) break;
+        start = end + 1;
+    }
+    return segments;
+}
+
+bool template_part_prefix_matches(std::string_view pattern, std::string_view value) {
+    const auto patterns = split_segments(pattern);
+    const auto values = split_segments(value);
+    if (patterns.size() > values.size()) return false;
+    for (std::size_t i = 0; i < patterns.size(); ++i) {
+        const auto item = patterns[i];
+        if (item.size() >= 2 && item.front() == '{' && item.back() == '}') {
+            if (values[i].empty()) return false;
+        } else if (item != values[i]) return false;
+    }
+    return true;
+}
+
+bool path_is_within_mapping(const CampaignMappingDescriptor& mapping, std::string_view path) {
+    const auto patterns = split_mapping_path(mapping.raw_path_template);
+    const auto values = split_mapping_path(path);
+    if (patterns.empty() || values.size() < patterns.size()) return false;
+    for (std::size_t i = 0; i < patterns.size(); ++i)
+        if (!template_part_prefix_matches(patterns[i], values[i])) return false;
+    return true;
+}
+
+bool safe_dson_key(std::string_view key) {
+    return !key.empty() && std::all_of(key.begin(), key.end(), [](unsigned char value) {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+               (value >= '0' && value <= '9') || value == '_' || value == '-' || value == '.' || value == ':';
+    });
 }
 
 template <typename T, typename Slot>
@@ -72,6 +139,29 @@ std::optional<ResolvedTarget> resolve_slot(Slot& slot, EntityState entity_state)
 
 template <typename Model>
 std::optional<ResolvedTarget> resolve_target(Model& model, const CampaignOperationTarget& target) {
+    if (target.semantic_property == "Upgrade.PurchaseNode") {
+        if (!target.occurrence_index || target.entity_id.empty() || target.member_id.empty()) return std::nullopt;
+        std::int32_t instance{};
+        const auto [instance_end, instance_error] = std::from_chars(
+            target.entity_id.data(), target.entity_id.data() + target.entity_id.size(), instance);
+        const auto separator = target.member_id.find('|');
+        if (instance_error != std::errc{} || instance_end != target.entity_id.data() + target.entity_id.size() ||
+            separator == std::string::npos) return std::nullopt;
+        std::int32_t tree{};
+        const auto tree_text = std::string_view{target.member_id}.substr(0, separator);
+        const auto [tree_end, tree_error] = std::from_chars(tree_text.data(), tree_text.data() + tree_text.size(), tree);
+        const auto code = std::string_view{target.member_id}.substr(separator + 1);
+        if (tree_error != std::errc{} || tree_end != tree_text.data() + tree_text.size() || code.size() != 1)
+            return std::nullopt;
+        const auto found = std::find_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
+            [&](const auto& node) {
+                return node.index == *target.occurrence_index && node.instance_number == instance &&
+                       node.tree_id == tree && node.requirement_code == code.front();
+            });
+        if (found == model.upgrade_purchase_nodes.end()) return std::nullopt;
+        return resolve_slot<bool>(found->is_purchased, EntityState::Resolved);
+    }
+
     if (target.semantic_property == "Estate.Resource.Amount") {
         if (!target.occurrence_index) return std::nullopt;
         const auto match_count = std::count_if(model.resources.begin(), model.resources.end(), [&](const auto& item) {
@@ -170,7 +260,8 @@ void validate_one(const CampaignModel& model, const SetCampaignValueOperation& o
         (mapping->expected_type == core::dson::ValueKind::Integer && std::holds_alternative<std::int32_t>(operation.value)) ||
         (mapping->expected_type == core::dson::ValueKind::Float && std::holds_alternative<float>(operation.value)) ||
         (mapping->expected_type == core::dson::ValueKind::String && std::holds_alternative<std::string>(operation.value)) ||
-        (mapping->expected_type == core::dson::ValueKind::Boolean && std::holds_alternative<bool>(operation.value));
+        (mapping->expected_type == core::dson::ValueKind::Boolean && std::holds_alternative<bool>(operation.value)) ||
+        (mapping->expected_type == core::dson::ValueKind::Character && std::holds_alternative<char>(operation.value));
     if (!type_matches || operation.value.index() != resolved->value.index()) {
         add_issue(report, ValidationSeverity::Error, "value.type_mismatch",
                   "The requested value type does not match the mapped campaign field", target, true);
@@ -280,6 +371,22 @@ std::optional<CampaignStructuralChange> remove_structural_entry(
         hero->quirks.erase(found);
         return change;
     }
+    if (const auto* unequip = std::get_if<UnequipHeroCampingSkillOperation>(&operation)) {
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+            return item.persistent_id == unequip->hero_id;
+        });
+        if (hero == model.heroes.end()) return std::nullopt;
+        const auto found = std::find_if(hero->camping_skills.begin(), hero->camping_skills.end(), [&](const auto& item) {
+            return item.camping && item.id == unequip->skill_id;
+        });
+        if (found == hero->camping_skills.end()) return std::nullopt;
+        const auto index = static_cast<std::size_t>(std::distance(hero->camping_skills.begin(), found));
+        CampaignStructuralChange change{{"Hero.SelectedCampingSkills", unequip->hero_id, std::nullopt,
+                                         unequip->skill_id},
+                                        found->raw, core::dson::ValueKind::Integer, index, *found};
+        hero->camping_skills.erase(found);
+        return change;
+    }
     if (const auto* destroy = std::get_if<DestroyTrinketOperation>(&operation)) {
         if (destroy->hero_id.empty()) {
             const auto found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(), [&](const auto& item) {
@@ -330,6 +437,22 @@ bool replay_structural_entry(CampaignModel& model, const CampaignStructuralChang
         } else return false;
         return true;
     }
+    if (change.target.semantic_property == "Hero.SelectedCampingSkills") {
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+            return item.persistent_id == change.target.entity_id;
+        });
+        if (hero == model.heroes.end()) return false;
+        if (forward) {
+            const auto found = std::find_if(hero->camping_skills.begin(), hero->camping_skills.end(), [&](const auto& item) {
+                return item.raw.display_path == change.raw.display_path;
+            });
+            if (found == hero->camping_skills.end()) return false;
+            hero->camping_skills.erase(found);
+        } else if (const auto* entry = std::get_if<domain::HeroSkillSelection>(&change.removed_entry)) {
+            insert_at(hero->camping_skills, change.original_index, *entry);
+        } else return false;
+        return true;
+    }
     if (change.target.semantic_property == "Hero.Trinket.Entry") {
         const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
             return item.persistent_id == change.target.entity_id;
@@ -361,6 +484,70 @@ bool replay_structural_entry(CampaignModel& model, const CampaignStructuralChang
     return false;
 }
 
+bool apply_purchase_row_mutations(CampaignModel& model,
+                                 const std::vector<CampaignDocumentMutation>& mutations,
+                                 bool forward, std::string* failure_reason = nullptr) {
+    const auto fail_projection = [&](std::string reason) {
+        if (failure_reason) *failure_reason = std::move(reason);
+        return false;
+    };
+    for (const auto& append : mutations) {
+        if (append.kind != CampaignDocumentMutationKind::AppendClone ||
+            append.semantic_property != "Upgrade.PurchaseNode.Entry" ||
+            append.document_id != "persist.upgrades.json") continue;
+        const auto slash = append.target_path.find_last_of('/');
+        if (slash == std::string::npos) return fail_projection("append path has no row key: " + append.target_path);
+        const auto row_path = append.target_path;
+        std::size_t index{};
+        const auto key = std::string_view{append.target_path}.substr(slash + 1);
+        const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), index);
+        if (error != std::errc{} || end != key.data() + key.size())
+            return fail_projection("append row key is not numeric: " + append.target_path);
+        const auto existing = std::find_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
+            [&](const auto& node) { return node.index == index; });
+        if (!forward) {
+            if (existing != model.upgrade_purchase_nodes.end()) model.upgrade_purchase_nodes.erase(existing);
+            continue;
+        }
+        if (existing != model.upgrade_purchase_nodes.end())
+            return fail_projection("append row index already exists: " + append.target_path);
+
+        std::optional<std::int32_t> instance;
+        std::optional<std::int32_t> tree;
+        std::optional<char> code;
+        std::optional<bool> purchased;
+        RawLocator row_raw{"persist.upgrades.json", {}, row_path};
+        RawLocator purchased_raw{"persist.upgrades.json", {}, row_path + "/is_purchased"};
+        for (const auto& mutation : mutations) {
+            if (mutation.kind != CampaignDocumentMutationKind::SetValue ||
+                mutation.semantic_property != "Upgrade.PurchaseNode.Entry" ||
+                mutation.document_id != "persist.upgrades.json" || !mutation.after ||
+                !mutation.target_path.starts_with(row_path + "/")) continue;
+            const auto field = std::string_view{mutation.target_path}.substr(row_path.size() + 1);
+            if (field == "instance_number") {
+                if (const auto* value = std::get_if<std::int32_t>(&*mutation.after)) instance = *value;
+            } else if (field == "tree_id") {
+                if (const auto* value = std::get_if<std::int32_t>(&*mutation.after)) tree = *value;
+            } else if (field == "requirement_code") {
+                if (const auto* value = std::get_if<char>(&*mutation.after)) code = *value;
+            } else if (field == "is_purchased") {
+                if (const auto* value = std::get_if<bool>(&*mutation.after)) {
+                    purchased = *value;
+                    purchased_raw.display_path = mutation.target_path;
+                }
+            }
+        }
+        if (!instance || !tree || !code || !purchased)
+            return fail_projection("append row lacks typed fields at " + row_path + " (instance=" +
+                std::to_string(instance.has_value()) + ", tree=" + std::to_string(tree.has_value()) +
+                ", code=" + std::to_string(code.has_value()) + ", purchased=" +
+                std::to_string(purchased.has_value()) + ")");
+        model.upgrade_purchase_nodes.push_back({index, *instance, *tree, *code,
+                                                std::move(row_raw), {*purchased, std::move(purchased_raw)}});
+    }
+    return true;
+}
+
 bool same_target(const CampaignOperationTarget& lhs, const CampaignOperationTarget& rhs) {
     return lhs.semantic_property == rhs.semantic_property && lhs.entity_id == rhs.entity_id &&
            lhs.occurrence_index == rhs.occurrence_index && lhs.member_id == rhs.member_id;
@@ -390,9 +577,24 @@ void merge_pending_changes(ChangeSet& pending, const ChangeSet& delta) {
             pending.structural_changes.push_back(change);
         }
     }
+    for (const auto& batch : delta.document_mutation_batches) {
+        const auto found = std::find_if(pending.document_mutation_batches.begin(),
+            pending.document_mutation_batches.end(), [&](const auto& existing) {
+                return existing.transaction_id == batch.transaction_id;
+            });
+        if (batch.cancel) {
+            if (found != pending.document_mutation_batches.end()) pending.document_mutation_batches.erase(found);
+        } else if (found == pending.document_mutation_batches.end()) {
+            pending.document_mutation_batches.push_back(batch);
+        } else {
+            *found = batch;
+        }
+    }
     std::set<std::string, std::less<>> documents;
     for (const auto& change : pending.changes) documents.insert(change.raw.document_id);
     for (const auto& change : pending.structural_changes) documents.insert(change.raw.document_id);
+    for (const auto& batch : pending.document_mutation_batches)
+        for (const auto& mutation : batch.mutations) documents.insert(mutation.document_id);
     pending.affected_documents.assign(documents.begin(), documents.end());
 }
 
@@ -405,6 +607,93 @@ core::Error stale_revision_error(std::uint64_t expected, std::uint64_t actual) {
 core::Error empty_history_error(std::string direction) {
     return {core::ErrorCode::ValidationFailed, "There is no campaign edit to " + direction,
             "CampaignEditSession", {{"action", std::move(direction)}}};
+}
+
+std::int32_t tree_hash(std::string_view tree_id) {
+    return static_cast<std::int32_t>(core::dson::string_hash(tree_id));
+}
+
+std::optional<std::int32_t> hero_purchase_instance(const CampaignModel& model, const domain::Hero& hero) {
+    if (!hero.class_id.value) return std::nullopt;
+    const auto wanted = tree_hash(*hero.class_id.value + ".weapon");
+    std::set<std::int32_t> instances;
+    for (const auto& node : model.upgrade_purchase_nodes)
+        if (node.tree_id == wanted) instances.insert(node.instance_number);
+    if (instances.size() != 1) return std::nullopt;
+    return *instances.begin();
+}
+
+bool append_purchase_rank_changes(const CampaignModel& model, CompositeCampaignOperation& operation,
+                                  std::int32_t instance, std::string_view tree_name,
+                                  std::int32_t rank, std::int32_t maximum,
+                                  char first_code) {
+    if (rank < 0 || maximum <= 0 || rank > maximum || operation.mapped_operation_id.empty()) return false;
+    const auto hash = tree_hash(tree_name);
+    std::map<char, const domain::UpgradePurchaseNode*> matching;
+    std::size_t next_index = 0;
+    for (const auto& node : model.upgrade_purchase_nodes)
+        next_index = std::max(next_index, node.index + 1);
+    for (const auto& mutation : operation.document_mutations) {
+        if (mutation.kind != CampaignDocumentMutationKind::AppendClone ||
+            mutation.semantic_property != "Upgrade.PurchaseNode.Entry") continue;
+        const auto slash = mutation.target_path.find_last_of('/');
+        if (slash == std::string::npos) continue;
+        std::size_t reserved{};
+        const auto key = std::string_view{mutation.target_path}.substr(slash + 1);
+        const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), reserved);
+        if (error == std::errc{} && end == key.data() + key.size() &&
+            reserved < std::numeric_limits<std::size_t>::max())
+            next_index = std::max(next_index, reserved + 1);
+    }
+    const domain::UpgradePurchaseNode* template_node = nullptr;
+    for (const auto& node : model.upgrade_purchase_nodes) {
+        if (node.instance_number != instance) continue;
+        if (template_node == nullptr) template_node = &node;
+        if (node.tree_id != hash) continue;
+        if (node.requirement_code < first_code || node.requirement_code >= first_code + maximum ||
+            !node.is_purchased.value || !node.is_purchased.raw ||
+            !matching.emplace(node.requirement_code, &node).second) return false;
+    }
+    if (template_node == nullptr || template_node->row_raw.display_path.empty()) return false;
+
+    for (std::int32_t offset = 0; offset < maximum; ++offset) {
+        const auto code = static_cast<char>(first_code + offset);
+        const bool desired = offset < rank;
+        const auto found = matching.find(code);
+        if (found != matching.end()) {
+            const auto* node = found->second;
+            if (*node->is_purchased.value == desired) continue;
+            CampaignOperationTarget target{"Upgrade.PurchaseNode", std::to_string(instance), node->index,
+                std::to_string(hash) + "|" + node->requirement_code};
+            operation.operations.push_back({std::move(target), desired});
+            continue;
+        }
+        if (!desired) continue;
+        const auto row_path = "base_root/purchases/" + std::to_string(next_index++);
+        auto& mutations = operation.document_mutations;
+        mutations.push_back({CampaignDocumentMutationKind::AppendClone, "Upgrade.PurchaseNode.Entry",
+            "persist.upgrades.json", row_path, template_node->row_raw.display_path,
+            row_path.substr(row_path.find_last_of('/') + 1), core::dson::ValueKind::Object, std::nullopt, std::nullopt});
+        const auto append_set = [&](std::string field_name, core::dson::ValueKind kind,
+                                    CampaignValue before, CampaignValue after) {
+            mutations.push_back({CampaignDocumentMutationKind::SetValue, "Upgrade.PurchaseNode.Entry",
+                "persist.upgrades.json", row_path + "/" + field_name, {}, {}, kind,
+                std::move(before), std::move(after)});
+        };
+        append_set("instance_number", core::dson::ValueKind::Integer,
+                   template_node->instance_number, instance);
+        append_set("tree_id", core::dson::ValueKind::Integer, template_node->tree_id, hash);
+        append_set("requirement_code", core::dson::ValueKind::Character,
+                   template_node->requirement_code, code);
+        append_set("is_purchased", core::dson::ValueKind::Boolean,
+                   *template_node->is_purchased.value, true);
+    }
+    return true;
+}
+
+core::Error progression_mapping_error(std::string message, std::string operation) {
+    return {core::ErrorCode::MappingNotWritable, std::move(message), "CampaignOperationFactory",
+            {{"operation", std::move(operation)}}};
 }
 
 } // namespace
@@ -427,30 +716,30 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
          {"Hero.Trinket.Entry", "TrinketInventory.Entry"}, "可分别销毁装备栏或庄园库存条目。"},
         {"campaign.town.set_district_built", "设置小镇建筑状态", CampaignOperationAvailability::Available,
          {"Town.District.Built"}, "要求存档已经包含开放的小镇建筑系统状态。"},
-        {"campaign.hero.add", "新增英雄", CampaignOperationAvailability::NotImplemented,
-         {"Hero.PersistentId"}, "需要 HeroFactory、身份生成和跨文档引用校验。"},
-        {"campaign.hero.set_equipment_ranks", "设置武器与防具等级", CampaignOperationAvailability::NotImplemented,
-         {"Hero.WeaponRank", "Hero.ArmourRank"}, "需要与 persist.upgrades.json 购买节点组成原子复合操作。"},
-        {"campaign.hero.set_combat_skill_rank", "设置战斗技能等级", CampaignOperationAvailability::NotImplemented,
-         {"Upgrade.PurchaseNode"}, "需要按有效 Mod 技能树映射购买节点及技能上限。"},
-        {"campaign.hero.set_camping_skill_learned", "学习生存技能", CampaignOperationAvailability::NotImplemented,
-         {"Upgrade.PurchaseNode"}, "技能学习与 selected_camping_skills 装备集合需分开建模。"},
-        {"campaign.hero.unequip_camping_skill", "取消装备生存技能", CampaignOperationAvailability::NotImplemented,
-         {"Hero.SelectedCampingSkills"}, "与训练营锁定不同；等待独立 Operation 接入。"},
+        {"campaign.hero.add", "新增英雄", CampaignOperationAvailability::Available,
+         {"Hero.PersistentId"}, "仅使用有效 mod 英雄作为模板并清除继承的怪癖与饰品记录。"},
+        {"campaign.hero.set_equipment_ranks", "设置武器与防具等级", CampaignOperationAvailability::Available,
+         {"Hero.WeaponRank", "Hero.ArmourRank", "Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "武器、防具等级与购买节点在同一复合操作中原子写入；稀疏缺失节点按有效升级树补建。"},
+        {"campaign.hero.set_combat_skill_rank", "设置战斗技能等级", CampaignOperationAvailability::Available,
+         {"Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "调用方必须传入有效内容环境解析出的技能节点上限。"},
+        {"campaign.hero.set_camping_skill_learned", "学习生存技能", CampaignOperationAvailability::Available,
+         {"Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "训练营学习状态独立于 selected_camping_skills 装备集合。"},
+        {"campaign.hero.unequip_camping_skill", "取消装备生存技能", CampaignOperationAvailability::Available,
+         {"Hero.SelectedCampingSkills"}, "从已装备集合移除技能，不影响训练营解锁状态。"},
         {"campaign.hero.lock_camping_skill", "锁定生存技能", CampaignOperationAvailability::Deferred,
          {}, "游戏内验证未通过，暂缓。"},
         {"campaign.hero.edit_disease", "编辑疾病", CampaignOperationAvailability::Deferred,
          {}, "等待包含真实疾病记录的存档样本。"},
-        {"campaign.hero.add_or_replace_quirk", "增加或替换怪癖", CampaignOperationAvailability::NotImplemented,
-         {"Hero.Quirks"}, "已通过游戏测试，尚未接入结构插入和有效定义校验。"},
-        {"campaign.trinket.add_inventory", "增加库存饰品", CampaignOperationAvailability::NotImplemented,
-         {"TrinketInventory.Items"}, "已通过游戏测试，尚未接入安全结构插入。"},
-        {"campaign.hero.equip_trinket", "装备饰品", CampaignOperationAvailability::NotImplemented,
-         {"Hero.Trinkets"}, "需要职业限制校验和饰品记录模板。"},
-        {"campaign.town.set_upgrade_rank", "设置小镇升级进度", CampaignOperationAvailability::NotImplemented,
-         {"Upgrade.PurchaseNode"}, "需要同步购买节点以及锁定后续节点。"},
-        {"campaign.town.set_district_system_open", "开放或锁定小镇建筑系统", CampaignOperationAvailability::NotImplemented,
-         {"Town.Districts"}, "开放时必须从有效内容环境组装各 District 状态对象。"},
+        {"campaign.hero.add_or_replace_quirk", "增加或替换怪癖", CampaignOperationAvailability::Available,
+         {"Hero.Quirks"}, "插入与替换操作先校验有效定义的怪癖极性，并初始化记录元数据。"},
+        {"campaign.trinket.add_inventory", "增加库存饰品", CampaignOperationAvailability::Available,
+         {"TrinketInventory.Items"}, "按有效饰品定义追加一个库存条目，不对重复 ID 去重。"},
+        {"campaign.hero.equip_trinket", "装备饰品", CampaignOperationAvailability::Available,
+         {"Hero.Trinkets"}, "通过有效饰品定义检查职业限制后追加装备记录。"},
+        {"campaign.town.set_upgrade_rank", "设置小镇升级进度", CampaignOperationAvailability::Available,
+         {"Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "按有效升级上限同步购买与锁定节点。"},
+        {"campaign.town.set_district_system_open", "开放或锁定小镇建筑系统", CampaignOperationAvailability::Available,
+         {"Town.DistrictSystem"}, "开放时只为有效内容环境中的 district 定义生成 built=false 状态对象。"},
     };
     return capabilities;
 }
@@ -458,6 +747,208 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
 ValidationReport CampaignOperationValidator::validate(const CampaignModel& model,
                                                        const CampaignOperation& operation) const {
     ValidationReport report;
+    if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation);
+        composite && !composite->document_mutations.empty()) {
+        if (composite->mapped_operation_id.empty()) {
+            add_issue(report, ValidationSeverity::Error, "mutation.operation_id_missing",
+                      "A composite structural mutation must declare its verified business operation", {}, true);
+            return report;
+        }
+        ApplyCampaignDocumentMutationsOperation mapped{composite->mapped_operation_id,
+                                                       composite->document_mutations};
+        auto structural_report = validate(model, CampaignOperation{std::move(mapped)});
+        report.issues.insert(report.issues.end(), structural_report.issues.begin(), structural_report.issues.end());
+        if (!report.valid()) return report;
+    }
+    if (const auto* document_operation = std::get_if<ApplyCampaignDocumentMutationsOperation>(&operation)) {
+        const auto capability = std::find_if(campaign_operation_capabilities().begin(),
+            campaign_operation_capabilities().end(), [&](const auto& item) {
+                return item.operation_id == document_operation->operation_id;
+            });
+        CampaignOperationTarget summary_target{document_operation->operation_id};
+        if (capability == campaign_operation_capabilities().end() ||
+            capability->availability != CampaignOperationAvailability::Available) {
+            add_issue(report, ValidationSeverity::Error, "operation.not_available",
+                      "This document operation has not passed the in-game validation gate", summary_target, true);
+            return report;
+        }
+        if (document_operation->mutations.empty()) {
+            add_issue(report, ValidationSeverity::Error, "operation.empty",
+                      "The mapped document operation contains no DSON mutations", summary_target, true);
+            return report;
+        }
+        for (const auto& mutation : document_operation->mutations) {
+            CampaignOperationTarget target{mutation.semantic_property};
+            const auto* mapping = find_mapping(mutation.semantic_property);
+            if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable ||
+                mapping->document_id != mutation.document_id || mutation.target_path.empty() ||
+                !path_is_within_mapping(*mapping, mutation.target_path)) {
+                add_issue(report, ValidationSeverity::Error, "mutation.mapping_mismatch",
+                          "A DSON mutation is outside its game-verified mapping", target, true);
+                continue;
+            }
+            const bool kind_allowed =
+                (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                 (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
+                  mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
+                  mutation.semantic_property == "Town.DistrictSystem" || mutation.semantic_property == "Town.Districts" ||
+                  mutation.semantic_property == "Upgrade.PurchaseNode.Entry")) ||
+                (mutation.kind == CampaignDocumentMutationKind::Erase &&
+                 (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
+                  mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
+                  mutation.semantic_property == "Town.DistrictSystem")) ||
+                (mutation.kind == CampaignDocumentMutationKind::Rename && mutation.semantic_property == "Hero.Quirks") ||
+                (mutation.kind == CampaignDocumentMutationKind::ClearChildren &&
+                 (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Town.DistrictSystem" ||
+                  mutation.semantic_property == "Town.Districts")) ||
+                (mutation.kind == CampaignDocumentMutationKind::SetValue &&
+                 (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
+                  mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
+                  mutation.semantic_property == "Town.DistrictSystem" || mutation.semantic_property == "Town.Districts" ||
+                  mutation.semantic_property == "Upgrade.PurchaseNode.Entry"));
+            if (!kind_allowed) {
+                add_issue(report, ValidationSeverity::Error, "mutation.action_not_allowed",
+                          "The requested structural action is not allowed for this mapped collection", target, true);
+                continue;
+            }
+            if (mutation.semantic_property == "Upgrade.PurchaseNode.Entry") {
+                constexpr std::string_view prefix{"base_root/purchases/"};
+                const auto tail = mutation.target_path.starts_with(prefix)
+                    ? std::string_view{mutation.target_path}.substr(prefix.size()) : std::string_view{};
+                const auto separator = tail.find('/');
+                const auto key = tail.substr(0, separator);
+                std::size_t parsed_key{};
+                const auto [key_end, key_error] = std::from_chars(key.data(), key.data() + key.size(), parsed_key);
+                const bool numeric_key = !key.empty() && key_error == std::errc{} && key_end == key.data() + key.size();
+                bool numeric_source = false;
+                if (mutation.source_path.starts_with(prefix)) {
+                    const auto source_key = std::string_view{mutation.source_path}.substr(prefix.size());
+                    std::size_t source_index{};
+                    const auto [source_end, source_error] = std::from_chars(
+                        source_key.data(), source_key.data() + source_key.size(), source_index);
+                    numeric_source = !source_key.empty() && source_key.find('/') == std::string_view::npos &&
+                        source_error == std::errc{} && source_end == source_key.data() + source_key.size();
+                }
+                const bool append_row = mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                    numeric_key && separator == std::string_view::npos && mutation.new_key == key &&
+                    numeric_source && mutation.expected_kind == core::dson::ValueKind::Object;
+                const auto field = separator == std::string_view::npos ? std::string_view{} : tail.substr(separator + 1);
+                const bool set_row_field = mutation.kind == CampaignDocumentMutationKind::SetValue && numeric_key &&
+                    (field == "instance_number" || field == "tree_id" || field == "requirement_code" ||
+                     field == "is_purchased");
+                if (!append_row && !set_row_field) {
+                    add_issue(report, ValidationSeverity::Error, "mutation.purchase_node_shape_invalid",
+                              "Purchase-node mutations may append one numeric row or set its four typed identity/state fields",
+                              target, true);
+                    continue;
+                }
+                if (set_row_field) {
+                    const auto expected = field == "requirement_code" ? core::dson::ValueKind::Character :
+                        field == "is_purchased" ? core::dson::ValueKind::Boolean : core::dson::ValueKind::Integer;
+                    if (mutation.expected_kind != expected) {
+                        add_issue(report, ValidationSeverity::Error, "mutation.purchase_node_type_invalid",
+                                  "Purchase-node fields require their registered DSON scalar type", target, true);
+                        continue;
+                    }
+                }
+            }
+            if ((mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                 (mutation.source_path.empty() || !safe_dson_key(mutation.new_key) ||
+                  mutation.expected_kind == core::dson::ValueKind::Unknown)) ||
+                (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key)) ||
+                (mutation.kind == CampaignDocumentMutationKind::SetValue &&
+                 (!mutation.before || !mutation.after ||
+                  !campaign_value_matches_kind(mutation.expected_kind, *mutation.before) ||
+                  !campaign_value_matches_kind(mutation.expected_kind, *mutation.after))) ||
+                (mutation.kind == CampaignDocumentMutationKind::Erase &&
+                 mutation.expected_kind == core::dson::ValueKind::Unknown) ||
+                (mutation.kind == CampaignDocumentMutationKind::ClearChildren &&
+                 mutation.expected_kind != core::dson::ValueKind::Object)) {
+                add_issue(report, ValidationSeverity::Error, "mutation.payload_invalid",
+                          "The structural mutation is missing a required typed payload", target, true);
+            }
+        }
+        return report;
+    }
+    const auto is_equipment_rank = [](const SetCampaignValueOperation& edit) {
+        return edit.target.semantic_property == "Hero.WeaponRank" ||
+               edit.target.semantic_property == "Hero.ArmourRank";
+    };
+    if (const auto* single = std::get_if<SetCampaignValueOperation>(&operation); single && is_equipment_rank(*single)) {
+        add_issue(report, ValidationSeverity::Error, "equipment.rank_bundle_required",
+                  "Weapon and armour ranks must be changed with their purchase-history nodes in one composite operation",
+                  single->target, true);
+        return report;
+    }
+    if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation)) {
+        const SetCampaignValueOperation* weapon = nullptr;
+        const SetCampaignValueOperation* armour = nullptr;
+        for (const auto& edit : composite->operations) {
+            if (edit.target.semantic_property == "Hero.WeaponRank") weapon = &edit;
+            if (edit.target.semantic_property == "Hero.ArmourRank") armour = &edit;
+        }
+        if (weapon || armour) {
+            const auto* rank_target = weapon ? weapon : armour;
+            bool valid_bundle = weapon && armour && weapon->target.entity_id == armour->target.entity_id;
+            const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+                return rank_target && item.persistent_id == rank_target->target.entity_id;
+            });
+            const auto instance = hero == model.heroes.end() ? std::nullopt : hero_purchase_instance(model, *hero);
+            bool has_weapon_purchase_mapping = false;
+            bool has_armour_purchase_mapping = false;
+            if (instance && hero != model.heroes.end() && hero->class_id.value) {
+                const auto weapon_tree = tree_hash(*hero->class_id.value + ".weapon");
+                const auto armour_tree = tree_hash(*hero->class_id.value + ".armour");
+                const auto mark_tree = [&](std::int32_t tree) {
+                    if (tree == weapon_tree) has_weapon_purchase_mapping = true;
+                    if (tree == armour_tree) has_armour_purchase_mapping = true;
+                };
+                for (const auto& edit : composite->operations) {
+                    if (edit.target.semantic_property != "Upgrade.PurchaseNode" ||
+                        edit.target.entity_id != std::to_string(*instance) || edit.target.member_id.empty()) continue;
+                    const auto separator = edit.target.member_id.find('|');
+                    if (separator == std::string::npos) continue;
+                    const auto hash_text = std::string_view{edit.target.member_id}.substr(0, separator);
+                    std::int32_t hash{};
+                    const auto [end, error] = std::from_chars(hash_text.data(), hash_text.data() + hash_text.size(), hash);
+                    if (error == std::errc{} && end == hash_text.data() + hash_text.size()) mark_tree(hash);
+                }
+                for (const auto& append : composite->document_mutations) {
+                    if (append.kind != CampaignDocumentMutationKind::AppendClone ||
+                        append.semantic_property != "Upgrade.PurchaseNode.Entry") continue;
+                    std::optional<std::int32_t> row_instance;
+                    std::optional<std::int32_t> row_tree;
+                    for (const auto& field : composite->document_mutations) {
+                        if (field.kind != CampaignDocumentMutationKind::SetValue || !field.after ||
+                            !field.target_path.starts_with(append.target_path + "/")) continue;
+                        const auto name = std::string_view{field.target_path}.substr(append.target_path.size() + 1);
+                        if (name == "instance_number") {
+                            if (const auto* value = std::get_if<std::int32_t>(&*field.after)) row_instance = *value;
+                        } else if (name == "tree_id") {
+                            if (const auto* value = std::get_if<std::int32_t>(&*field.after)) row_tree = *value;
+                        }
+                    }
+                    if (row_instance == instance && row_tree) mark_tree(*row_tree);
+                }
+            }
+            const auto rank_changed = [&](const SetCampaignValueOperation* edit,
+                                          const domain::LocatedValue<std::int32_t>& current) {
+                const auto* requested = edit ? std::get_if<std::int32_t>(&edit->value) : nullptr;
+                return requested != nullptr && current.value && *requested != *current.value;
+            };
+            const bool weapon_changed = hero != model.heroes.end() && rank_changed(weapon, hero->weapon_rank);
+            const bool armour_changed = hero != model.heroes.end() && rank_changed(armour, hero->armour_rank);
+            valid_bundle = valid_bundle && (!weapon_changed || has_weapon_purchase_mapping) &&
+                           (!armour_changed || has_armour_purchase_mapping);
+            if (!valid_bundle) {
+                const auto target = rank_target ? rank_target->target : CampaignOperationTarget{"Hero.WeaponRank"};
+                add_issue(report, ValidationSeverity::Error, "equipment.rank_bundle_required",
+                          "Weapon and armour ranks must be changed for one hero together with mapped purchase-history nodes",
+                          target, true);
+                return report;
+            }
+        }
+    }
     const auto operations = flatten(operation);
     if (!operations.empty()) {
         for (const auto& edit : operations) validate_one(model, edit, report);
@@ -478,6 +969,26 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
             add_issue(report, ValidationSeverity::Error, "target.missing", "The requested non-disease quirk is not uniquely present", target, true);
         else if (hero->state == EntityState::Invalid || hero->state == EntityState::Unresolved)
             add_issue(report, ValidationSeverity::Error, "target.unavailable", "The target hero is invalid or unresolved", target, true);
+        return report;
+    }
+
+    if (const auto* unequip = std::get_if<UnequipHeroCampingSkillOperation>(&operation)) {
+        CampaignOperationTarget target{"Hero.SelectedCampingSkills", unequip->hero_id,
+                                       std::nullopt, unequip->skill_id};
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+            return item.persistent_id == unequip->hero_id;
+        });
+        const auto count = hero == model.heroes.end() ? 0 : std::count_if(
+            hero->camping_skills.begin(), hero->camping_skills.end(), [&](const auto& item) {
+                return item.camping && item.id == unequip->skill_id;
+            });
+        const auto* mapping = find_mapping(target.semantic_property);
+        if (mapping == nullptr || !mapping->semantically_writable || !mapping->game_mutation_verified)
+            add_issue(report, ValidationSeverity::Error, "mapping.not_writable",
+                      "Camping skill unequip has no game-verified mapping", target, true);
+        else if (count != 1)
+            add_issue(report, ValidationSeverity::Error, "target.missing",
+                      "The requested camping skill is not uniquely equipped on this hero", target, true);
         return report;
     }
 
@@ -505,6 +1016,9 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
         return report;
     }
 
+    if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation);
+        composite && composite->operations.empty() && !composite->document_mutations.empty())
+        return report;
     if (operations.empty()) {
         report.issues.push_back({ValidationSeverity::Error, "operation.empty",
             "A campaign operation must contain at least one field edit", {}, {}, true});
@@ -530,17 +1044,133 @@ RiskAssessment CampaignOperationRiskAssessor::assess(const CampaignOperation& op
             edit.target.semantic_property == "Hero.WeaponRank" ||
             edit.target.semantic_property == "Hero.ArmourRank") {
             result.level = CampaignRiskLevel::High;
-            result.reasons.push_back(edit.target.semantic_property + " may depend on progression or purchase-history fields not modeled yet.");
+            result.reasons.push_back(edit.target.semantic_property +
+                " changes progression state and depends on its corresponding game purchase or level rules.");
         }
     }
     if (std::holds_alternative<RemoveHeroQuirkOperation>(operation) ||
+        std::holds_alternative<UnequipHeroCampingSkillOperation>(operation) ||
         std::holds_alternative<DestroyTrinketOperation>(operation)) {
         result.level = std::max(result.level, CampaignRiskLevel::Moderate);
         result.reasons.push_back("This operation destroys a complete collection entry and can only be restored after commit from the verified backup.");
     }
+    if (std::holds_alternative<ApplyCampaignDocumentMutationsOperation>(operation) ||
+        (std::get_if<CompositeCampaignOperation>(&operation) &&
+         !std::get<CompositeCampaignOperation>(operation).document_mutations.empty())) {
+        result.level = std::max(result.level, CampaignRiskLevel::Moderate);
+        result.reasons.push_back("This operation changes a mapped collection structure; review its preview before commit.");
+    }
     std::sort(result.reasons.begin(), result.reasons.end());
     result.reasons.erase(std::unique(result.reasons.begin(), result.reasons.end()), result.reasons.end());
     return result;
+}
+
+core::Result<CampaignOperation, core::Error>
+make_set_hero_equipment_ranks_operation(const domain::CampaignModel& model, std::string_view hero_id,
+                                       std::int32_t weapon_rank, std::int32_t armour_rank,
+                                       std::int32_t effective_weapon_max_rank,
+                                       std::int32_t effective_armour_max_rank) {
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    if (hero == model.heroes.end() || !hero->class_id.value || !hero->weapon_rank.raw || !hero->armour_rank.raw)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero class and both mapped equipment rank fields must be available",
+                                      "campaign.hero.set_equipment_ranks"));
+    const auto instance = hero_purchase_instance(model, *hero);
+    if (!instance)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero purchase instance is not uniquely mapped",
+                                      "campaign.hero.set_equipment_ranks"));
+
+    CompositeCampaignOperation operation{"Set hero equipment ranks", {}, {}, {}};
+    operation.mapped_operation_id = "campaign.hero.set_equipment_ranks";
+    operation.operations.push_back({{"Hero.WeaponRank", hero->persistent_id}, weapon_rank});
+    operation.operations.push_back({{"Hero.ArmourRank", hero->persistent_id}, armour_rank});
+    const auto weapon_tree = *hero->class_id.value + ".weapon";
+    const auto armour_tree = *hero->class_id.value + ".armour";
+    const auto weapon_max = effective_weapon_max_rank;
+    const auto armour_max = effective_armour_max_rank;
+    const auto weapon_mapped = append_purchase_rank_changes(model, operation, *instance, weapon_tree,
+                                                              weapon_rank, weapon_max, '0');
+    const auto armour_mapped = append_purchase_rank_changes(model, operation, *instance, armour_tree,
+                                                              armour_rank, armour_max, '0');
+    if (!weapon_mapped || !armour_mapped)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Equipment rank exceeds or does not match mapped purchase nodes (class=" +
+                                      *hero->class_id.value + ", instance=" + std::to_string(*instance) +
+                                      ", weapon=" + std::to_string(weapon_rank) + "/" + std::to_string(weapon_max) +
+                                      (weapon_mapped ? " mapped" : " unmapped") + ", armour=" +
+                                      std::to_string(armour_rank) + "/" + std::to_string(armour_max) +
+                                      (armour_mapped ? " mapped" : " unmapped") + ")",
+                                      "campaign.hero.set_equipment_ranks"));
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
+}
+
+core::Result<CampaignOperation, core::Error>
+make_set_hero_combat_skill_rank_operation(const domain::CampaignModel& model, std::string_view hero_id,
+                                          std::string_view skill_id, std::int32_t rank,
+                                          std::int32_t effective_max_rank) {
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    if (hero == model.heroes.end() || !hero->class_id.value)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero class is unavailable", "campaign.hero.set_combat_skill_rank"));
+    const auto instance = hero_purchase_instance(model, *hero);
+    if (!instance)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero purchase instance is not uniquely mapped",
+                                      "campaign.hero.set_combat_skill_rank"));
+    const auto separator = skill_id.find(':');
+    const auto suffix = separator == std::string_view::npos ? skill_id : skill_id.substr(separator + 1);
+    const auto tree = *hero->class_id.value + "." + std::string{suffix};
+    CompositeCampaignOperation operation{"Set combat skill rank", {}, {}, {}};
+    operation.mapped_operation_id = "campaign.hero.set_combat_skill_rank";
+    if (!append_purchase_rank_changes(model, operation, *instance, tree, rank, effective_max_rank, '0') ||
+        (operation.operations.empty() && operation.document_mutations.empty()))
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Combat skill rank does not match its effective mapped upgrade tree",
+                                      "campaign.hero.set_combat_skill_rank"));
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
+}
+
+core::Result<CampaignOperation, core::Error>
+make_set_hero_camping_skill_learned_operation(const domain::CampaignModel& model, std::string_view hero_id,
+                                              std::string_view skill_id, bool learned) {
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    if (hero == model.heroes.end() || !hero->class_id.value)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero class is unavailable", "campaign.hero.set_camping_skill_learned"));
+    const auto instance = hero_purchase_instance(model, *hero);
+    if (!instance)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero purchase instance is not uniquely mapped",
+                                      "campaign.hero.set_camping_skill_learned"));
+    const auto tree = *hero->class_id.value + "." + std::string{skill_id};
+    CompositeCampaignOperation operation{"Set camping skill learned state", {}, {}, {}};
+    operation.mapped_operation_id = "campaign.hero.set_camping_skill_learned";
+    if (!append_purchase_rank_changes(model, operation, *instance, tree, learned ? 1 : 0, 1, '0') ||
+        (operation.operations.empty() && operation.document_mutations.empty()))
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Camping skill is not represented by a unique training node",
+                                      "campaign.hero.set_camping_skill_learned"));
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
+}
+
+core::Result<CampaignOperation, core::Error>
+make_set_town_upgrade_rank_operation(const domain::CampaignModel& model, std::string_view tree_id,
+                                     std::int32_t rank, std::int32_t effective_max_rank) {
+    CompositeCampaignOperation operation{"Set town upgrade rank", {}, {}, {}};
+    operation.mapped_operation_id = "campaign.town.set_upgrade_rank";
+    if (!append_purchase_rank_changes(model, operation, 0, tree_id, rank, effective_max_rank, 'a') ||
+        (operation.operations.empty() && operation.document_mutations.empty()))
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Town upgrade rank does not match its effective mapped purchase tree",
+                                      "campaign.town.set_upgrade_rank"));
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
 }
 
 CampaignEditSession::CampaignEditSession(CampaignModel initial_model)
@@ -582,6 +1212,7 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
     }
 
     if (std::holds_alternative<RemoveHeroQuirkOperation>(operation) ||
+        std::holds_alternative<UnequipHeroCampingSkillOperation>(operation) ||
         std::holds_alternative<DestroyTrinketOperation>(operation)) {
         auto removed = remove_structural_entry(candidate, operation);
         if (!removed)
@@ -593,6 +1224,33 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
 
     auto change_set = changes_for(changes, structural_changes);
     auto risk = risk_assessor_.assess(operation);
+    const std::string* mapped_operation_id = nullptr;
+    const std::vector<CampaignDocumentMutation>* mapped_mutations = nullptr;
+    if (const auto* document_operation = std::get_if<ApplyCampaignDocumentMutationsOperation>(&operation)) {
+        mapped_operation_id = &document_operation->operation_id;
+        mapped_mutations = &document_operation->mutations;
+    } else if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation);
+               composite && !composite->document_mutations.empty()) {
+        mapped_operation_id = &composite->mapped_operation_id;
+        mapped_mutations = &composite->document_mutations;
+    }
+    if (mapped_operation_id && mapped_mutations) {
+        CampaignDocumentMutationBatch batch;
+        batch.operation_id = *mapped_operation_id;
+        batch.transaction_id = *mapped_operation_id + "#" + std::to_string(revision_ + 1);
+        batch.mutations = *mapped_mutations;
+        change_set.document_mutation_batches.push_back(std::move(batch));
+        std::set<std::string, std::less<>> documents(change_set.affected_documents.begin(),
+                                                      change_set.affected_documents.end());
+        for (const auto& mutation : *mapped_mutations) documents.insert(mutation.document_id);
+        change_set.affected_documents.assign(documents.begin(), documents.end());
+        std::string projection_failure;
+        if (!apply_purchase_row_mutations(candidate, *mapped_mutations, true, &projection_failure))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed,
+                 "The mapped purchase-node append could not be projected into the campaign session: " + projection_failure,
+                 "CampaignEditSession"});
+    }
     if (!change_set.empty()) {
         working_model_ = std::move(candidate);
         ++revision_;
@@ -637,6 +1295,14 @@ CampaignEditSession::replay(const HistoryRecord& record, bool forward, std::uint
     }
     if (!forward) {
         for (auto& change : changes.structural_changes) change.action = CampaignStructuralAction::Restore;
+    }
+    for (auto& batch : changes.document_mutation_batches) {
+        batch.cancel = !forward;
+        if (!apply_purchase_row_mutations(candidate, batch.mutations, forward))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed,
+                 "The purchase-node edit history could not be projected into the campaign session",
+                 "CampaignEditSession"});
     }
     if (!forward) {
         for (auto& change : changes.changes) std::swap(change.before, change.after);

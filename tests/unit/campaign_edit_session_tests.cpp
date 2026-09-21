@@ -149,7 +149,7 @@ TEST(CampaignEditSession, CompositeOperationChangesMultipleDocumentsWithOneUndo)
             {{"Estate.Resource.Amount", {}, 4}, std::int32_t{900}},
             {{"Hero.Name", "hero-1", std::nullopt}, std::string{"Aster"}},
             {{"Hero.Stress", "hero-1", std::nullopt}, 0.0F},
-        }};
+        }, {}, {}};
 
     const auto applied = session.apply(composite, 0);
     ASSERT_TRUE(applied) << applied.error().message;
@@ -197,7 +197,7 @@ TEST(CampaignEditSession, CompositeValidationIsAtomicWhenOneTargetIsInvalid) {
         {
             {{"Estate.Resource.Amount", {}, 4}, std::int32_t{500}},
             {{"Hero.Name", "missing-hero", std::nullopt}, std::string{"Aster"}},
-        }};
+        }, {}, {}};
 
     const auto result = session.apply(composite, 0);
     ASSERT_FALSE(result);
@@ -346,7 +346,7 @@ TEST(CampaignEditSession, DestroyEquippedTrinketRemovesItFromTheDraftAndCanBeUnd
     EXPECT_EQ(session.model().heroes.front().trinkets.front().id, "test_trinket");
 }
 
-TEST(CampaignEditSession, CapabilityCatalogKeepsDeferredAndUnimplementedFeaturesDisabled) {
+TEST(CampaignEditSession, CapabilityCatalogEnablesVerifiedFeaturesAndKeepsDeferredFeaturesDisabled) {
     const auto& catalog = application::campaign_operation_capabilities();
     const auto find = [&](std::string_view id) {
         return std::find_if(catalog.begin(), catalog.end(), [&](const auto& item) {
@@ -364,5 +364,5 @@ TEST(CampaignEditSession, CapabilityCatalogKeepsDeferredAndUnimplementedFeatures
     EXPECT_EQ(resource->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(camping_lock->availability, application::CampaignOperationAvailability::Deferred);
     EXPECT_EQ(disease->availability, application::CampaignOperationAvailability::Deferred);
-    EXPECT_EQ(add_hero->availability, application::CampaignOperationAvailability::NotImplemented);
+    EXPECT_EQ(add_hero->availability, application::CampaignOperationAvailability::Available);
 }

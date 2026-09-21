@@ -156,6 +156,18 @@ struct DistrictState {
     DefinitionReference definition;
 };
 
+// Purchase-history rows are the authoritative progression state for combat,
+// camping, equipment, and town upgrades. Keep the row's original locator so
+// Operations can edit the exact node without guessing from displayed ranks.
+struct UpgradePurchaseNode {
+    std::size_t index{};
+    std::int32_t instance_number{};
+    std::int32_t tree_id{};
+    char requirement_code{};
+    RawLocator row_raw;
+    LocatedValue<bool> is_purchased;
+};
+
 struct ProgressionSummary {
     LocatedValue<std::int32_t> total_recruited_heroes;
     LocatedValue<std::int32_t> total_quests_finished;
@@ -188,6 +200,7 @@ struct CampaignModel {
     std::vector<TrinketInventoryEntry> trinket_inventory;
     std::vector<TownBuilding> town_buildings;
     std::vector<DistrictState> districts;
+    std::vector<UpgradePurchaseNode> upgrade_purchase_nodes;
     std::vector<SemanticDiagnostic> diagnostics;
 };
 

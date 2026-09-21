@@ -1,9 +1,9 @@
 # 核心编辑功能实测与 UI 集成参考
 
-**状态：**核心编辑场景已完成主要游戏内验收；生存技能锁定和疾病增删暂缓。  
+**状态：**Stage 12 已把此前通过游戏验证的核心操作接入 Operation、Mapping 与安全写回，并生成待游戏验收存档；生存技能锁定和疾病增删暂缓。
 **记录日期：**2026-09-21  
 **测试环境：**`test_save_profile/profile_0`，存档内的 Mod 启用顺序为准。最近一轮扫描到 137 个已安装 Mod，其中 122 个启用；内容扫描诊断为 0。  
-**测试清单：**[Stage 11 测试档说明](../test_save_profile/stage11_advanced_game_tests/README.md)
+**已验证记录：**[Stage 11 测试档说明](../test_save_profile/stage11_advanced_game_tests/README.md)；**Stage 12 待验收档：**[操作写回测试档说明](../test_save_profile/stage12_operation_tests/README.md)
 
 ## 1. 目的与验收边界
 
@@ -11,7 +11,7 @@
 
 游戏内通过表示相应 DSON 存档状态能被当前游戏与 Mod 环境正确读取、显示并保存。它不自动代表相应编辑操作已经接入 `CampaignEditSession`、`SaveAdapter` 或 UI。正式 UI 写入仍须经过 Mapping、Operation、校验、候选存档回读和安全提交流程。
 
-本轮所有测试档均从源存档独立生成；源存档和 `backup` 未被修改。除特别说明外，测试档目录名与测试编号一一对应。
+本轮 Stage 12 所有测试档均从源存档独立生成；源存档指纹在生成前后相同，每项另有 SafeSaveCommitter 校验过的写入前备份。Stage 12 存档仍需你导入游戏逐项验收。
 
 ## 2. 测试结果总览
 
@@ -106,29 +106,35 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 | `SetDistrictBuiltOperation` | `persist.town.json` 的 `built` | 可写候选并可提交；需要存档中已经存在小镇建筑系统状态 |
 | `DestroyTrinketOperation`（英雄装备栏） | 英雄 `trinkets/items/{key}` | 可写候选并可提交；销毁，不转入库存 |
 | `DestroyTrinketOperation`（饰品物品栏） | 庄园 `trinkets/items/{key}` | 可写候选并可提交；按原始键销毁，不重排其他条目 |
+| `UnequipHeroCampingSkillOperation` | 英雄 `selected_camping_skills` 集合 | 可写候选并可提交；只取消装备，不改变训练解锁 |
+| `campaign.hero.add` | 英雄名单及英雄内嵌数据 | 映射操作追加 mod 英雄模板，并清除继承的怪癖和饰品 |
+| `campaign.hero.add_or_replace_quirk` | 英雄怪癖集合 | 新增/替换时保留怪癖极性并初始化记录元数据 |
+| `campaign.trinket.add_inventory` | 庄园饰品库存 | 按有效内容定义追加一个库存条目 |
+| `campaign.hero.equip_trinket` | 英雄饰品栏 | 追加装备记录并校验饰品职业限制 |
+| `campaign.hero.set_equipment_ranks` | 英雄武器/防具字段及购买节点 | 复合操作同步；按有效升级树处理稀疏节点 |
+| `campaign.hero.set_combat_skill_rank` | 战斗技能购买节点 | 按有效 Mod 升级树与技能等级定义校验上限 |
+| `campaign.hero.set_camping_skill_learned` | 生存训练购买节点 | 学习状态与已装备技能集合分开处理 |
+| `campaign.town.set_upgrade_rank` | 小镇升级购买节点 | 按有效升级树设置进度并回锁后续节点 |
+| `campaign.town.set_district_system_open` | 小镇建筑系统状态集合 | 按有效 District 定义开放或清除系统状态 |
 
 `CampaignMappingDescriptor::capability()` 为 UI 提供四级能力：只读、仅 Session、可生成候选、可安全提交。`semantically_writable` 表示实现可以按 Mapping 生成候选；`game_mutation_verified` 表示可以进入安全提交。二者不能互相代替。
 
-`campaign_operation_capabilities()` 是稳定的操作目录，列出 `Available`、`NotImplemented` 和 `Deferred` 三种状态及其 Mapping/原因。购买节点目前以 `Upgrade.PurchaseNode` 记录了文档路径与游戏证据，但因为尚不能按 `tree_id + instance_number + requirement_code` 唯一定位，所以能力仍为只读，不能直接逐行切换。
+`campaign_operation_capabilities()` 是稳定的操作目录，列出 `Available`、`NotImplemented` 和 `Deferred` 三种状态及其 Mapping/原因。购买节点可以按 `tree_id + instance_number + requirement_code` 定位；稀疏存档缺少将购买的节点时，Operation 会克隆同一文档中的模板行并改写行标识。SaveAdapter 再检查映射路径、字段类型、before-value 和 DSON 回读。
 
-### 4.2 尚未接通 Application 写回的游戏已验证行为
+### 4.2 暂缓与未验证能力
 
-这些行为的测试存档已通过游戏，但仍缺纵切片的 Operation、Mapping 和适配器校验。Registry 不会因为已有游戏测试就宣称它们可安全提交：
+- 生存技能训练锁定仍为 `Deferred`：不要把它映射为取消装备技能。
+- 疾病增删仍为 `Deferred`：等待包含疾病记录的真实存档样本并完成游戏内验证。
+- 英雄名称、Stress、HP 等虽可在 Session 内修改，但没有对应游戏修改证据，不能安全提交。
 
-- 新增英雄、增加/替换怪癖、增加库存饰品；
-- 战斗技能等级、生存技能学会状态；
-- 武器/防具等级及其 `persist.upgrades.json` 购买节点联动；
-- 小镇建筑升级节点与后续节点锁定状态；
-- 小镇建筑系统的开放/锁定（系统开放还要根据有效 District 定义构造对象集合）；
-- 英雄装备栏增加饰品（需检查职业限制并保留条目模板）。
-
-英雄名称、Stress、HP 等仍能在 Session 中演练，但目前没有游戏修改证据，安全提交会拒绝。疾病操作与“锁定生存技能”继续暂缓；“取消装备生存技能”也必须作为独立操作接入，不能借用训练锁定 Mapping。
+其他已通过游戏验证的 Stage 11 行为，以及本轮接通的结构编辑和成长编辑，均已进入能力目录并使用同一个 SafeSaveCommitter 流程。本轮生成的 17 个测试档列在 Stage 12 清单中，包含目标说明、依赖关系和自动结构校验范围。
 
 ### 4.3 Operation 和提交接口
 
 - UI 调用 `CampaignEditSession::apply(operation, expected_revision)`，用 revision 避免基于过期界面状态提交。
 - `apply()` 的返回值用于展示本次操作；提交时读取 `session.pending_changes()`，它是相对本次 Session 初始模型合并后的净变更。连续修改同一字段会折叠成一条 before/after；Undo 到初始值会从净 ChangeSet 移除。
 - `SaveAdapter::build_candidate(profile, pending_changes)` 只接受 Registry 中有候选写入能力的映射。结构删除会在深拷贝后的 DSON AST 上执行，并在重新编码、解码后检查除了目标子树外的字段值和未知原始字段没有变化。
+- 集合编辑由带 operation ID、语义 Mapping、DSON 路径和类型的 `CampaignDocumentMutation` 表示；Operation 校验器和 SaveAdapter 都检查映射作用域与允许的变更类型。UI 不应自行拼接路径或直接构造这些变更，应由 Application 层命令/工厂根据稳定 ID 和当前模型生成 Operation。
 - `SafeSaveCommitter::commit()` 只接受带游戏内修改证据的映射；先检查源和目标副本未漂移，再生成并验证候选、备份整个目标 profile、原子写入目标副本并回读验证。源 profile 不会成为写入目标。
 - 结构变更的 Undo/Redo 作用于内存模型；Undo 后请从 `pending_changes()` 取得净 ChangeSet。不要把 Undo 的单步反向事件直接交给 SaveAdapter。
 
@@ -142,14 +148,12 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 
 ## 5. 建议的后续集成顺序
 
-依据后端指南的功能纵切片流程，下一步建议按下列顺序补齐尚未接通的能力：
+Stage 12 已完成写回纵切片。后续建议转向 UI/Application 命令服务和 Stage 13 总体资格测试：
 
-1. 将武器/防具与 `persist.upgrades.json` 节点、战斗技能和生存训练节点建成复合 Operation。
-2. 补怪癖与饰品的新增/替换/装备操作，以及内容来源和饰品职业限制校验。
-3. 补小镇建筑升级进度和后续购买节点状态。
-4. 通过有效内容环境构造小镇建筑系统开放状态，并接通反向锁定。
-5. 评估新英雄工厂；依照指南，在模板和跨文档状态充分验证前保持关闭。
-6. 生存技能取消装备可以单独排期；训练锁定和疾病编辑等样本/语义未验证项继续关闭。
+1. 为结构型操作提供正式 Application 工厂，使 UI 只传英雄 ID、内容 ID 和目标值，不接触 DSON 路径。
+2. 使用 Stage 12 测试档逐项完成游戏内回读验收并记录结果。
+3. 覆盖原版、DLC、缺失 Mod、大 roster、外部修改和备份恢复等 Stage 13 资格场景。
+4. 生存技能训练锁定和疾病编辑继续保持关闭，直到取得合适样本并完成单独验证。
 
 每项都先完成 Operation、Mapping、验证、Save Adapter 和自动回归，再接 UI；UI 负责展示语义、调用 Application 服务和呈现验证结果，不承载存档规则。
 
@@ -157,4 +161,5 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 
 - [后端技术设计与实施指南](<Darkest Dungeon 1 Sandbox Save Editor — Backend Technical Design and Implementation Guide.md>)：Operation、Mapping、Save Adapter、安全提交和 Stage 12 功能纵切片。
 - [v1.0 产品与技术设计](Darkest_Dungeon_1_Sandbox_Save_Editor_Development_Design_v1.0.md)：需求、领域语义与 UI 交互基线；技术栈部分以现行后端指南为准。
-- [本轮测试档及逐项检查说明](../test_save_profile/stage11_advanced_game_tests/README.md)：测试环境、候选英雄/内容 ID 和生成存档目录。
+- [Stage 11 已验证档及逐项记录](../test_save_profile/stage11_advanced_game_tests/README.md)。
+- [Stage 12 Operation 写回档与验收清单](../test_save_profile/stage12_operation_tests/README.md)：本轮 17 个独立测试档和 1 个对照档。
