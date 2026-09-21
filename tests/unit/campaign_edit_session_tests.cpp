@@ -140,35 +140,38 @@ TEST(CampaignEditSession, ApplyUndoAndRedoAreSymmetricAndRevisioned) {
     EXPECT_FALSE(session.can_redo());
 }
 
-TEST(CampaignEditSession, SetsVirtueAndAfflictionFieldsAsOneConsistentOperation) {
+TEST(CampaignEditSession, AfflictionStateAndStressValueAreSeparateEdits) {
     application::CampaignEditSession session{sample_model()};
     const auto direct_status_edit = session.apply(
         application::SetCampaignValueOperation{{"Hero.VirtueId", "hero-1"}, std::string{"stalwart"}},
         session.revision());
     EXPECT_FALSE(direct_status_edit);
-    const application::CampaignOperation operation = application::SetHeroStressConditionsOperation{{
-        {"hero-1", application::HeroStressCondition::Virtue, "stalwart"},
-        {"hero-2", application::HeroStressCondition::Affliction, "fearful"},
-    }};
-
-    const auto applied = session.apply(operation, session.revision());
+    const auto applied = session.apply(application::SetHeroAfflictionStateOperation{
+        "hero-2", application::HeroAfflictionState::Afflicted, "fearful"}, session.revision());
     ASSERT_TRUE(applied) << applied.error().message;
-    ASSERT_EQ(applied.value().changes.changes.size(), 5U);
-    EXPECT_EQ(session.model().heroes[0].stress.value, 0.0F);
-    EXPECT_EQ(session.model().heroes[0].virtue_id.value, "stalwart");
-    EXPECT_EQ(session.model().heroes[0].affliction_id.value, "");
-    EXPECT_EQ(session.model().heroes[0].affliction_severity.value, 0);
-    EXPECT_EQ(session.model().heroes[1].stress.value, 0.0F);
+    ASSERT_EQ(applied.value().changes.changes.size(), 2U);
+    EXPECT_EQ(session.model().heroes[1].stress.value, 8.0F);
     EXPECT_EQ(session.model().heroes[1].affliction_id.value, "fearful");
     EXPECT_EQ(session.model().heroes[1].affliction_severity.value, 1);
     EXPECT_EQ(session.model().heroes[1].virtue_id.value, "");
 
-    const auto undone = session.undo(session.revision());
-    ASSERT_TRUE(undone) << undone.error().message;
-    EXPECT_EQ(session.model().heroes[0].stress.value, 15.0F);
+    const auto stress_set = session.apply(
+        application::SetCampaignValueOperation{{"Hero.Stress", "hero-2"}, 100.0F}, session.revision());
+    ASSERT_TRUE(stress_set) << stress_set.error().message;
+    EXPECT_EQ(session.model().heroes[1].stress.value, 100.0F);
+    EXPECT_EQ(session.model().heroes[1].affliction_id.value, "fearful");
+
+    const auto stress_undone = session.undo(session.revision());
+    ASSERT_TRUE(stress_undone) << stress_undone.error().message;
     EXPECT_EQ(session.model().heroes[1].stress.value, 8.0F);
-    EXPECT_EQ(session.model().heroes[0].virtue_id.value, "");
+    EXPECT_EQ(session.model().heroes[1].affliction_id.value, "fearful");
+
+    const auto affliction_cleared = session.apply(application::SetHeroAfflictionStateOperation{
+        "hero-2", application::HeroAfflictionState::Normal, {}}, session.revision());
+    ASSERT_TRUE(affliction_cleared) << affliction_cleared.error().message;
     EXPECT_EQ(session.model().heroes[1].affliction_id.value, "");
+    EXPECT_EQ(session.model().heroes[1].affliction_severity.value, 0);
+    EXPECT_EQ(session.model().heroes[1].virtue_id.value, "");
 }
 
 TEST(CampaignEditSession, PendingChangeSetFoldsRepeatedEditsToTheSessionBaseline) {
@@ -403,17 +406,20 @@ TEST(CampaignEditSession, CapabilityCatalogEnablesVerifiedFeaturesAndKeepsDeferr
     const auto disease = find("campaign.hero.edit_disease");
     const auto add_hero = find("campaign.hero.add");
     const auto rename = find("campaign.hero.rename");
-    const auto stress_state = find("campaign.hero.set_stress_condition");
+    const auto set_stress = find("campaign.hero.set_stress");
+    const auto affliction_state = find("campaign.hero.set_affliction_state");
     ASSERT_NE(resource, catalog.end());
     ASSERT_NE(camping_lock, catalog.end());
     ASSERT_NE(disease, catalog.end());
     ASSERT_NE(add_hero, catalog.end());
     ASSERT_NE(rename, catalog.end());
-    ASSERT_NE(stress_state, catalog.end());
+    ASSERT_NE(set_stress, catalog.end());
+    ASSERT_NE(affliction_state, catalog.end());
     EXPECT_EQ(resource->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(camping_lock->availability, application::CampaignOperationAvailability::Deferred);
     EXPECT_EQ(disease->availability, application::CampaignOperationAvailability::Deferred);
     EXPECT_EQ(add_hero->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(rename->availability, application::CampaignOperationAvailability::Available);
-    EXPECT_EQ(stress_state->availability, application::CampaignOperationAvailability::Available);
+    EXPECT_EQ(set_stress->availability, application::CampaignOperationAvailability::Available);
+    EXPECT_EQ(affliction_state->availability, application::CampaignOperationAvailability::Available);
 }

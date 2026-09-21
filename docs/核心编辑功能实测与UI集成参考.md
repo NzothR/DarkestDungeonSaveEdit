@@ -1,6 +1,6 @@
 # 核心编辑功能实测与 UI 集成参考
 
-**状态：**Stage 12 已把此前通过游戏验证的核心操作接入 Operation、Mapping 与安全写回；负面怪癖删除后新增、英雄改名和美德/折磨状态写回已实现并生成待游戏验收存档。生存技能锁定和疾病增删暂缓。
+**状态：**Stage 12 已把此前通过游戏验证的核心操作接入 Operation、Mapping 与安全写回；负面怪癖删除后新增、英雄改名、压力数值和折磨状态写回已实现并生成待游戏验收存档。生存技能锁定和疾病增删暂缓。
 **记录日期：**2026-09-21  
 **测试环境：**`test_save_profile/profile_0`，存档内的 Mod 启用顺序为准。最近一轮扫描到 137 个已安装 Mod，其中 122 个启用；内容扫描诊断为 0。  
 **已验证记录：**[Stage 11 测试档说明](../test_save_profile/stage11_advanced_game_tests/README.md)；**Stage 12 待验收档：**[操作写回测试档说明](../test_save_profile/stage12_operation_tests/README.md)、[本轮补充测试说明](../test_save_profile/stage12_followup_tests/README.md)
@@ -101,7 +101,8 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 |---|---|---|
 | `SetCampaignValueOperation` / `Estate.Resource.Amount` | `persist.estate.json` 钱包金额 | 可写候选并可提交；游戏已验证 |
 | `SetCampaignValueOperation` / `Hero.ResolveXp` | 英雄内嵌 DSON 的 `resolveXp` | 可写候选并可提交；等级变化已验证，等级门槛由上层规则决定 |
-| `SetHeroStressConditionsOperation` | 压力值、美德 ID、折磨 ID 与严重度 | 可生成候选档；美德/折磨互斥字段由一个 Operation 原子更新，等待游戏内验收 |
+| `SetCampaignValueOperation` / `Hero.Stress` | 英雄压力值 | 可设置非负有限值；设为 0 即清空压力，候选写回待游戏内验收 |
+| `SetHeroAfflictionStateOperation` | 折磨 ID、严重度与任务内美德 ID | 只支持折磨和非折磨两种状态；设置/清除状态时清理冲突字段，候选写回待游戏内验收 |
 | `SetCampaignValueOperation` / `Hero.Name` | 英雄内嵌 DSON 的 `actor/name` | 可生成候选档；独立改名等待游戏内验收 |
 | `SetHeroQuirkLockedOperation` | 英雄怪癖 `is_locked` | 可写候选并可提交；Operation 会检查正面、非疾病、定义允许锁定 |
 | `RemoveHeroQuirkOperation` | 完整怪癖对象 | 可写候选并可提交；按 ID 精确移除完整子树 |
@@ -127,10 +128,10 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 
 - 生存技能训练锁定仍为 `Deferred`：不要把它映射为取消装备技能。
 - 疾病增删仍为 `Deferred`：等待包含疾病记录的真实存档样本并完成游戏内验证。
-- 英雄名称、Stress、美德 ID、折磨 ID 和折磨严重度可在 Session 中生成候选档，目前没有游戏修改证据。普通安全提交仍会拒绝这些候选映射；`AcceptanceTestCandidate` 只用于写入隔离测试副本，仍执行源副本指纹检查、完整备份和写后回读。
+- 英雄名称、压力值、折磨 ID 和折磨严重度可在 Session 中生成候选档，目前没有游戏修改证据。编辑器不直接设置任务内美德；设置/清除折磨时只会清空该字段，避免把美德作为营地状态保存。普通安全提交仍会拒绝这些候选映射；`AcceptanceTestCandidate` 只用于写入隔离测试副本，仍执行源副本指纹检查、完整备份和写后回读。
 - HP 和伤害等动态计算状态保持只读，不提供写入 Operation。
 
-其他已通过游戏验证的 Stage 11 行为，以及本轮接通的结构编辑和成长编辑，均已进入能力目录并使用同一个 SafeSaveCommitter 流程。本轮追加 3 个测试档：负面怪癖删除再新增、美德与折磨状态设置、名单首位英雄改名。
+其他已通过游戏验证的 Stage 11 行为，以及本轮接通的结构编辑和成长编辑，均已进入能力目录并使用同一个 SafeSaveCommitter 流程。本轮追加 3 个测试档：负面怪癖删除再新增、折磨状态与压力 100、名单首位英雄改名。
 
 ### 4.3 Operation 和提交接口
 

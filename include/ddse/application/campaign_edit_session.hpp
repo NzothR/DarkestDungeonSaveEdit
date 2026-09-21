@@ -44,16 +44,12 @@ struct SetHeroQuirkLockedOperation {
     bool locked{};
 };
 
-enum class HeroStressCondition { Virtue, Affliction };
+enum class HeroAfflictionState { Normal, Afflicted };
 
-struct HeroStressConditionEdit {
+struct SetHeroAfflictionStateOperation {
     std::string hero_id;
-    HeroStressCondition condition{HeroStressCondition::Virtue};
-    std::string condition_id;
-};
-
-struct SetHeroStressConditionsOperation {
-    std::vector<HeroStressConditionEdit> heroes;
+    HeroAfflictionState state{HeroAfflictionState::Normal};
+    std::string affliction_id;
 };
 
 struct SetDistrictBuiltOperation {
@@ -142,7 +138,7 @@ struct CampaignOperationCapabilityDescriptor {
 [[nodiscard]] const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_capabilities();
 
 using CampaignOperation = std::variant<SetCampaignValueOperation, CompositeCampaignOperation,
-                                       SetHeroQuirkLockedOperation, SetHeroStressConditionsOperation,
+                                       SetHeroQuirkLockedOperation, SetHeroAfflictionStateOperation,
                                        SetDistrictBuiltOperation,
                                        RemoveHeroQuirkOperation, UnequipHeroCampingSkillOperation,
                                        DestroyTrinketOperation, ApplyCampaignDocumentMutationsOperation>;

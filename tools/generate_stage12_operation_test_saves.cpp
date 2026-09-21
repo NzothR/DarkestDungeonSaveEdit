@@ -237,8 +237,8 @@ void append_quirk_defaults(const application::RawSaveProfile& profile,
     required("is_new", true);
     required("is_locked", false);
     for (const auto& [name, value] : std::vector<std::pair<std::string, application::CampaignValue>>{
-             {"trinketId", std::int32_t{-1}}, {"mission_count", std::int32_t{0}},
-             {"replaces_quirk", std::int32_t{-1}}, {"replaces_quirk_viewed", false},
+             {"trinketId", std::int32_t{0}}, {"mission_count", std::int32_t{0}},
+             {"replaces_quirk", std::int32_t{0}}, {"replaces_quirk_viewed", false},
              {"evolution_duration_remaining", std::int32_t{0}}}) {
         const auto source = source_root + "/" + name;
         if (find_display_field(*profile.documents.at("persist.roster.json").decoded, source)) {
@@ -420,12 +420,22 @@ std::vector<std::string> district_ids(const Options& options) {
 }
 
 struct Scenario {
+    Scenario(std::string scenario_directory, std::string scenario_title, std::string scenario_details,
+             std::filesystem::path source, application::CampaignOperation main_operation,
+             std::function<void(const application::RawSaveProfile&, const domain::CampaignModel&)> verifier,
+             std::vector<application::CampaignOperation> follow_ups = {})
+        : directory(std::move(scenario_directory)), title(std::move(scenario_title)),
+          details(std::move(scenario_details)), source_profile(std::move(source)),
+          operation(std::move(main_operation)), verify(std::move(verifier)),
+          follow_up_operations(std::move(follow_ups)) {}
+
     std::string directory;
     std::string title;
     std::string details;
     std::filesystem::path source_profile;
     application::CampaignOperation operation;
     std::function<void(const application::RawSaveProfile&, const domain::CampaignModel&)> verify;
+    std::vector<application::CampaignOperation> follow_up_operations;
 };
 
 std::string first_generated_trait_id(const std::filesystem::path& game_root,
@@ -447,47 +457,37 @@ std::string first_generated_trait_id(const std::filesystem::path& game_root,
     fail("No generated original-game trait is available for stress condition '" + std::string{condition_type} + "'");
 }
 
-Scenario make_stress_conditions_scenario(const domain::CampaignModel& model,
+Scenario make_affliction_and_stress_scenario(const domain::CampaignModel& model,
     const std::filesystem::path& game_root, const std::filesystem::path& source_path) {
-    std::vector<const domain::Hero*> eligible;
+    const domain::Hero* eligible = nullptr;
     for (const auto& hero : model.heroes) {
         if (hero.stress.value && hero.stress.raw && hero.affliction_id.value && hero.affliction_id.raw &&
             hero.affliction_severity.value && hero.affliction_severity.raw && hero.virtue_id.value && hero.virtue_id.raw)
-            eligible.push_back(&hero);
-        if (eligible.size() == 2) break;
+            eligible = &hero;
+        if (eligible) break;
     }
-    if (eligible.size() != 2) fail("Two heroes with all four serialized stress-state fields are required");
-    const auto virtue_id = first_generated_trait_id(game_root, "virtue");
+    if (!eligible) fail("A hero with serialized stress and affliction fields is required");
     const auto affliction_id = first_generated_trait_id(game_root, "affliction");
-    application::SetHeroStressConditionsOperation operation{{
-        {eligible[0]->persistent_id, application::HeroStressCondition::Virtue, virtue_id},
-        {eligible[1]->persistent_id, application::HeroStressCondition::Affliction, affliction_id},
-    }};
+    application::SetHeroAfflictionStateOperation operation{
+        eligible->persistent_id, application::HeroAfflictionState::Afflicted, affliction_id};
     std::ostringstream detail;
-    detail << "- 美德英雄：" << hero_label(*eligible[0]) << " → ID `" << virtue_id
-           << "`；压力值清零，折磨 ID/严重度清空。\n"
-           << "- 折磨英雄：" << hero_label(*eligible[1]) << " → ID `" << affliction_id
-           << "`；压力值清零，折磨严重度设为 1，美德 ID 清空。\n"
-           << "- 美德和折磨 ID 均从只读原版 `shared/trait/trait_library.json` 中选择。\n";
-    const auto virtue_hero = eligible[0]->persistent_id;
-    const auto affliction_hero = eligible[1]->persistent_id;
-    return {"02_set_virtue_and_affliction", "设置一名英雄为美德、另一名为折磨状态",
+    detail << "- 英雄：" << hero_label(*eligible) << "。\n"
+           << "- 状态：设置为原版折磨 ID `" << affliction_id << "`，严重度 1，美德 ID 清空。\n"
+           << "- 压力值：`" << *eligible->stress.value << "` → `100`。\n"
+           << "- 折磨 ID 从只读原版 `shared/trait/trait_library.json` 中选择。\n";
+    const auto hero_id = eligible->persistent_id;
+    return {"02_set_affliction_and_stress", "设置英雄为折磨并将压力改为 100",
         detail.str(), source_path, std::move(operation),
-        [virtue_hero, affliction_hero, virtue_id, affliction_id](const auto&, const auto& projected) {
-            const auto find_hero = [&](const std::string& id) {
-                return std::find_if(projected.heroes.begin(), projected.heroes.end(), [&](const auto& hero) {
-                    return hero.persistent_id == id;
-                });
-            };
-            const auto virtue = find_hero(virtue_hero);
-            const auto affliction = find_hero(affliction_hero);
-            if (virtue == projected.heroes.end() || affliction == projected.heroes.end() ||
-                virtue->stress.value != 0.0F || virtue->virtue_id.value != virtue_id ||
-                virtue->affliction_id.value != std::string{} || virtue->affliction_severity.value != 0 ||
-                affliction->stress.value != 0.0F || affliction->affliction_id.value != affliction_id ||
-                affliction->affliction_severity.value != 1 || affliction->virtue_id.value != std::string{})
-                fail("Stress condition did not re-project to the requested mutually exclusive state");
-        }};
+        [hero_id, affliction_id](const auto&, const auto& projected) {
+            const auto hero = std::find_if(projected.heroes.begin(), projected.heroes.end(), [&](const auto& item) {
+                return item.persistent_id == hero_id;
+            });
+            if (hero == projected.heroes.end() || hero->stress.value != 100.0F ||
+                hero->affliction_id.value != affliction_id || hero->affliction_severity.value != 1 ||
+                hero->virtue_id.value != std::string{})
+                fail("Affliction and stress values did not re-project to the requested state");
+        },
+        {application::SetCampaignValueOperation{{"Hero.Stress", hero_id}, 100.0F}}};
 }
 
 Scenario make_hero_name_scenario(const domain::CampaignModel& model,
@@ -543,6 +543,12 @@ GeneratedScenario write_scenario(const Scenario& scenario,
     application::CampaignEditSession session{model};
     auto applied = must(session.apply(scenario.operation, session.revision()), "Apply " + scenario.directory);
     if (!applied.validation.valid()) fail("Operation validation did not pass: " + scenario.directory);
+    for (const auto& follow_up : scenario.follow_up_operations) {
+        auto follow_up_result = must(session.apply(follow_up, session.revision()),
+                                     "Apply follow-up operation for " + scenario.directory);
+        if (!follow_up_result.validation.valid())
+            fail("Follow-up operation validation did not pass: " + scenario.directory);
+    }
     if (session.pending_changes().empty()) fail("Operation produced no writeback changes: " + scenario.directory);
 
     const auto scenario_root = output_root / scenario.directory;
@@ -649,9 +655,15 @@ Scenario make_replace_quirks_scenario(const application::RawSaveProfile& profile
         const auto new_positive = std::find_if(definitions.begin(), definitions.end(), [&](const auto& d) {
             return mod_quirk_definition(d, true) && !existing.contains(d.id) && d.id != old_negative->id;
         });
-        const auto new_negative = std::find_if(definitions.begin(), definitions.end(), [&](const auto& d) {
-            return mod_quirk_definition(d, false, false) && !existing.contains(d.id) && d.id != old_positive->id;
+        auto new_negative = std::find_if(definitions.begin(), definitions.end(), [&](const auto& d) {
+            return d.id == "ablutomania" && mod_quirk_definition(d, false, false) &&
+                   !existing.contains(d.id) && d.id != old_positive->id;
         });
+        if (new_negative == definitions.end()) {
+            new_negative = std::find_if(definitions.begin(), definitions.end(), [&](const auto& d) {
+                return mod_quirk_definition(d, false, false) && !existing.contains(d.id) && d.id != old_positive->id;
+            });
+        }
         if (new_positive == definitions.end() || new_negative == definitions.end()) continue;
         std::vector<application::CampaignDocumentMutation> mutations;
         const auto positive_path = old_positive->raw.display_path;
@@ -674,7 +686,7 @@ Scenario make_replace_quirks_scenario(const application::RawSaveProfile& profile
                << mod_name(scan, new_positive->provenance.source_id) << "**。\n"
                << "- 负面：删除 `" << quirk_name(*old_negative) << "` (`" << old_negative->id << "`) 后，在同一名单位置新增 **"
                << localized_name(environment, *new_negative) << "** (`" << new_negative->id << "`)，mod **"
-               << mod_name(scan, new_negative->provenance.source_id) << "**。\n";
+               << mod_name(scan, new_negative->provenance.source_id) << "**；新记录 `replaces_quirk=0`，不应显示替换标记。\n";
         const auto hero_id = hero.persistent_id;
         const auto positive_id = new_positive->id, negative_id = new_negative->id;
         const auto removed_negative_id = old_negative->id;
@@ -694,6 +706,12 @@ Scenario make_replace_quirks_scenario(const application::RawSaveProfile& profile
                         return quirk.id == removed_negative_id;
                     }) || negative_index >= found->quirks.size() || found->quirks[negative_index].id != negative_id)
                     fail("Negative quirk replacement did not delete the old record and insert the new one at its original ordered position");
+                const auto negative = std::find_if(found->quirks.begin(), found->quirks.end(), [&](const auto& quirk) {
+                    return quirk.id == negative_id;
+                });
+                if (negative == found->quirks.end() || negative->replaces_quirk.value != 0 ||
+                    negative->trinket_id.value != 0)
+                    fail("New negative quirk retained replacement or trinket metadata instead of neutral defaults");
             }};
     }
     fail("No early hero has replaceable positive/negative quirks and unused mod replacements");
@@ -1285,7 +1303,7 @@ void run(const Options& incoming) {
     add_case(make_close_district_system_scenario(open_profile, open_path));
     } else {
         add_case(make_replace_quirks_scenario(source_profile, model, quirks, environment, mod_scan, options.source));
-        add_case(make_stress_conditions_scenario(model, options.game, options.source));
+        add_case(make_affliction_and_stress_scenario(model, options.game, options.source));
         add_case(make_hero_name_scenario(model, options.source));
     }
 
