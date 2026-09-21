@@ -59,6 +59,14 @@ add_library(ddse_core STATIC
 add_library(ddse::core ALIAS ddse_core)
 ddse_set_project_defaults(ddse_core)
 
+# Semantic types are header-only and have no application or adapter dependencies.
+add_library(ddse_domain INTERFACE)
+add_library(ddse::domain ALIAS ddse_domain)
+target_compile_features(ddse_domain INTERFACE cxx_std_20)
+target_include_directories(ddse_domain INTERFACE
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>)
+
 # Application may depend on core contracts, but never on concrete adapters.
 add_library(ddse_application STATIC
     src/application/application_info.cpp
@@ -67,10 +75,11 @@ add_library(ddse_application STATIC
     src/application/content_scanner.cpp
     src/application/mod_environment.cpp
     src/application/campaign_mappings.cpp
+    src/application/campaign_model_builder.cpp
 )
 add_library(ddse::application ALIAS ddse_application)
 ddse_set_project_defaults(ddse_application)
-target_link_libraries(ddse_application PUBLIC ddse_core)
+target_link_libraries(ddse_application PUBLIC ddse_core ddse_domain)
 target_link_libraries(ddse_application PRIVATE nlohmann_json::nlohmann_json)
 
 # Adapters depend inward; application must never link this target.

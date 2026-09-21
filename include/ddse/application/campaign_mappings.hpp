@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,7 +31,28 @@ struct CampaignResourceValue {
     std::string raw_object_path;
 };
 
+struct CampaignResourceObservation {
+    std::size_t wallet_index{};
+    std::optional<std::string> id;
+    std::optional<std::int32_t> amount;
+    std::string raw_object_path;
+};
+
+struct CampaignMappingIssue {
+    std::string path;
+    std::string message;
+};
+
+struct CampaignResourceScan {
+    bool wallet_found{};
+    std::vector<CampaignResourceObservation> entries;
+    std::vector<CampaignMappingIssue> issues;
+};
+
 [[nodiscard]] const std::vector<CampaignMappingDescriptor>& stage7_resource_mappings();
+[[nodiscard]] const std::vector<CampaignMappingDescriptor>& stage8_campaign_mappings();
+
+[[nodiscard]] CampaignResourceScan scan_campaign_resources(const core::dson::DsonDocument& estate_document);
 
 [[nodiscard]] core::Result<std::vector<CampaignResourceValue>, core::Error>
 read_campaign_resources(const core::dson::DsonDocument& estate_document);
