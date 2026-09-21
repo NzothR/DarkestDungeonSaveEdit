@@ -53,6 +53,7 @@ add_library(ddse_core STATIC
     src/core/version.cpp
     src/core/error.cpp
     src/core/dson/dson_document.cpp
+    src/core/dson/dson_document_editor.cpp
     src/core/dson/dson_reader.cpp
     src/core/dson/dson_writer.cpp
 )
@@ -112,6 +113,14 @@ if(DDSE_BUILD_CLI)
     if(WIN32)
         target_link_libraries(ddse_cli PRIVATE shell32)
     endif()
+endif()
+
+add_executable(ddse_generate_game_test_saves tools/generate_game_test_saves.cpp)
+target_link_libraries(ddse_generate_game_test_saves PRIVATE
+    ddse_application ddse_infrastructure nlohmann_json::nlohmann_json
+    ddse_project_options ddse_project_warnings)
+if(WIN32)
+    target_link_libraries(ddse_generate_game_test_saves PRIVATE shell32)
 endif()
 
 if(BUILD_TESTING)

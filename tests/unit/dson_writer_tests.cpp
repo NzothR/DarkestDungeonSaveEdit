@@ -1,4 +1,5 @@
 #include "ddse/core/dson/dson_reader.hpp"
+#include "ddse/core/dson/dson_document_editor.hpp"
 #include "ddse/core/dson/dson_writer.hpp"
 
 #include <gtest/gtest.h>
@@ -181,4 +182,98 @@ TEST(DsonWriter, DirtyValueTypeMismatchFailsBeforeProducingBytes) {
     const auto failed = writer.encode(document.value());
     ASSERT_FALSE(failed);
     EXPECT_EQ(failed.error().code, ddse::core::ErrorCode::DsonEncodeFailed);
+}
+
+TEST(DsonWriter, ClonesAndRenamesAnObjectSubtreeThenRoundTripsIt) {
+    const std::filesystem::path sample = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.estate.json";
+    if (!std::filesystem::exists(sample)) GTEST_SKIP() << "Optional local save sample is not present";
+    DsonReader reader;
+    DsonWriter writer;
+    const auto source_bytes = read_bytes(sample);
+    auto document = reader.parse(source_bytes, sample.filename().string());
+    ASSERT_TRUE(document) << document.error().message;
+    const auto original_field_count = document.value().fields.size();
+    const auto appended = DsonDocumentEditor::append_clone(document.value(), "base_root/trinkets/items",
+        document.value(), "base_root/trinkets/items/0", "127");
+    ASSERT_TRUE(appended) << appended.error().message;
+
+    const auto cloned_id = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/trinkets/items/127/id";
+    });
+    ASSERT_NE(cloned_id, document.value().fields.end());
+    cloned_id->replace_value(std::string{"ddse_structure_test_trinket"});
+    const auto cloned_amount = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/trinkets/items/127/amount";
+    });
+    ASSERT_NE(cloned_amount, document.value().fields.end());
+    cloned_amount->replace_value(std::int32_t{1});
+    EXPECT_EQ(source_bytes, read_bytes(sample));
+    const auto added_field_count = document.value().fields.size() - original_field_count;
+
+    auto encoded = writer.encode(document.value());
+    ASSERT_TRUE(encoded) << encoded.error().message;
+    auto reparsed = reader.parse(encoded.value(), "structural-round-trip.dson");
+    ASSERT_TRUE(reparsed) << reparsed.error().message;
+    EXPECT_EQ(reparsed.value().fields.size(), original_field_count + added_field_count);
+    const auto id = std::find_if(reparsed.value().fields.begin(), reparsed.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/trinkets/items/127/id";
+    });
+    ASSERT_NE(id, reparsed.value().fields.end());
+    EXPECT_EQ(std::get<std::string>(id->value), "ddse_structure_test_trinket");
+    EXPECT_NE(encoded.value(), source_bytes);
+}
+
+TEST(DsonWriter, ClonesRosterHeroWithIndependentEmbeddedDocument) {
+    const std::filesystem::path sample = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.roster.json";
+    if (!std::filesystem::exists(sample)) GTEST_SKIP() << "Optional local save sample is not present";
+    DsonReader reader;
+    DsonWriter writer;
+    auto document = reader.parse(read_bytes(sample), sample.filename().string());
+    ASSERT_TRUE(document) << document.error().message;
+    const auto source_hero = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
+        return field.path.starts_with("base_root/heroes/") && field.kind == ValueKind::Object &&
+               field.path.find('/', std::string_view{"base_root/heroes/"}.size()) == std::string::npos;
+    });
+    ASSERT_NE(source_hero, document.value().fields.end());
+    const auto source_hero_path = source_hero->path;
+    const auto source_embedded = std::find_if(document.value().fields.begin(), document.value().fields.end(), [&](const auto& field) {
+        return field.path == source_hero_path + "/hero_file_data/raw_data" && field.embedded_document;
+    });
+    ASSERT_NE(source_embedded, document.value().fields.end());
+    const auto original_name = std::find_if(source_embedded->embedded_document->fields.begin(),
+        source_embedded->embedded_document->fields.end(), [](const auto& field) {
+            return field.path == "base_root/actor/name";
+        });
+    ASSERT_NE(original_name, source_embedded->embedded_document->fields.end());
+    const auto original_name_value = std::get<std::string>(original_name->value);
+
+    const auto appended = DsonDocumentEditor::append_clone(document.value(), "base_root/heroes",
+        document.value(), source_hero_path, "999999");
+    ASSERT_TRUE(appended) << appended.error().message;
+    const auto copied_embedded = std::find_if(document.value().fields.begin(), document.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/heroes/999999/hero_file_data/raw_data" && field.embedded_document;
+    });
+    ASSERT_NE(copied_embedded, document.value().fields.end());
+    auto copied_name = std::find_if(copied_embedded->embedded_document->fields.begin(),
+        copied_embedded->embedded_document->fields.end(), [](const auto& field) {
+            return field.path == "base_root/actor/name";
+        });
+    ASSERT_NE(copied_name, copied_embedded->embedded_document->fields.end());
+    copied_name->replace_value(std::string{"DDSE Stage10 Hero"});
+    EXPECT_EQ(std::get<std::string>(original_name->value), original_name_value);
+
+    auto encoded = writer.encode(document.value());
+    ASSERT_TRUE(encoded) << encoded.error().message;
+    auto reparsed = reader.parse(encoded.value(), "hero-clone-round-trip.dson");
+    ASSERT_TRUE(reparsed) << reparsed.error().message;
+    const auto parsed_copy = std::find_if(reparsed.value().fields.begin(), reparsed.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/heroes/999999/hero_file_data/raw_data" && field.embedded_document;
+    });
+    ASSERT_NE(parsed_copy, reparsed.value().fields.end());
+    const auto parsed_name = std::find_if(parsed_copy->embedded_document->fields.begin(),
+        parsed_copy->embedded_document->fields.end(), [](const auto& field) {
+            return field.path == "base_root/actor/name";
+        });
+    ASSERT_NE(parsed_name, parsed_copy->embedded_document->fields.end());
+    EXPECT_EQ(std::get<std::string>(parsed_name->value), "DDSE Stage10 Hero");
 }

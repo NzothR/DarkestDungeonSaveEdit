@@ -100,6 +100,8 @@ struct DsonDocument {
     std::vector<std::byte> original_bytes;
     std::string source_name;
     std::vector<std::size_t> root_fields;
+    // Set by DsonDocumentEditor when fields or object keys are added, renamed, or removed.
+    bool structural_dirty{};
 };
 
 struct StructureSummary {
