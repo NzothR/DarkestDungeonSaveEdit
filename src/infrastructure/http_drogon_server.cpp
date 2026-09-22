@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -466,6 +467,51 @@ void handle_mod_cover(const drogon::HttpRequestPtr& request,
     callback(response);
 }
 
+void handle_game_asset(const drogon::HttpRequestPtr& request,
+                       std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                       const std::shared_ptr<ServerContext>& context) {
+    if (!has_expected_host(request, *context) || !has_expected_origin(request, *context) ||
+        !has_session_cookie(request, *context)) {
+        callback(forbidden_response("LOCAL_SESSION_REQUIRED", "Open the editor page before calling the local API."));
+        return;
+    }
+    const auto requested = request->getParameter("path");
+    const std::filesystem::path relative{requested};
+    if (requested.empty() || relative.is_absolute() ||
+        std::any_of(relative.begin(), relative.end(), [](const auto& component) {
+            return component == "..";
+        })) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_GAME_ASSET", "The requested game asset path is invalid."));
+        return;
+    }
+    const auto root = context->configuration_store.current().game_root;
+    const auto asset = root / relative;
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(asset, error)) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    std::ifstream input(asset, std::ios::binary);
+    if (!input) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    const std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setBody(bytes);
+    auto extension = asset.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (extension == ".png") response->setContentTypeCode(drogon::CT_IMAGE_PNG);
+    else if (extension == ".jpg" || extension == ".jpeg") response->setContentTypeCode(drogon::CT_IMAGE_JPG);
+    else if (extension == ".webp") response->setContentTypeCode(drogon::CT_IMAGE_WEBP);
+    else if (extension == ".svg") response->setContentTypeString("image/svg+xml");
+    else response->setContentTypeString("application/octet-stream");
+    response->addHeader("Cache-Control", "no-store");
+    callback(response);
+}
+
 void handle_directory_picker(const drogon::HttpRequestPtr& request,
                              std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                              const std::shared_ptr<ServerContext>& context) {
@@ -715,6 +761,11 @@ int run_drogon_http_server(
         "/api/database/mod-cover", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_mod_cover(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/game-asset", [context](const drogon::HttpRequestPtr& request,
+                                       std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_game_asset(request, std::move(callback), context);
         }, {drogon::Get});
     server.registerHandler(
         "/api/initialization", [context](const drogon::HttpRequestPtr& request,

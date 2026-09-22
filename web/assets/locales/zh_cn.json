@@ -45,7 +45,7 @@
   "initialization.modTime": "Mod 环境耗时",
   "initialization.totalTime": "总耗时",
   "initialization.milliseconds": "{value} ms",
-  "initialization.continue": "完成，查看 Mod 列表",
+  "initialization.continue": "完成初始化",
   "initialization.runningButton": "数据库初始化中…",
   "recovery.title": "发现上次未完成的编辑",
   "recovery.restore": "恢复上次编辑",
@@ -63,4 +63,21 @@
   "errors.GATEWAY_REQUEST_FAILED": "本机服务请求失败。",
   "errors.DIRECTORY_PICKER_CANCELLED": "已取消目录选择。",
   "errors.DATABASE_NOT_READY": "数据库仍在初始化，请稍候。"
+  ,"town.estateName": "庄园"
+  ,"town.title": "小镇"
+  ,"town.preview": "F2 主界面预览"
+  ,"town.previewOnly": "仅界面预览"
+  ,"town.stageCoach": "马车"
+  ,"town.guild": "公会"
+  ,"town.blacksmith": "铁匠铺"
+  ,"town.abbey": "修道院"
+  ,"town.tavern": "酒馆"
+  ,"town.sanitarium": "疗养院"
+  ,"town.nomadWagon": "游牧商人车"
+  ,"town.roster": "英雄名单"
+  ,"town.heroPlaceholder": "英雄名单"
+  ,"town.trinketChest": "饰品箱"
+  ,"town.notConnected": "F2 暂未接通数据"
+  ,"town.statusReady": "初始化完成 · 小镇界面已就绪"
+  ,"town.background": "小镇背景"
 }

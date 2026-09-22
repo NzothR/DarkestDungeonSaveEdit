@@ -76,6 +76,46 @@
         </div>
       </section>
 
+      <section id="town-shell" class="town-shell" hidden aria-label="Town editor">
+        <div class="town-stage">
+          <div class="town-art-layer">
+            <img id="town-background" class="town-background" alt="">
+            <div class="missing-art town-background-fallback" data-missing-art="town.background" hidden></div>
+          </div>
+          <header class="town-resource-bar">
+            <div class="town-estate"><span class="town-mark">DD</span><span data-i18n="town.estateName">Estate</span></div>
+            <div class="town-resources">
+              <span class="resource"><b>Gold</b><strong>12,450</strong></span>
+              <span class="resource"><b>Heirlooms</b><strong>186</strong></span>
+              <span class="resource"><b>Portraits</b><strong>42</strong></span>
+              <span class="resource"><b>Deeds</b><strong>73</strong></span>
+              <span class="resource"><b>Crests</b><strong>91</strong></span>
+            </div>
+          </header>
+          <div class="town-title"><span data-i18n="town.title">Hamlet</span><small data-i18n="town.preview">F2 visual preview</small></div>
+          <div class="town-hotspots" aria-label="Town buildings">
+            <div class="town-building" style="--x: 17%; --y: 42%;" data-building="stage_coach"><img alt=""><span data-i18n="town.stageCoach">Stage Coach</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 34%; --y: 56%;" data-building="guild"><img alt=""><span data-i18n="town.guild">Guild</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 51%; --y: 60%;" data-building="blacksmith"><img alt=""><span data-i18n="town.blacksmith">Blacksmith</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 68%; --y: 45%;" data-building="abbey"><img alt=""><span data-i18n="town.abbey">Abbey</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 83%; --y: 59%;" data-building="tavern"><img alt=""><span data-i18n="town.tavern">Tavern</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 79%; --y: 27%;" data-building="sanitarium"><img alt=""><span data-i18n="town.sanitarium">Sanitarium</span><small data-i18n="town.previewOnly">Preview only</small></div>
+            <div class="town-building" style="--x: 52%; --y: 23%;" data-building="nomad_wagon"><img alt=""><span data-i18n="town.nomadWagon">Nomad Wagon</span><small data-i18n="town.previewOnly">Preview only</small></div>
+          </div>
+          <aside class="town-roster-panel">
+            <h2 data-i18n="town.roster">Roster</h2>
+            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
+            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
+          </aside>
+          <aside class="town-trinket-panel">
+            <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
+            <div class="chest-grid"><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span></div>
+            <small data-i18n="town.notConnected">Not connected in F2</small>
+          </aside>
+          <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span class="town-save-state" data-i18n="town.previewOnly">Preview only</span></footer>
+        </div>
+      </section>
+
       <p id="connection-error" class="error" role="alert" hidden></p>
       <p class="footnote" data-i18n="app.footnote"></p>
     </main>

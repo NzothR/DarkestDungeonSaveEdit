@@ -92,6 +92,10 @@
 根据数据库记录的 Mod 根目录读取固定文件 `preview_icon.png`（同时兼容已有的 `preview.*`、`cover.*` 和
 `mod_preview.*` 文件名），图标路径不写入数据库，仅用于列表展示；不存在封面时返回 404。
 
+### `GET /api/game-asset?path=...`
+
+从已配置游戏目录读取只读美术资源。路径必须是游戏目录内的相对路径，禁止绝对路径和 `..` 穿越；首版小镇界面使用该接口读取背景和建筑图片，资源不存在时由前端显示占位图。
+
 ## 浏览器 Gateway
 
 `web/assets/gateway.js` 是唯一页面 API 入口。调用方接收状态 DTO 或 `GatewayError`，不直接使用 `fetch`，也不访问服务端实现细节。

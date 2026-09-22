@@ -207,12 +207,13 @@ if(DDSE_BUILD_HTTP)
     if(WIN32)
         target_link_libraries(ddse_http PRIVATE shell32 ole32 ws2_32)
     endif()
-    add_custom_command(TARGET ddse_http POST_BUILD
+    add_custom_target(ddse_web_assets
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${PROJECT_SOURCE_DIR}/web"
             "$<TARGET_FILE_DIR:ddse_http>/web"
         COMMENT "Copying local editor frontend"
     )
+    add_dependencies(ddse_http ddse_web_assets)
 endif()
 
 add_executable(ddse_generate_game_test_saves tools/generate_game_test_saves.cpp)

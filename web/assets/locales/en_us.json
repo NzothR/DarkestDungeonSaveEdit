@@ -45,7 +45,7 @@
   "initialization.modTime": "Mod environment time",
   "initialization.totalTime": "Total time",
   "initialization.milliseconds": "{value} ms",
-  "initialization.continue": "Done, view Mod list",
+  "initialization.continue": "Finish initialization",
   "initialization.runningButton": "Initializing database…",
   "recovery.title": "An unfinished edit was found",
   "recovery.restore": "Restore previous edit",
@@ -63,4 +63,21 @@
   "errors.GATEWAY_REQUEST_FAILED": "The local service request failed.",
   "errors.DIRECTORY_PICKER_CANCELLED": "Directory selection was cancelled.",
   "errors.DATABASE_NOT_READY": "The database is still initializing. Please wait."
+  ,"town.estateName": "Estate"
+  ,"town.title": "Hamlet"
+  ,"town.preview": "F2 town shell preview"
+  ,"town.previewOnly": "Visual preview only"
+  ,"town.stageCoach": "Stage Coach"
+  ,"town.guild": "Guild"
+  ,"town.blacksmith": "Blacksmith"
+  ,"town.abbey": "Abbey"
+  ,"town.tavern": "Tavern"
+  ,"town.sanitarium": "Sanitarium"
+  ,"town.nomadWagon": "Nomad Wagon"
+  ,"town.roster": "Roster"
+  ,"town.heroPlaceholder": "Hero roster"
+  ,"town.trinketChest": "Trinket Chest"
+  ,"town.notConnected": "Data connection is deferred in F2"
+  ,"town.statusReady": "Initialization complete · Town shell ready"
+  ,"town.background": "Town background"
 }

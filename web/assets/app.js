@@ -38,6 +38,9 @@ const elements = {
   initializationModTime: document.querySelector("#initialization-mod-time"),
   initializationTotalTime: document.querySelector("#initialization-total-time"),
   databaseModsCard: document.querySelector("#database-mods-card"),
+  townShell: document.querySelector("#town-shell"),
+  townBackground: document.querySelector("#town-background"),
+  townBackgroundFallback: document.querySelector(".town-background-fallback"),
 };
 
 let locale = "zh_cn";
@@ -67,6 +70,48 @@ async function setLocale(nextLocale) {
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-aria]").forEach((node) => { node.setAttribute("aria-label", t(node.dataset.i18nAria)); });
   for (const option of elements.language.options) option.textContent = t(`language.${option.value}`);
+}
+
+function showTownShell() {
+  elements.panel.hidden = true;
+  elements.townShell.hidden = false;
+  const candidates = [
+    "panels/town/town.png",
+    "panels/town/estate.png",
+    "campaign/town/town.png",
+  ];
+  let index = 0;
+  const tryNext = () => {
+    if (index >= candidates.length) {
+      elements.townBackground.hidden = true;
+      elements.townBackgroundFallback.hidden = false;
+      return;
+    }
+    elements.townBackground.hidden = false;
+    elements.townBackgroundFallback.hidden = true;
+    elements.townBackground.src = `/api/game-asset?path=${encodeURIComponent(candidates[index++])}`;
+  };
+  elements.townBackground.onerror = tryNext;
+  tryNext();
+  for (const building of document.querySelectorAll(".town-building")) {
+    const id = building.dataset.building;
+    const image = building.querySelector("img");
+    const candidates = [
+      `panels/town/buildings/${id}.png`,
+      `campaign/town/buildings/${id}.png`,
+    ];
+    let index = 0;
+    const tryNext = () => {
+      if (index >= candidates.length) {
+        image.hidden = true;
+        return;
+      }
+      image.hidden = false;
+      image.src = `/api/game-asset?path=${encodeURIComponent(candidates[index++])}`;
+    };
+    image.onerror = tryNext;
+    tryNext();
+  }
 }
 
 function showConfiguration(config) {
@@ -192,9 +237,7 @@ async function loadConfiguration() {
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (elements.configurationSubmit.dataset.mode === "complete") {
-    elements.initializationCard.hidden = true;
-    elements.databaseModsCard.hidden = false;
-    await loadProfiles();
+    showTownShell();
     return;
   }
   elements.configurationSubmit.disabled = true;
