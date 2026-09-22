@@ -115,6 +115,25 @@ function(ddse_set_project_defaults target)
         $<INSTALL_INTERFACE:include>)
 endfunction()
 
+# CLion's Windows toolchain uses MinGW.  Keep its runtime beside every
+# executable so launching from Explorer and running CTest do not depend on a
+# separately configured PATH (and do not produce missing-DLL dialogs).
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    get_filename_component(_DDSE_MINGW_RUNTIME_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    function(ddse_copy_mingw_runtime target)
+        foreach(_runtime IN ITEMS libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_DDSE_MINGW_RUNTIME_DIR}/${_runtime}"
+                    "$<TARGET_FILE_DIR:${target}>/${_runtime}"
+                VERBATIM)
+        endforeach()
+    endfunction()
+else()
+    function(ddse_copy_mingw_runtime target)
+    endfunction()
+endif()
+
 # Core contains no platform I/O, SQLite or HTTP dependencies.
 add_library(ddse_core STATIC
     src/core/version.cpp
@@ -184,6 +203,7 @@ if(DDSE_BUILD_CLI)
     if(WIN32)
         target_link_libraries(ddse_cli PRIVATE shell32)
     endif()
+    ddse_copy_mingw_runtime(ddse_cli)
 endif()
 
 if(DDSE_BUILD_HTTP)
@@ -214,6 +234,7 @@ if(DDSE_BUILD_HTTP)
         COMMENT "Copying local editor frontend"
     )
     add_dependencies(ddse_http ddse_web_assets)
+    ddse_copy_mingw_runtime(ddse_http)
 endif()
 
 add_executable(ddse_generate_game_test_saves tools/generate_game_test_saves.cpp)
@@ -223,6 +244,7 @@ target_link_libraries(ddse_generate_game_test_saves PRIVATE
 if(WIN32)
     target_link_libraries(ddse_generate_game_test_saves PRIVATE shell32)
 endif()
+ddse_copy_mingw_runtime(ddse_generate_game_test_saves)
 
 add_executable(ddse_generate_advanced_game_test_saves tools/generate_advanced_game_test_saves.cpp)
 target_link_libraries(ddse_generate_advanced_game_test_saves PRIVATE
@@ -231,6 +253,7 @@ target_link_libraries(ddse_generate_advanced_game_test_saves PRIVATE
 if(WIN32)
     target_link_libraries(ddse_generate_advanced_game_test_saves PRIVATE shell32)
 endif()
+ddse_copy_mingw_runtime(ddse_generate_advanced_game_test_saves)
 
 add_executable(ddse_generate_stage12_operation_test_saves tools/generate_stage12_operation_test_saves.cpp)
 target_link_libraries(ddse_generate_stage12_operation_test_saves PRIVATE
@@ -239,6 +262,7 @@ target_link_libraries(ddse_generate_stage12_operation_test_saves PRIVATE
 if(WIN32)
     target_link_libraries(ddse_generate_stage12_operation_test_saves PRIVATE shell32)
 endif()
+ddse_copy_mingw_runtime(ddse_generate_stage12_operation_test_saves)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)

@@ -170,6 +170,14 @@ function assetUrl(asset) {
 function cleanGameText(value) {
   return String(value ?? "")
     .replace(/\[[^\]]*\]|\{[^{}]*\}/g, "")
+    // Compiled .loc2 localization stores colour markup as
+    // <c>XXXXXXtext</c>; the prefix is a game colour code.
+    .replace(/<c>([\s\S]*?)<\/c>/gi, (_, content) => {
+      let prefix = 0;
+      while (prefix < content.length && prefix < 6 && content.charCodeAt(prefix) < 0x80) prefix += 1;
+      return content.slice(prefix);
+    })
+    .replace(/<\/?c>/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }

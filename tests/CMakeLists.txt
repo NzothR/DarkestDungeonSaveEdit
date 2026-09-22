@@ -47,6 +47,7 @@ target_compile_definitions(ddse_tests PRIVATE
     DDSE_TEST_SAVE_PROFILE_DIR="${PROJECT_SOURCE_DIR}/test_save_profile/profile_0"
     DDSE_TEST_SAVE_BACKUP_DIR="${PROJECT_SOURCE_DIR}/test_save_profile/backup/profile_0"
 )
+ddse_copy_mingw_runtime(ddse_tests)
 
 include(GoogleTest)
 gtest_discover_tests(ddse_tests

@@ -354,6 +354,28 @@ std::string strip_game_markup(std::string value) {
         value.erase(opening, closing - opening + 1);
         start = opening;
     }
+
+    // Compiled .loc2 tables encode colour markup as <c>XXXXXXtext</c>.
+    // The six-character prefix is a game colour code, not part of the
+    // localized label.  Some codes use only five ASCII characters before a
+    // UTF-8 label starts, so stop at the first non-ASCII byte as well.
+    std::size_t tag_start = 0;
+    while ((tag_start = value.find("<c>", tag_start)) != std::string::npos) {
+        const auto tag_end = value.find("</c>", tag_start + 3);
+        if (tag_end == std::string::npos) {
+            value.erase(tag_start, 3);
+            break;
+        }
+        auto content = value.substr(tag_start + 3, tag_end - (tag_start + 3));
+        std::size_t prefix = 0;
+        while (prefix < content.size() && prefix < 6 &&
+               static_cast<unsigned char>(content[prefix]) < 0x80) {
+            ++prefix;
+        }
+        content.erase(0, prefix);
+        value.replace(tag_start, tag_end + 4 - tag_start, content);
+        tag_start += content.size();
+    }
     return value;
 }
 
