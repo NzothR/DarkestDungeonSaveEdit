@@ -93,15 +93,20 @@
             </div>
           </header>
           <div class="town-title"><span data-i18n="town.title">Hamlet</span><small data-i18n="town.preview">F2 visual preview</small></div>
-          <div class="town-hotspots" aria-label="Town buildings">
-            <div class="town-building" style="--x: 17%; --y: 42%;" data-building="stage_coach"><img alt=""><span data-i18n="town.stageCoach">Stage Coach</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 34%; --y: 56%;" data-building="guild"><img alt=""><span data-i18n="town.guild">Guild</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 51%; --y: 60%;" data-building="blacksmith"><img alt=""><span data-i18n="town.blacksmith">Blacksmith</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 68%; --y: 45%;" data-building="abbey"><img alt=""><span data-i18n="town.abbey">Abbey</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 83%; --y: 59%;" data-building="tavern"><img alt=""><span data-i18n="town.tavern">Tavern</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 79%; --y: 27%;" data-building="sanitarium"><img alt=""><span data-i18n="town.sanitarium">Sanitarium</span><small data-i18n="town.previewOnly">Preview only</small></div>
-            <div class="town-building" style="--x: 52%; --y: 23%;" data-building="nomad_wagon"><img alt=""><span data-i18n="town.nomadWagon">Nomad Wagon</span><small data-i18n="town.previewOnly">Preview only</small></div>
-          </div>
+          <aside class="town-building-panel">
+            <div class="town-panel-heading"><h2 data-i18n="town.buildings">建筑</h2><small data-i18n="town.previewOnly">仅界面预览</small></div>
+            <div class="building-list">
+              <div class="building-row"><span data-i18n="town.survivalist">生存大师</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.stageCoach">马车</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.tavern">酒馆</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.sanitarium">疗养院</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.abbey">教堂</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.graveyard">墓园</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.nomadWagon">游牧民货车</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.guild">工会</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.blacksmith">铁匠铺</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+            </div>
+          </aside>
           <aside class="town-roster-panel">
             <h2 data-i18n="town.roster">Roster</h2>
             <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
@@ -114,8 +119,19 @@
           </aside>
           <aside class="town-trinket-panel">
             <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
-            <div class="chest-grid"><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span></div>
+            <div class="chest-grid"><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span></div>
             <small data-i18n="town.notConnected">Not connected in F2</small>
+          </aside>
+          <aside class="town-resource-panel">
+            <h2 data-i18n="town.resources">资源</h2>
+            <div class="resource-grid">
+              <span class="resource"><b data-i18n="town.gold">金币</b><strong>12,450</strong></span>
+              <span class="resource"><b data-i18n="town.heirlooms">雕像</b><strong>186</strong></span>
+              <span class="resource"><b data-i18n="town.portraits">画像</b><strong>42</strong></span>
+              <span class="resource"><b data-i18n="town.deeds">地契</b><strong>73</strong></span>
+              <span class="resource"><b data-i18n="town.crests">纹章</b><strong>91</strong></span>
+              <span class="resource"><b data-i18n="town.crystalline">星晶</b><strong>—</strong></span>
+            </div>
           </aside>
           <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span class="town-save-state" data-i18n="town.previewOnly">Preview only</span></footer>
         </div>

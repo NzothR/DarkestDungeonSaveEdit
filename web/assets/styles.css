@@ -117,15 +117,15 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-art-layer, .town-background, .town-background-fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
 .town-background { z-index: 0; object-fit: cover; opacity: 1; }
 .town-background-fallback { z-index: 0; display: grid; place-items: center; background: repeating-linear-gradient(135deg, #211b16 0 12px, #2a2119 12px 24px); }
-.town-resource-bar { position: absolute; z-index: 5; top: 0; left: 0; right: 0; height: 8.5%; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 2.2%; border-bottom: 1px solid #c59a5366; background: linear-gradient(#161310ee, #161310aa); box-shadow: 0 5px 20px #0008; }
+.town-resource-bar { position: absolute; z-index: 5; top: 0; left: 0; right: 0; height: 8.5%; display: flex; align-items: center; justify-content: flex-start; gap: 16px; padding: 0 2.2%; border-bottom: 1px solid #c59a5366; background: linear-gradient(#161310ee, #161310aa); box-shadow: 0 5px 20px #0008; }
 .town-estate { display: flex; align-items: center; gap: 10px; font: 600 clamp(14px, 1.5vw, 24px) Georgia, serif; color: #d7ae69; }
 .town-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #c59a53; transform: rotate(45deg); font: 600 10px Arial; }
 .town-mark::first-line { transform: rotate(-45deg); }
-.town-resources { display: flex; gap: clamp(8px, 1.5vw, 30px); }
+.town-resources { display: none; }
 .resource { display: grid; gap: 2px; min-width: 54px; text-align: right; }
 .resource b { color: #a99b85; font-size: clamp(9px, .75vw, 13px); font-weight: 500; }
 .resource strong { color: #f0d49a; font-size: clamp(12px, 1.1vw, 18px); font-variant-numeric: tabular-nums; }
-.town-title { position: absolute; z-index: 4; top: 11%; left: 3%; display: grid; gap: 3px; color: #e6c17b; font: 500 clamp(18px, 2.3vw, 34px) Georgia, serif; text-shadow: 0 2px 4px #000; }
+.town-title { position: absolute; z-index: 4; top: 11%; left: 25%; display: grid; gap: 3px; color: #e6c17b; font: 500 clamp(18px, 2.3vw, 34px) Georgia, serif; text-shadow: 0 2px 4px #000; }
 .town-title small { color: #c2b29a; font: 11px "Segoe UI", sans-serif; letter-spacing: .12em; text-transform: uppercase; }
 .town-hotspots { position: absolute; z-index: 3; inset: 8.5% 0 11%; }
 .town-building { position: absolute; left: var(--x); top: var(--y); width: clamp(88px, 8.5vw, 170px); min-height: 86px; transform: translate(-50%, -50%); display: none; justify-items: center; align-content: center; gap: 3px; padding: 8px; border: 1px solid #d5ab6966; background: #17130fcc; box-shadow: 0 7px 16px #0008, inset 0 0 18px #d09f3b12; text-align: center; }
@@ -133,20 +133,32 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-building img { width: clamp(28px, 3.4vw, 64px); height: clamp(28px, 3.4vw, 64px); object-fit: contain; }
 .town-building > span { color: #f0d8aa; font: 600 clamp(11px, .9vw, 16px) Georgia, serif; text-shadow: 0 1px 3px #000; }
 .town-building small { color: #aa9c87; font-size: clamp(8px, .65vw, 11px); }
-.town-roster-panel, .town-trinket-panel { position: absolute; z-index: 6; padding: 13px; border: 1px solid #c59a5366; background: #151210e8; box-shadow: 0 8px 20px #0009; }
-.town-roster-panel { top: 12%; right: 1.5%; bottom: 10%; width: 18%; overflow: hidden; }
-.town-trinket-panel { right: 20%; bottom: 0; width: 42%; min-height: 9%; display: flex; align-items: center; gap: 15px; }
-.town-roster-panel h2, .town-trinket-panel h2 { margin: 0 0 10px; color: #e1bc7a; font: 500 clamp(14px, 1.2vw, 22px) Georgia, serif; }
+.town-building-panel, .town-roster-panel, .town-trinket-panel, .town-resource-panel { position: absolute; z-index: 6; padding: 13px; border: 1px solid #c59a5366; background: #151210e8; box-shadow: 0 8px 20px #0009; }
+.town-building-panel { top: 17%; left: 1.5%; bottom: 10%; width: 22%; overflow: hidden; }
+.town-roster-panel { top: 12%; right: 1.5%; bottom: 10%; width: 20%; overflow: hidden; }
+.town-trinket-panel { top: 24%; right: 23%; bottom: 14%; left: 25%; overflow: hidden; }
+.town-resource-panel { right: auto; bottom: 7.5%; left: 1.5%; width: 22%; min-height: 10%; }
+.town-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border-bottom: 1px solid #ffffff14; }
+.town-panel-heading small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
+.town-roster-panel h2, .town-trinket-panel h2, .town-resource-panel h2, .town-building-panel h2 { margin: 0 0 10px; color: #e1bc7a; font: 500 clamp(14px, 1.2vw, 22px) Georgia, serif; }
+.building-list { overflow: auto; }
+.building-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 38px; padding: 5px 0; border-bottom: 1px solid #ffffff14; }
+.building-row > span { overflow: hidden; color: #e4d5bc; font-size: clamp(9px, .8vw, 14px); text-overflow: ellipsis; white-space: nowrap; }
+.building-row strong { color: #c7aa76; font-size: clamp(9px, .7vw, 12px); font-weight: 500; }
+.building-row button { width: 22px; height: 22px; padding: 0; color: #d4c5ad; border: 1px solid #6b5237; background: #100e0c; line-height: 1; }
+.building-row button:disabled { opacity: .7; }
 .roster-placeholder { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-top: 1px solid #ffffff14; }
 .roster-placeholder div { display: grid; gap: 3px; }
 .roster-placeholder b { color: #e4d5bc; font-size: clamp(10px, .85vw, 14px); }
-.roster-placeholder small, .town-trinket-panel > small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
+.roster-placeholder small, .town-trinket-panel > small, .town-resource-panel > small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
 .missing-art { position: relative; display: inline-grid; place-items: center; border: 1px solid #d0d0d099; background: #f6f4ee; color: #332d26; }
 .missing-art::after { content: "缺失资源"; font-size: 9px; text-align: center; }
 .town-background-fallback::after { content: "缺失资源 · town.background"; color: #eee4d2; font-size: 14px; }
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
-.chest-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 0; }
+.chest-grid { display: grid; grid-template-columns: repeat(4, minmax(34px, 1fr)); gap: 10px; margin: 18px auto; max-width: 560px; }
+.resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
+.resource-grid .resource { min-width: 0; text-align: left; }
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }
 .town-save-state { margin-left: auto; color: #b89a68; }
@@ -158,6 +170,9 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
   .town-stage { min-height: 100vh; aspect-ratio: auto; }
   .town-resource-bar { height: auto; min-height: 76px; align-items: flex-start; padding: 12px; flex-direction: column; }
   .town-resources { width: 100%; justify-content: space-between; }
-  .town-title { top: 14%; }
-  .town-roster-panel, .town-trinket-panel { width: 30%; bottom: 8%; padding: 7px; }
+  .town-title { top: 14%; left: 3%; }
+  .town-building-panel { top: 22%; width: 30%; bottom: 9%; padding: 7px; }
+  .town-roster-panel { width: 30%; bottom: 8%; padding: 7px; }
+  .town-trinket-panel { top: 23%; right: 32%; bottom: 18%; left: 32%; padding: 7px; }
+  .town-resource-panel { width: 30%; padding: 7px; }
 }
