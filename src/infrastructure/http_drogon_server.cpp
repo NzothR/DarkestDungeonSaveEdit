@@ -656,6 +656,7 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         return;
     }
     auto configuration = context->configuration_store.current();
+    const auto previous_save_roots = configuration.save_roots;
     const auto read_path = [&](const char* key, std::filesystem::path& target) {
         if ((*body).isMember(key) && (*body)[key].isString()) target = (*body)[key].asString();
     };
@@ -690,7 +691,7 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
         return;
     }
-    context->invalidate_campaign();
+    if (configuration.save_roots != previous_save_roots) context->invalidate_campaign();
     context->initialization.start(context->configuration_store.current());
     callback(json_ok(configuration_value(context->configuration_store.current())));
 }

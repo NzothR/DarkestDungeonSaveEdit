@@ -56,6 +56,8 @@ const elements = {
 let locale = "zh_cn";
 let strings = {};
 let latestCampaign = null;
+let currentConfiguration = null;
+let settingsMode = false;
 
 function t(key, variables = {}) {
   let value = strings[key] ?? key;
@@ -84,6 +86,7 @@ async function setLocale(nextLocale) {
 }
 
 function showTownShell() {
+  settingsMode = false;
   elements.panel.hidden = true;
   elements.townShell.hidden = false;
   const candidates = [
@@ -280,6 +283,7 @@ async function loadCampaign() {
 }
 
 function showConfiguration(config) {
+  currentConfiguration = config;
   elements.gameRoot.value = config.gameRoot ?? "";
   elements.saveRoots.value = config.saveRoots?.[0] ?? "";
   elements.workshopRoots.value = config.workshopRoots?.[0] ?? "";
@@ -333,15 +337,17 @@ function formatMilliseconds(value) {
   return value == null ? "—" : t("initialization.milliseconds", { value });
 }
 
-async function loadInitialization() {
+async function loadInitialization({ preserveSettingsButton = settingsMode, showTownOnReuse = !settingsMode } = {}) {
   let state = await editorGateway.getInitialization();
   elements.initializationCard.hidden = false;
   elements.reinitializeMods.hidden = true;
   while (state.status === "running" || state.status === "queued") {
-    elements.configurationSubmit.disabled = true;
+    if (!preserveSettingsButton) {
+      elements.configurationSubmit.disabled = true;
+      elements.configurationSubmit.dataset.mode = "running";
+      elements.configurationSubmit.textContent = t("initialization.runningButton");
+    }
     elements.reinitializeMods.disabled = true;
-    elements.configurationSubmit.dataset.mode = "running";
-    elements.configurationSubmit.textContent = t("initialization.runningButton");
     elements.initializationWork.textContent = state.currentWork || t("initialization.working");
     elements.initializationProgress.style.width = `${state.progressPercent ?? 0}%`;
     elements.initializationMessage.textContent = t("initialization.progress", { percent: state.progressPercent ?? 0 });
@@ -355,12 +361,18 @@ async function loadInitialization() {
   elements.initializationTotalTime.textContent = formatMilliseconds(state.totalElapsedMs);
   if (state.status === "completed") {
     elements.initializationMessage.textContent = t("initialization.completed", { count: state.enabledMods ?? 0 });
-    elements.configurationSubmit.disabled = false;
-    elements.configurationSubmit.dataset.mode = "complete";
-    elements.configurationSubmit.textContent = t("initialization.continue");
+    if (preserveSettingsButton) {
+      elements.configurationSubmit.disabled = false;
+      elements.configurationSubmit.dataset.mode = "save";
+      elements.configurationSubmit.textContent = t("settings.save");
+    } else {
+      elements.configurationSubmit.disabled = false;
+      elements.configurationSubmit.dataset.mode = "complete";
+      elements.configurationSubmit.textContent = t("initialization.continue");
+    }
     elements.reinitializeMods.hidden = false;
     elements.reinitializeMods.disabled = false;
-    if (state.reusedExisting) showTownShell();
+    if (state.reusedExisting && showTownOnReuse) showTownShell();
   } else if (state.status === "failed") {
     elements.initializationMessage.textContent = [...(state.diagnostics ?? []), t("initialization.failed")].join(" ");
     elements.configurationSubmit.disabled = false;
@@ -368,6 +380,7 @@ async function loadInitialization() {
     elements.configurationSubmit.textContent = t("settings.save");
     elements.reinitializeMods.hidden = true;
   }
+  return state;
 }
 
 async function loadConfiguration() {
@@ -411,6 +424,11 @@ elements.form.addEventListener("submit", async (event) => {
     showTownShell();
     return;
   }
+  const previousSaveRoot = currentConfiguration?.saveRoots?.[0] ?? "";
+  const nextSaveRoot = elements.saveRoots.value.trim();
+  const saveRootChanged = previousSaveRoot !== nextSaveRoot;
+  if (settingsMode && saveRootChanged && latestCampaign?.dirty &&
+      !window.confirm(t("settings.profileChangeDiscardDraft"))) return;
   elements.configurationSubmit.disabled = true;
   elements.configurationMessage.textContent = t("settings.saving");
   try {
@@ -428,7 +446,12 @@ elements.form.addEventListener("submit", async (event) => {
     showConfiguration(configuration);
     await setLocale(configuration.language);
     elements.configurationMessage.textContent = t("settings.saved");
-    await loadInitialization();
+    if (settingsMode && saveRootChanged) {
+      const state = await loadInitialization({ preserveSettingsButton: true, showTownOnReuse: false });
+      if (state.status === "completed") showTownShell();
+    } else if (!settingsMode) {
+      await loadInitialization();
+    }
   } catch (error) {
     elements.configurationSubmit.disabled = false;
     elements.configurationSubmit.dataset.mode = "save";
@@ -450,8 +473,12 @@ elements.reinitializeMods.addEventListener("click", async () => {
   }
 });
 elements.townSettingsButton.addEventListener("click", () => {
+  settingsMode = true;
   elements.townShell.hidden = true;
   elements.panel.hidden = false;
+  elements.configurationSubmit.disabled = false;
+  elements.configurationSubmit.dataset.mode = "save";
+  elements.configurationSubmit.textContent = t("settings.save");
 });
 elements.townUndo.addEventListener("click", async () => {
   if (!latestCampaign?.canUndo) return;
