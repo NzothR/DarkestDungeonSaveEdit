@@ -11,6 +11,16 @@ The C++20 backend includes DSON round-trip support, save profile discovery, Vani
 
 The local Mod scanner can use Workshop roots, additional local roots (the game manager's `modes` directory in the current setup), a save profile, and an optional manager JSON export. The frontend environment flow will use Mod order recorded by the save, per the current frontend baseline.
 
+## Standalone UI layout editor
+
+The first F2 town shell uses a separate layout editor so prepared artwork and its placement do not need to be hard-coded into the frontend. See [docs/ui-layout-editor.md](docs/ui-layout-editor.md):
+
+```powershell
+python tools/ui_layout_editor.py --assets-dir .\ui-art-assets --output .\config\town-layout.json
+```
+
+The editor scans the artwork directory, handles fixed background and bottom-bar associations, allows ordinary components to be dragged and resized, and saves association IDs plus 1920×1080 geometry as JSON.
+
 ## Requirements
 
 - CMake >= 3.20, a C++20 compiler, and the SQLite3 development package (header + library).

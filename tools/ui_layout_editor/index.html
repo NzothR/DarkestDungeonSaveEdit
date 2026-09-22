@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DDSE UI Layout Editor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="top-bar">
+      <div>
+        <h1>UI 美术布局编辑器</h1>
+        <p id="asset-summary">正在读取美术资源…</p>
+      </div>
+      <div class="top-actions">
+        <button id="add-component" class="primary" type="button">添加组件</button>
+        <button id="refresh-assets" type="button">刷新资源</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="canvas-panel">
+        <div class="canvas-frame">
+          <div id="canvas" class="layout-canvas" aria-label="1920 x 1080 布局画布"></div>
+        </div>
+        <p class="canvas-help">画布使用 1920×1080 坐标。普通组件可拖动和按比例缩放；右键已放置的组件可重新编辑。</p>
+      </section>
+      <aside class="component-panel">
+        <h2>已调用的美术资源</h2>
+        <p id="component-empty" class="muted">还没有放置组件。</p>
+        <ul id="component-list" class="component-list"></ul>
+      </aside>
+    </main>
+
+    <footer class="bottom-bar">
+      <span id="editor-status" class="status">就绪</span>
+      <div>
+        <button id="finish-editing" class="primary" type="button" hidden>编辑完成</button>
+        <button id="save-layout" class="primary" type="button">保存</button>
+      </div>
+    </footer>
+  </div>
+
+  <dialog id="asset-dialog" class="dialog asset-dialog">
+    <form method="dialog" class="dialog-header">
+      <div>
+        <h2>选择美术资源</h2>
+        <p>资源来自启动编辑器时指定的美术资源目录。</p>
+      </div>
+      <button value="cancel" class="icon-button" aria-label="关闭">×</button>
+    </form>
+    <label class="search-box">
+      <span>搜索</span>
+      <input id="asset-search" type="search" placeholder="按文件名或路径搜索">
+    </label>
+    <div id="asset-list" class="asset-list"></div>
+    <p id="asset-empty" class="muted" hidden>没有找到图片资源。把处理好的图片放入美术资源目录后点击刷新。</p>
+  </dialog>
+
+  <dialog id="association-dialog" class="dialog association-dialog">
+    <form id="association-form">
+      <div class="dialog-header">
+        <div>
+          <h2>设置资源关联</h2>
+          <p id="selected-asset-label">—</p>
+        </div>
+        <button id="cancel-association" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="association-preview-wrap">
+        <img id="selected-asset-preview" alt="资源预览">
+      </div>
+      <label>已有预设关联
+        <select id="association-select">
+          <option value="">选择一个预设关联</option>
+        </select>
+      </label>
+      <button id="new-association" class="secondary" type="button">新增关联</button>
+      <div id="new-association-fields" class="new-association-fields" hidden>
+        <label>名称（用于编辑器显示）
+          <input id="association-name" type="text" maxlength="80" autocomplete="off">
+        </label>
+        <label>ID（保存后供代码调用）
+          <input id="association-id" type="text" maxlength="80" pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
+        </label>
+        <p class="hint">ID 必须符合变量名规则：以英文或下划线开头，只能包含英文、数字和下划线。</p>
+      </div>
+      <p id="association-error" class="form-error" hidden></p>
+      <div class="dialog-actions">
+        <button id="cancel-association-bottom" type="button">取消</button>
+        <button class="primary" type="submit">放置组件</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="save-dialog" class="dialog save-dialog">
+    <form id="save-form">
+      <div class="dialog-header">
+        <div>
+          <h2>保存布局</h2>
+          <p>文件会保存到启动编辑器时指定的输出目录。</p>
+        </div>
+        <button id="cancel-save" class="icon-button" type="button" aria-label="关闭">×</button>
+      </div>
+      <label>文件名
+        <input id="save-filename" type="text" maxlength="120" autocomplete="off" placeholder="town-layout.json">
+      </label>
+      <p class="hint save-hint">只填写文件名，不要填写目录。未填写 .json 扩展名时会自动补上。</p>
+      <p id="save-error" class="form-error" hidden></p>
+      <div class="dialog-actions">
+        <button id="cancel-save-bottom" type="button">取消</button>
+        <button class="primary" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/editor.js"></script>
+</body>
+</html>
