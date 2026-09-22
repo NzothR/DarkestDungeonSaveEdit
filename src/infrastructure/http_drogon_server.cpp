@@ -1,6 +1,7 @@
 #include "ddse/infrastructure/http_drogon_server.hpp"
 
 #include "ddse/application/save_profile.hpp"
+#include "ddse/application/save_commit.hpp"
 #include "ddse/application/campaign_model_builder.hpp"
 #include "ddse/application/campaign_edit_session.hpp"
 #include "ddse/application/mod_environment.hpp"
@@ -491,6 +492,82 @@ void handle_campaign_resource(const drogon::HttpRequestPtr& request,
         return;
     }
     callback(json_ok(campaign_value(*context->campaign)));
+}
+
+std::string save_path_component(std::string value) {
+    for (auto& character : value) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (!(std::isalnum(byte) || character == '_' || character == '-')) character = '_';
+    }
+    return value.empty() ? "profile" : value;
+}
+
+std::filesystem::path commit_backup_directory(const application::AppConfiguration& configuration,
+                                               std::string_view profile_id) {
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto directory = save_path_component(std::string{profile_id}) + "-" + std::to_string(now);
+    return configuration.backup_root / "SaveBackups" / directory;
+}
+
+void handle_campaign_save(const drogon::HttpRequestPtr& request,
+                          std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                          const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    const auto& changes = context->campaign->edits->pending_changes();
+    if (changes.empty()) {
+        callback(json_error(drogon::k400BadRequest, "VALIDATION_FAILED", "There are no unsaved changes."));
+        return;
+    }
+    const auto& configuration = context->configuration_store.current();
+    if (configuration.backup_root.empty()) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION",
+                            "A backup directory must be configured before saving."));
+        return;
+    }
+
+    const auto backup_directory = commit_backup_directory(configuration,
+                                                           context->campaign->profile.descriptor.id);
+    auto committed = application::SafeSaveCommitter{context->file_system}.commit(
+        context->campaign->profile, changes, context->campaign->profile.descriptor.root_path,
+        backup_directory, application::SaveCommitMode::DirectSource);
+    if (!committed) {
+        const auto status = committed.error().code == core::ErrorCode::ConcurrentSaveChanged
+            ? drogon::k409Conflict
+            : (committed.error().code == core::ErrorCode::ValidationFailed ||
+               committed.error().code == core::ErrorCode::MappingNotWritable
+                ? drogon::k400BadRequest : drogon::k500InternalServerError);
+        callback(json_error(status, std::string{core::to_string(committed.error().code)},
+                            committed.error().message));
+        return;
+    }
+
+    auto reloaded = application::SaveProfileDiscovery{context->file_system}.load(
+        context->campaign->profile.descriptor.root_path);
+    if (!reloaded) {
+        context->campaign.reset();
+        callback(json_error(drogon::k500InternalServerError, "COMMIT_READBACK_FAILED",
+                            "The profile was written, but the committed profile could not be reopened."));
+        return;
+    }
+    context->campaign->profile = std::move(reloaded.value());
+    context->campaign->edits->mark_committed();
+
+    Json::Value value(Json::objectValue);
+    value["backupDirectory"] = committed.value().backup_directory.string();
+    Json::Value documents(Json::arrayValue);
+    for (const auto& document : committed.value().committed_documents) documents.append(document);
+    value["committedDocuments"] = std::move(documents);
+    value["campaign"] = campaign_value(*context->campaign);
+    callback(json_ok(std::move(value)));
 }
 
 void handle_campaign_history(const drogon::HttpRequestPtr& request,
@@ -1129,6 +1206,11 @@ int run_drogon_http_server(
         "/api/campaign/resource", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign_resource(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/save", [context](const drogon::HttpRequestPtr& request,
+                                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_save(request, std::move(callback), context);
         }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/undo", [context](const drogon::HttpRequestPtr& request,

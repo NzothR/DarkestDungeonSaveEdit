@@ -42,9 +42,14 @@ enum class SaveCommitMode {
     // Used only to create isolated acceptance-test profiles for candidate mappings.
     // It still requires a byte-identical source copy, backup and post-write validation.
     AcceptanceTestCandidate,
+    // Used by the editor's explicit Save action. The selected source profile
+    // is backed up first, then updated in place with the same verification
+    // and read-back checks.
+    DirectSource,
 };
 
-// Commits only to an explicitly supplied profile copy. The loaded source profile remains untouched.
+// Commits to an explicitly supplied target. Normal modes require an isolated
+// profile copy; DirectSource is reserved for the UI's backup-first save path.
 class SafeSaveCommitter {
 public:
     explicit SafeSaveCommitter(IFileSystem& file_system) : file_system_(file_system) {}

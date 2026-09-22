@@ -266,6 +266,10 @@ public:
     [[nodiscard]] core::Result<CampaignEditResult, core::Error>
     redo(std::uint64_t expected_revision);
 
+    // Establish the current working model as the new disk baseline after a
+    // successful commit while retaining the model for continued editing.
+    void mark_committed() noexcept;
+
 private:
     struct HistoryRecord {
         std::string label;

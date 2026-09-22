@@ -271,6 +271,7 @@ function renderCampaign(campaign) {
   elements.townRedo.disabled = !campaign.canRedo;
   elements.townSave.disabled = !campaign.dirty;
   elements.townSaveState.textContent = campaign.dirty ? t("town.unsaved") : t("town.clean");
+  elements.townSaveState.title = "";
 }
 
 async function loadCampaign() {
@@ -464,8 +465,19 @@ elements.townRedo.addEventListener("click", async () => {
   try { renderCampaign(await editorGateway.redoCampaign(latestCampaign.revision)); }
   catch (error) { elements.townSaveState.textContent = displayError(error); }
 });
-elements.townSave.addEventListener("click", () => {
-  elements.townSaveState.textContent = t("town.saveDeferred");
+elements.townSave.addEventListener("click", async () => {
+  if (!latestCampaign?.dirty) return;
+  elements.townSave.disabled = true;
+  elements.townSaveState.textContent = t("town.saveWorking");
+  try {
+    const result = await editorGateway.saveCampaign();
+    renderCampaign(result.campaign);
+    elements.townSaveState.textContent = t("town.saveComplete");
+    elements.townSaveState.title = result.backupDirectory || "";
+  } catch (error) {
+    elements.townSave.disabled = !latestCampaign?.dirty;
+    elements.townSaveState.textContent = displayError(error);
+  }
 });
 elements.language.addEventListener("change", async () => {
   await setLocale(elements.language.value);

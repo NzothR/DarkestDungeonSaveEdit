@@ -1136,7 +1136,8 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
         return core::Result<SaveCommitResult, core::Error>::failure(
             {core::ErrorCode::InvalidConfiguration, "Source, target copy, and backup paths are required",
              "SafeSaveCommitter"});
-    if (same_path_or_parent(source_root, target_profile_root) ||
+    const bool direct_source = mode == SaveCommitMode::DirectSource;
+    if ((!direct_source && same_path_or_parent(source_root, target_profile_root)) ||
         same_path_or_parent(source_root, backup_directory) ||
         same_path_or_parent(target_profile_root, backup_directory))
         return core::Result<SaveCommitResult, core::Error>::failure(
@@ -1145,6 +1146,11 @@ SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet&
              "SafeSaveCommitter", {{"source_profile", source_root.string()},
                                    {"target_profile", target_profile_root.string()},
                                    {"backup_directory", backup_directory.string()}}});
+
+    if (direct_source && source_root.lexically_normal() != target_profile_root.lexically_normal())
+        return core::Result<SaveCommitResult, core::Error>::failure(
+            {core::ErrorCode::InvalidConfiguration,
+             "Direct source commits must target the loaded source profile", "SafeSaveCommitter"});
 
     for (const auto& change : changes.changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);

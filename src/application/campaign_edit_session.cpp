@@ -1234,6 +1234,12 @@ make_set_town_upgrade_rank_operation(const domain::CampaignModel& model, std::st
 CampaignEditSession::CampaignEditSession(CampaignModel initial_model)
     : working_model_(std::move(initial_model)) {}
 
+void CampaignEditSession::mark_committed() noexcept {
+    pending_changes_ = {};
+    undo_stack_.clear();
+    redo_stack_.clear();
+}
+
 core::Result<CampaignEditResult, core::Error>
 CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t expected_revision) {
     if (expected_revision != revision_)

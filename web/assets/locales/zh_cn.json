@@ -109,5 +109,6 @@
   ,"town.save": "保存"
   ,"town.clean": "未修改"
   ,"town.unsaved": "有未保存修改"
-  ,"town.saveDeferred": "保存写回将在下一阶段接入"
+  ,"town.saveWorking": "正在备份并写回存档…"
+  ,"town.saveComplete": "保存成功，原存档已完成备份"
 }

@@ -1138,7 +1138,7 @@ Validate structure + semantic projection
     ↓
 Recheck external file fingerprints
     ↓
-Create complete profile backup
+Create complete profile backup of the selected source profile
     ↓
 Write temporary files
     ↓
@@ -1202,6 +1202,11 @@ backupRoot/AutoEditSave/
 - 固定替换顺序并记录 journal；
 - 任一步失败均报告 Partial Commit，不伪装成功；
 - 提供基于备份的一键恢复。
+
+当前资源编辑纵切片的显式 Save 使用 `SaveCommitMode::DirectSource`：目标就是用户选择的 Profile，
+但必须先在独立的 `backupRoot/SaveBackups/<profile>-<timestamp>/` 创建并校验完整备份，之后才允许替换原存档文件。
+候选生成、映射校验、外部 fingerprint 检查、临时文件替换和写后回读仍与隔离副本提交共用同一事务流程。
+测试和验收副本继续使用 `GameVerifiedOnly`/`AcceptanceTestCandidate` 的独立目标路径，不能绕过备份直接写入。
 
 ## 16.4 写后失败
 
@@ -1765,7 +1770,8 @@ Stage 9 实现了只作用于内存语义模型的资源与英雄标量字段操
 
 ### 为什么现在做
 
-此前所有阶段都可在内存中失败；本阶段首次把候选字节写入磁盘。Stage 10 的提交目标必须是与源 profile 完全一致的独立副本，不能直接写入用户的源存档。真实游戏存档写入仍须等待后续受控游戏测试，并由 Mapping 单独记录写入证据。
+此前所有阶段都可在内存中失败；本阶段首次把候选字节写入磁盘。默认测试提交仍使用与源 profile 完全一致的独立副本，
+而当前资源编辑验证已增加显式的 `DirectSource` 模式：完整备份成功后直接写回用户选定的源 Profile，供玩家在游戏中验证资源修改结果。
 
 ### 测试与预期结果
 
@@ -1778,7 +1784,7 @@ Stage 9 实现了只作用于内存语义模型的资源与英雄标量字段操
 
 ### Definition of Done
 
-- [x] 所有写入均经过事务，且只写入调用方明确提供的独立 profile 副本
+- [x] 隔离测试写入只写入调用方明确提供的独立 profile 副本；资源验证写入必须先完成完整备份
 - [x] 完整 profile backup 可恢复；包含子目录、未知文件和空目录，并以 fingerprint 校验
 - [x] candidate 在写盘前全部生成并验证
 - [x] read-back validation 存在
@@ -1808,7 +1814,7 @@ initialize
 → inspect hero
 → apply operation
 → preview changes
-→ commit to copy
+→ commit to selected target (direct source or isolated copy)
 → reopen and verify
 ```
 

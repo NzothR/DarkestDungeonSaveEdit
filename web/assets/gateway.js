@@ -58,6 +58,7 @@ export const editorGateway = Object.freeze({
   discardRecovery: () => request("/api/recovery", "POST", {}),
   getCampaign: () => request("/api/campaign"),
   setCampaignResource: (index, amount, revision) => request("/api/campaign/resource", "POST", { index, amount, revision }),
+  saveCampaign: () => request("/api/campaign/save", "POST", {}),
   undoCampaign: (revision) => request("/api/campaign/undo", "POST", { revision }),
   redoCampaign: (revision) => request("/api/campaign/redo", "POST", { revision }),
 });

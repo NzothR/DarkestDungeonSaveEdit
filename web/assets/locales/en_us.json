@@ -109,5 +109,6 @@
   ,"town.save": "Save"
   ,"town.clean": "No changes"
   ,"town.unsaved": "Unsaved changes"
-  ,"town.saveDeferred": "Disk save will be connected in the next stage"
+  ,"town.saveWorking": "Backing up and saving the profile…"
+  ,"town.saveComplete": "Saved successfully; the original profile was backed up"
 }

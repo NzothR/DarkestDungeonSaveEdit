@@ -362,7 +362,7 @@ Edit in Session
   → Show receipt, backup ID and new baseline
 ```
 
-资源、英雄、建筑等编辑按钮绝不等同于 Save。保存界面应展示目标 Profile、受影响文档、变更摘要、错误和警告、备份位置/ID以及当前是否存在未解决诊断。
+资源、英雄、建筑等编辑按钮绝不等同于 Save。保存界面应展示目标 Profile、受影响文档、变更摘要、错误和警告、备份位置/ID以及当前是否存在未解决诊断。当前资源编辑纵切片的 Save 已接通直接写回选定 Profile：后端先在独立备份目录创建并校验完整 Profile 备份，再执行受映射保护的写回、DSON 回读和语义校验；任何校验或备份失败都不会标记 Session 为已保存。
 
 Commit 只能调用 Application 的 Preview/Commit 用例。UI 不拼路径、不写临时文件、不自行创建备份。安全提交失败或部分提交时，展示后端诊断和恢复入口，不隐藏错误，也不将 Session 标为已保存。
 
