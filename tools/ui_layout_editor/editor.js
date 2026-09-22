@@ -1,5 +1,5 @@
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
+const PREVIEW_CANVAS_WIDTH = 1920;
+const PREVIEW_CANVAS_HEIGHT = 1080;
 const ID_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const PRESETS = [
@@ -31,6 +31,7 @@ const PRESETS = [
 
 const elements = {
   canvas: document.querySelector("#canvas"),
+  canvasFrame: document.querySelector(".canvas-frame"),
   assetSummary: document.querySelector("#asset-summary"),
   componentEmpty: document.querySelector("#component-empty"),
   componentList: document.querySelector("#component-list"),
@@ -56,6 +57,7 @@ const elements = {
   newAssociationFields: document.querySelector("#new-association-fields"),
   associationName: document.querySelector("#association-name"),
   associationId: document.querySelector("#association-id"),
+  associationPlacement: document.querySelector("#association-placement"),
   associationError: document.querySelector("#association-error"),
   selectedAssetLabel: document.querySelector("#selected-asset-label"),
   selectedAssetPreview: document.querySelector("#selected-asset-preview"),
@@ -66,6 +68,7 @@ const elements = {
 const state = {
   assets: [],
   presets: PRESETS,
+  canvas: { width: 0, height: 0 },
   associations: new Map(),
   components: [],
   selectedId: null,
@@ -73,6 +76,34 @@ const state = {
   pendingAsset: null,
   nextZ: 1,
 };
+
+function canvasSize() {
+  return state.canvas.width > 0 && state.canvas.height > 0
+    ? state.canvas
+    : { width: PREVIEW_CANVAS_WIDTH, height: PREVIEW_CANVAS_HEIGHT };
+}
+
+function hasBackground() {
+  return state.components.some((component) => associationFor(component.associationId)?.placement === "background");
+}
+
+function adoptCanvasDimensions(width, height) {
+  if (!width || !height || (state.canvas.width === width && state.canvas.height === height)) return;
+  const old = canvasSize();
+  const canScale = state.canvas.width > 0 && state.canvas.height > 0;
+  if (canScale) {
+    const scaleX = width / old.width;
+    const scaleY = height / old.height;
+    for (const component of state.components) {
+      if (associationFor(component.associationId)?.placement === "background") continue;
+      component.x *= scaleX;
+      component.y *= scaleY;
+      component.width *= scaleX;
+      component.height *= scaleY;
+    }
+  }
+  state.canvas = { width, height };
+}
 
 function setStatus(message, kind = "") {
   elements.status.textContent = message;
@@ -107,6 +138,9 @@ async function loadPresets() {
 
 async function loadLayout() {
   const layout = await requestJson("/api/layout");
+  state.canvas = layout.canvas && layout.canvas.width > 0 && layout.canvas.height > 0
+    ? { width: layout.canvas.width, height: layout.canvas.height }
+    : { width: 0, height: 0 };
   state.associations.clear();
   for (const association of layout.associations || []) state.associations.set(association.id, association);
   state.components = (layout.components || []).map((component) => ({ ...component }));
@@ -155,18 +189,24 @@ function openAssociation(asset) {
   elements.newAssociationFields.hidden = true;
   elements.newAssociation.textContent = "新增关联";
   elements.associationSelect.value = "";
+  elements.associationPlacement.value = "free";
   renderAssociationOptions();
   elements.assetDialog.close();
   elements.associationDialog.showModal();
 }
 
-function defaultGeometry(placement, asset) {
-  if (placement === "background") return { x: 0, y: 0, width: CANVAS_WIDTH, height: CANVAS_HEIGHT };
-  if (placement === "bottom_bar") return { x: 0, y: 940, width: CANVAS_WIDTH, height: 140 };
+function defaultGeometry(placement, assetWidth = 0, assetHeight = 0) {
+  const canvas = canvasSize();
+  if (placement === "background") return { x: 0, y: 0, width: assetWidth, height: assetHeight };
+  if (placement === "bottom_bar") {
+    const ratio = assetWidth && assetHeight ? assetWidth / assetHeight : 4;
+    const height = Math.min(canvas.height * .16, canvas.width / ratio);
+    return { x: 0, y: canvas.height - height, width: canvas.width, height };
+  }
   const preview = elements.selectedAssetPreview;
   const ratio = preview.naturalWidth && preview.naturalHeight ? preview.naturalWidth / preview.naturalHeight : 1.5;
-  const width = Math.min(640, CANVAS_WIDTH * .38);
-  return { x: (CANVAS_WIDTH - width) / 2, y: (CANVAS_HEIGHT - width / ratio) / 2, width, height: width / ratio };
+  const width = Math.min(640, canvas.width * .38);
+  return { x: (canvas.width - width) / 2, y: (canvas.height - width / ratio) / 2, width, height: width / ratio };
 }
 
 function relationFromDialog() {
@@ -181,15 +221,29 @@ function relationFromDialog() {
   if (!name) throw new Error("关联名称不能为空。\n");
   if (!ID_PATTERN.test(id)) throw new Error("关联 ID 必须符合变量名规则。\n");
   if (state.presets.some((item) => item.id === id) || state.associations.has(id)) throw new Error("这个关联 ID 已经存在。\n");
-  return { id, name, placement: "free" };
+  return { id, name, placement: elements.associationPlacement.value };
 }
 
-function addComponent(event) {
+async function addComponent(event) {
   event.preventDefault();
   if (!state.pendingAsset) return;
   try {
     const association = relationFromDialog();
-    const geometry = defaultGeometry(association.placement, state.pendingAsset);
+    if (association.placement !== "background" && !hasBackground()) {
+      throw new Error("请先添加背景，背景图片会决定画布大小。\n");
+    }
+    const preview = elements.selectedAssetPreview;
+    if (association.placement === "background" && (!preview.naturalWidth || !preview.naturalHeight)) {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("无法读取背景图片尺寸。")), 5000);
+        preview.addEventListener("load", () => { clearTimeout(timeout); resolve(); }, { once: true });
+        preview.addEventListener("error", () => { clearTimeout(timeout); reject(new Error("背景图片无法加载。")); }, { once: true });
+      });
+    }
+    if (association.placement === "background") {
+      adoptCanvasDimensions(preview.naturalWidth, preview.naturalHeight);
+    }
+    const geometry = defaultGeometry(association.placement, preview.naturalWidth, preview.naturalHeight);
     const existing = state.components.findIndex((component) => component.associationId === association.id);
     if (existing >= 0) state.components.splice(existing, 1);
     state.associations.set(association.id, association);
@@ -212,14 +266,17 @@ function addComponent(event) {
 }
 
 function applyGeometry(element, component) {
-  element.style.left = `${component.x / CANVAS_WIDTH * 100}%`;
-  element.style.top = `${component.y / CANVAS_HEIGHT * 100}%`;
-  element.style.width = `${component.width / CANVAS_WIDTH * 100}%`;
-  element.style.height = `${component.height / CANVAS_HEIGHT * 100}%`;
+  const canvas = canvasSize();
+  element.style.left = `${component.x / canvas.width * 100}%`;
+  element.style.top = `${component.y / canvas.height * 100}%`;
+  element.style.width = `${component.width / canvas.width * 100}%`;
+  element.style.height = `${component.height / canvas.height * 100}%`;
   element.style.zIndex = component.zIndex;
 }
 
 function renderCanvas() {
+  const canvas = canvasSize();
+  elements.canvasFrame.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
   elements.canvas.replaceChildren();
   for (const component of [...state.components].sort((a, b) => a.zIndex - b.zIndex)) {
     const association = associationFor(component.associationId) || { id: component.associationId, name: component.associationId, placement: "free" };
@@ -229,8 +286,21 @@ function renderCanvas() {
     layer.title = `${association.name} (${association.id})`;
     applyGeometry(layer, component);
     const image = document.createElement("img");
-    image.src = assetUrl(component.assetPath);
     image.alt = association.name;
+    if (association.placement === "background") {
+      image.addEventListener("load", () => {
+        if (image.naturalWidth && image.naturalHeight &&
+            (state.canvas.width !== image.naturalWidth || state.canvas.height !== image.naturalHeight)) {
+          adoptCanvasDimensions(image.naturalWidth, image.naturalHeight);
+          component.x = 0;
+          component.y = 0;
+          component.width = image.naturalWidth;
+          component.height = image.naturalHeight;
+          render();
+        }
+      }, { once: true });
+    }
+    image.src = assetUrl(component.assetPath);
     layer.append(image);
     if (association.placement === "free" && state.editing && state.selectedId === component.associationId) {
       layer.classList.add("selected");
@@ -249,11 +319,12 @@ function attachDrag(layer, component) {
     if (!state.editing || event.button !== 0 || event.target.closest(".resize-handle")) return;
     event.preventDefault();
     const rect = elements.canvas.getBoundingClientRect();
+    const canvas = canvasSize();
     const start = { x: event.clientX, y: event.clientY, componentX: component.x, componentY: component.y };
     layer.setPointerCapture(event.pointerId);
     const move = (moveEvent) => {
-      component.x = Math.max(0, Math.min(CANVAS_WIDTH - component.width, start.componentX + (moveEvent.clientX - start.x) * CANVAS_WIDTH / rect.width));
-      component.y = Math.max(0, Math.min(CANVAS_HEIGHT - component.height, start.componentY + (moveEvent.clientY - start.y) * CANVAS_HEIGHT / rect.height));
+      component.x = Math.max(0, Math.min(canvas.width - component.width, start.componentX + (moveEvent.clientX - start.x) * canvas.width / rect.width));
+      component.y = Math.max(0, Math.min(canvas.height - component.height, start.componentY + (moveEvent.clientY - start.y) * canvas.height / rect.height));
       applyGeometry(layer, component);
     };
     const stop = () => {
@@ -283,13 +354,14 @@ function attachResize(layer, handle, component) {
     event.preventDefault();
     event.stopPropagation();
     const rect = elements.canvas.getBoundingClientRect();
+    const canvas = canvasSize();
     const start = { x: event.clientX, y: event.clientY, width: component.width, height: component.height };
     const ratio = component.width / component.height;
     handle.setPointerCapture(event.pointerId);
     const move = (moveEvent) => {
-      const width = Math.max(40, start.width + (moveEvent.clientX - start.x) * CANVAS_WIDTH / rect.width);
-      component.width = Math.min(CANVAS_WIDTH - component.x, width);
-      component.height = Math.min(CANVAS_HEIGHT - component.y, component.width / ratio);
+      const width = Math.max(40, start.width + (moveEvent.clientX - start.x) * canvas.width / rect.width);
+      component.width = Math.min(canvas.width - component.x, width);
+      component.height = Math.min(canvas.height - component.y, component.width / ratio);
       applyGeometry(layer, component);
     };
     const stop = () => {
@@ -334,6 +406,10 @@ function openSaveDialog() {
     setStatus("请先点击“编辑完成”再保存。", "error");
     return;
   }
+  if (!hasBackground() || state.canvas.width <= 0 || state.canvas.height <= 0) {
+    setStatus("请先添加背景，背景图片会决定画布大小。", "error");
+    return;
+  }
   elements.saveError.hidden = true;
   elements.saveDialog.showModal();
   elements.saveFilename.focus();
@@ -344,7 +420,7 @@ async function saveLayout(event) {
   try {
     const payload = {
       version: 1,
-      canvas: { width: CANVAS_WIDTH, height: CANVAS_HEIGHT },
+      canvas: { ...state.canvas },
       associations: [...state.associations.values()],
       components: state.components,
     };
@@ -381,4 +457,7 @@ elements.saveLayout.addEventListener("click", openSaveDialog);
 elements.cancelSave.addEventListener("click", () => elements.saveDialog.close());
 elements.cancelSaveBottom.addEventListener("click", () => elements.saveDialog.close());
 
-Promise.all([loadAssets(), loadPresets(), loadLayout()]).then(() => { render(); setStatus("布局已加载"); }).catch((error) => setStatus(error.message, "error"));
+Promise.all([loadAssets(), loadPresets(), loadLayout()]).then(() => {
+  render();
+  setStatus(hasBackground() ? "布局已加载" : "请先添加背景，背景图片会决定画布大小。");
+}).catch((error) => setStatus(error.message, "error"));

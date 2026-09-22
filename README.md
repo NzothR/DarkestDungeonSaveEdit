@@ -19,7 +19,7 @@ The first F2 town shell uses a separate layout editor so prepared artwork and it
 python tools/ui_layout_editor.py --assets-dir .\ui-art-assets --output .\config\town-layout.json
 ```
 
-The editor scans the artwork directory, handles fixed background and bottom-bar associations, allows ordinary components to be dragged and resized, and saves association IDs plus 1920×1080 geometry as JSON.
+The editor requires a prepared background first, uses that image's dimensions as the canvas, handles fixed background and bottom-bar associations, allows ordinary components to be dragged and resized, and saves association IDs plus background-relative geometry as JSON.
 
 ## Requirements
 

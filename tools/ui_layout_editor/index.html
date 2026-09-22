@@ -24,7 +24,7 @@
         <div class="canvas-frame">
           <div id="canvas" class="layout-canvas" aria-label="1920 x 1080 布局画布"></div>
         </div>
-        <p class="canvas-help">画布使用 1920×1080 坐标。普通组件可拖动和按比例缩放；右键已放置的组件可重新编辑。</p>
+        <p class="canvas-help">请先添加背景。添加后背景图片自身就是画布，所有普通组件都使用相对画布坐标；右键已放置的组件可重新编辑。</p>
       </section>
       <aside class="component-panel">
         <h2>已调用的美术资源</h2>
@@ -82,6 +82,13 @@
         </label>
         <label>ID（保存后供代码调用）
           <input id="association-id" type="text" maxlength="80" pattern="[A-Za-z_][A-Za-z0-9_]*" autocomplete="off">
+        </label>
+        <label>放置方式
+          <select id="association-placement">
+            <option value="free">普通组件（可编辑）</option>
+            <option value="background">背景（填充画布）</option>
+            <option value="bottom_bar">底栏（固定在底部）</option>
+          </select>
         </label>
         <p class="hint">ID 必须符合变量名规则：以英文或下划线开头，只能包含英文、数字和下划线。</p>
       </div>

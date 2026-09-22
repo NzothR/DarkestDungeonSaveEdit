@@ -25,7 +25,7 @@ ID_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
 DEFAULT_LAYOUT = {
     "version": 1,
-    "canvas": {"width": 1920, "height": 1080},
+    "canvas": {"width": 0, "height": 0},
     "associations": [],
     "components": [],
 }
@@ -67,8 +67,13 @@ def validate_layout(value: object) -> tuple[dict | None, str | None]:
     if not isinstance(value, dict):
         return None, "layout must be a JSON object"
     canvas = value.get("canvas", {})
-    if not isinstance(canvas, dict) or canvas.get("width") != 1920 or canvas.get("height") != 1080:
-        return None, "canvas must be 1920x1080"
+    if not isinstance(canvas, dict):
+        return None, "canvas must be an object"
+    canvas_width, canvas_height = canvas.get("width"), canvas.get("height")
+    if not isinstance(canvas_width, (int, float)) or not isinstance(canvas_height, (int, float)):
+        return None, "canvas width and height must be numbers"
+    if canvas_width < 0 or canvas_height < 0 or (canvas_width == 0) != (canvas_height == 0):
+        return None, "canvas width and height must both be positive or both be zero"
     associations = value.get("associations", [])
     components = value.get("components", [])
     if not isinstance(associations, list) or not isinstance(components, list):
@@ -90,6 +95,7 @@ def validate_layout(value: object) -> tuple[dict | None, str | None]:
             return None, f"invalid placement for association {identifier}"
         association_ids.add(identifier)
     component_ids: set[str] = set()
+    background_count = 0
     for component in components:
         if not isinstance(component, dict):
             return None, "component must be an object"
@@ -108,10 +114,17 @@ def validate_layout(value: object) -> tuple[dict | None, str | None]:
             return None, f"component {identifier} has invalid geometry"
         if component["width"] <= 0 or component["height"] <= 0:
             return None, f"component {identifier} must have a positive size"
-        if placement == "background" and component["x"] != 0:
-            return None, "background must start at x=0"
-        if placement == "bottom_bar" and component["y"] + component["height"] != 1080:
-            return None, "bottom_bar must touch the bottom of the canvas"
+        if placement == "background":
+            background_count += 1
+            if (component["x"] != 0 or component["y"] != 0 or
+                    component["width"] != canvas_width or component["height"] != canvas_height):
+                return None, "background must fill the canvas from its top-left corner"
+        if placement == "bottom_bar":
+            if (component["x"] != 0 or component["width"] != canvas_width or
+                    abs(component["y"] + component["height"] - canvas_height) > 0.01):
+                return None, "bottom_bar must span the canvas width and touch its bottom edge"
+    if background_count != 1:
+        return None, "a layout must contain exactly one background component"
     return value, None
 
 
