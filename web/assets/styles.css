@@ -138,7 +138,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-building-panel, .town-roster-panel, .town-trinket-panel, .town-resource-panel { position: absolute; z-index: 6; padding: 13px; border: 1px solid #c59a5366; background: #151210e8; box-shadow: 0 8px 20px #0009; }
 .town-building-panel { top: 17%; left: 1.5%; bottom: 10%; width: 22%; overflow: hidden; }
 .town-roster-panel { top: 12%; right: 1.5%; bottom: 10%; width: 20%; overflow: hidden; }
-.town-trinket-panel { top: 24%; right: 23%; bottom: 14%; left: 25%; overflow: hidden; }
+.town-trinket-panel { top: 24%; right: 23%; bottom: 14%; left: 25%; display: flex; flex-direction: column; overflow: hidden; }
 .town-resource-panel { right: auto; bottom: 7.5%; left: 1.5%; width: 22%; min-height: 10%; }
 .town-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border-bottom: 1px solid #ffffff14; }
 .town-panel-heading small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
@@ -164,8 +164,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-background-fallback::after { content: "缺失资源 · town.background"; color: #eee4d2; font-size: 14px; }
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
-.chest-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 13px; margin: 18px auto; max-width: 720px; overflow: auto; }
-.trinket-entry { position: relative; display: grid; place-items: center; width: 128px; height: 128px; }
+.chest-grid { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-content: flex-start; gap: 13px; min-height: 0; width: 100%; margin: 8px auto 0; max-width: 720px; overflow-x: hidden; overflow-y: auto; }
+.trinket-entry { position: relative; display: grid; flex: 0 0 128px; place-items: center; width: 128px; height: 128px; }
 .trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 128px; height: 128px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
 .trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
