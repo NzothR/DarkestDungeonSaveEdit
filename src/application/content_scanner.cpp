@@ -74,6 +74,19 @@ bool is_text_payload(std::string_view bytes) {
     return true;
 }
 
+// Some older Darkest Dungeon mods ship their .darkest definitions in the
+// Windows code page (usually CP936/GBK) instead of UTF-8.  The parser treats
+// non-ASCII bytes as opaque token data, so these files are still safe to scan
+// as long as they do not contain binary NUL/control bytes.
+bool is_legacy_darkest_text_payload(std::string_view bytes) {
+    for (const auto byte : bytes) {
+        const auto c = static_cast<unsigned char>(byte);
+        if (c == 0 || (c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f'))
+            return false;
+    }
+    return true;
+}
+
 void add_definition(BaseContentScanResult& result, std::string kind, std::string id,
                     const ContentSourceRoot& source, std::string_view virtual_path,
                     std::string localization_key = {}, std::string display_name = {},
@@ -535,15 +548,22 @@ core::Result<void, core::Error> collect_files(const IFileSystem& file_system,
                 continue;
             }
             source_file.content_fingerprint = fingerprint(read.value());
-            if (!is_text_payload(read.value())) {
+            const auto lower_virtual_path = lower_ascii(virtual_path);
+            const bool is_darkest_definition_payload =
+                extension == ".darkest" &&
+                (lower_virtual_path.ends_with(".info.darkest") ||
+                 lower_virtual_path.starts_with("inventory/") ||
+                 lower_virtual_path.find("/inventory/") != std::string::npos);
+            const bool is_text = is_text_payload(read.value()) ||
+                (is_darkest_definition_payload && is_legacy_darkest_text_payload(read.value()));
+            if (!is_text) {
                 result.diagnostics.push_back({source.id, virtual_path,
                     "Binary payload with a text-designated extension was retained without parsing"});
             } else if (extension == ".json") {
                 try {
                     const auto document = Json::parse(read.value());
                     collect_json_definitions(document, source, virtual_path, result);
-                    const auto lower_path = lower_ascii(virtual_path);
-                    if (lower_path.ends_with(".building.json")) {
+                    if (lower_virtual_path.ends_with(".building.json")) {
                         const auto building = path_parent_name(virtual_path);
                         add_definition(result, "building", building, source, virtual_path,
                                        "town_name_" + building, {}, json_dump(document));
@@ -551,14 +571,11 @@ core::Result<void, core::Error> collect_files(const IFileSystem& file_system,
                 } catch (const Json::exception& error) {
                     result.diagnostics.push_back({source.id, virtual_path, error.what()});
                 }
-            } else if (extension == ".darkest" &&
-                       (lower_ascii(virtual_path).ends_with(".info.darkest") ||
-                        lower_ascii(virtual_path).starts_with("inventory/") ||
-                        lower_ascii(virtual_path).find("/inventory/") != std::string::npos)) {
+            } else if (is_darkest_definition_payload) {
                 auto parsed = parse_darkest(read.value(), virtual_path);
                 if (!parsed) result.diagnostics.push_back({source.id, virtual_path, parsed.error().message});
                 else collect_darkest_definitions(parsed.value(), source, virtual_path, result);
-            } else if (extension == ".xml" && lower_ascii(virtual_path).find(".string_table.xml") != std::string::npos) {
+            } else if (extension == ".xml" && lower_virtual_path.find(".string_table.xml") != std::string::npos) {
                 auto parsed = parse_localization_xml(read.value(), source, virtual_path);
                 if (!parsed) result.diagnostics.push_back({source.id, virtual_path, parsed.error().message});
                 else {
