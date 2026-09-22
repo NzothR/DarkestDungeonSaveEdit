@@ -163,8 +163,12 @@ resolve_localization_in(DatabasePair& databases, const ContentEnvironmentSelecti
     append_language(language);
     // The game and community mods use both names for Simplified Chinese.
     // Treat them as aliases before falling back to English.
-    if (language == "schinese") append_language("chinese");
-    if (language == "chinese") append_language("schinese");
+    if (language == "schinese") {
+        append_language("chinese");
+        append_language("zh_cn");
+        append_language("zh-cn");
+    }
+    if (language == "chinese" || language == "zh_cn" || language == "zh-cn") append_language("schinese");
     append_language(selection.fallback_language);
     append_language("english");
 
