@@ -164,9 +164,10 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-background-fallback::after { content: "缺失资源 · town.background"; color: #eee4d2; font-size: 14px; }
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
-.chest-grid { display: grid; grid-template-columns: repeat(4, minmax(34px, 1fr)); gap: 10px; margin: 18px auto; max-width: 560px; }
-.trinket-entry { position: relative; display: grid; place-items: center; min-width: 42px; min-height: 42px; border: 1px solid #ffffff18; background: #09080788; }
-.trinket-entry img, .trinket-entry .item-fallback { width: 38px; height: 38px; object-fit: contain; }
+.chest-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 13px; margin: 18px auto; max-width: 720px; overflow: auto; }
+.trinket-entry { position: relative; display: grid; place-items: center; width: 64px; height: 64px; }
+.trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 64px; height: 64px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
+.trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }

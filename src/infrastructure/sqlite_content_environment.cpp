@@ -155,10 +155,18 @@ resolve_localization_in(DatabasePair& databases, const ContentEnvironmentSelecti
                         std::string_view key, std::string_view requested_language,
                         bool environment_database) {
     const std::string language = requested_language.empty() ? selection.language : std::string{requested_language};
-    std::vector<std::string> languages{language};
-    if (!selection.fallback_language.empty() && selection.fallback_language != language)
-        languages.push_back(selection.fallback_language);
-    if (std::find(languages.begin(), languages.end(), "english") == languages.end()) languages.emplace_back("english");
+    std::vector<std::string> languages;
+    const auto append_language = [&](std::string candidate) {
+        if (!candidate.empty() && std::find(languages.begin(), languages.end(), candidate) == languages.end())
+            languages.push_back(std::move(candidate));
+    };
+    append_language(language);
+    // The game and community mods use both names for Simplified Chinese.
+    // Treat them as aliases before falling back to English.
+    if (language == "schinese") append_language("chinese");
+    if (language == "chinese") append_language("schinese");
+    append_language(selection.fallback_language);
+    append_language("english");
 
     for (const auto& candidate_language : languages) {
         if (environment_database && databases.mods) {

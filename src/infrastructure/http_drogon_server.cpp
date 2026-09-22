@@ -328,6 +328,18 @@ Json::Value definition_assets(const domain::DefinitionReference& definition) {
     return assets;
 }
 
+std::optional<std::string> hero_roster_portrait(const domain::DefinitionReference& definition) {
+    for (const auto& asset : definition.assets) {
+        auto path = asset.virtual_path;
+        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (path.find("portrait_roster") != std::string::npos)
+            return asset.virtual_path;
+    }
+    return std::nullopt;
+}
+
 Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     const auto& model = campaign.edits->model();
     Json::Value value(Json::objectValue);
@@ -361,6 +373,7 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["className"] = hero.definition.display_name.empty() ? item["classId"] : hero.definition.display_name;
         item["state"] = hero.state == domain::EntityState::Resolved ? "resolved" : "partial";
         item["assets"] = definition_assets(hero.definition);
+        if (const auto portrait = hero_roster_portrait(hero.definition)) item["portraitPath"] = *portrait;
         heroes.append(std::move(item));
     }
     value["heroes"] = std::move(heroes);

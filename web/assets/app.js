@@ -44,7 +44,6 @@ const elements = {
   townBackground: document.querySelector("#town-background"),
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
   townSettingsButton: document.querySelector("#town-settings-button"),
-  townHeaderResources: document.querySelector("#town-header-resources"),
   heroList: document.querySelector("#hero-list"),
   trinketGrid: document.querySelector("#trinket-grid"),
   resourceGrid: document.querySelector("#resource-grid"),
@@ -166,22 +165,16 @@ function assetUrl(asset) {
   return asset ? `/api/content-asset?path=${encodeURIComponent(asset.path)}` : "";
 }
 
+function cleanGameText(value) {
+  return String(value ?? "")
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function renderCampaign(campaign) {
   latestCampaign = campaign;
   const resources = campaign.resources || [];
-  elements.townHeaderResources.replaceChildren();
-  const headerResources = resources.slice(0, 5);
-  for (const resource of headerResources) {
-    const item = document.createElement("span");
-    item.className = "resource";
-    const name = document.createElement("b");
-    name.textContent = localizedResourceName(resource);
-    const amount = document.createElement("strong");
-    amount.textContent = resource.amount == null ? "—" : Number(resource.amount).toLocaleString();
-    item.append(name, amount);
-    elements.townHeaderResources.append(item);
-  }
-
   elements.resourceGrid.replaceChildren();
   if (!resources.length) {
     elements.resourceGrid.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noResources") }));
@@ -190,7 +183,7 @@ function renderCampaign(campaign) {
     const item = document.createElement("label");
     item.className = "resource-editor";
     const name = document.createElement("b");
-    name.textContent = localizedResourceName(resource);
+    name.textContent = cleanGameText(localizedResourceName(resource));
     const input = document.createElement("input");
     input.type = "number";
     input.min = "0";
@@ -220,7 +213,9 @@ function renderCampaign(campaign) {
   for (const hero of campaign.heroes || []) {
     const row = document.createElement("div");
     row.className = "hero-entry";
-    const asset = chooseAsset(hero.assets, ["portrait", "hero", "roster", "icon"]);
+    const asset = hero.portraitPath
+      ? { path: hero.portraitPath, resolved: true }
+      : chooseAsset(hero.assets, ["portrait_roster", "portrait", "hero", "roster"]);
     if (asset) {
       const image = document.createElement("img");
       image.alt = "";
@@ -231,9 +226,9 @@ function renderCampaign(campaign) {
     const text = document.createElement("div");
     text.className = "hero-entry-text";
     const name = document.createElement("strong");
-    name.textContent = hero.name || hero.id;
+    name.textContent = cleanGameText(hero.name || hero.id);
     const className = document.createElement("small");
-    className.textContent = hero.className || hero.classId || t("town.unknownClass");
+    className.textContent = cleanGameText(hero.className || hero.classId || t("town.unknownClass"));
     text.append(name, className);
     row.append(text);
     elements.heroList.append(row);
@@ -249,7 +244,7 @@ function renderCampaign(campaign) {
     const asset = chooseAsset(trinket.assets, ["trinket", "item", "icon"]);
     if (asset) {
       const image = document.createElement("img");
-      image.alt = trinket.name || trinket.id || "";
+      image.alt = cleanGameText(trinket.name || trinket.id || "");
       image.src = assetUrl(asset);
       image.onerror = () => { image.replaceWith(Object.assign(document.createElement("span"), { className: "missing-art item-fallback" })); };
       item.append(image);
@@ -259,7 +254,7 @@ function renderCampaign(campaign) {
       count.textContent = `×${trinket.amount}`;
       item.append(count);
     }
-    item.title = trinket.name || trinket.id || "";
+    item.title = cleanGameText(trinket.name || trinket.id || "");
     elements.trinketGrid.append(item);
   }
   elements.townUndo.disabled = !campaign.canUndo;

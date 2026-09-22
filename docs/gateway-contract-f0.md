@@ -113,7 +113,7 @@ POST 请求体传 `{ "force": true }` 时主动重新扫描 Mod 环境数据库�
   "canUndo": false,
   "canRedo": false,
   "resources": [{ "index": 0, "id": "gold", "name": "Gold", "amount": 12450, "editable": true }],
-  "heroes": [{ "id": "...", "name": "英雄名", "classId": "crusader", "className": "Crusader", "assets": [] }],
+  "heroes": [{ "id": "...", "name": "英雄名", "classId": "crusader", "className": "Crusader", "portraitPath": "heroes/crusader/crusader_portrait_roster.png", "assets": [] }],
   "trinkets": [{ "index": 0, "id": "...", "name": "Trinket", "amount": 1, "assets": [] }]
 }
 ```

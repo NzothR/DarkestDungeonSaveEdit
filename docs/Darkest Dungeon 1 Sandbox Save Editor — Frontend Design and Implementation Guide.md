@@ -501,7 +501,8 @@ Result 至少区分成功、业务校验失败、能力未实现/暂缓、revisi
 
 ## F3 — Hero / Building / Trinket 编辑纵切片
 
-- 首轮读取当前 Profile 的真实资源、英雄和庄园饰品库存。英雄条目左侧显示由内容数据库解析的头像，右侧显示英雄名与职业名；饰品箱显示内容定义解析出的饰品贴图和数量。
+- 首轮读取当前 Profile 的真实资源、英雄和庄园饰品库存。英雄条目左侧优先显示内容数据库中 `<class>_portrait_roster.png` 头像，右侧显示英雄名与职业名；饰品箱按游戏的 `inv_trinket+*.png` 资源以 64×64 原图比例显示，只保留图标边框，不额外绘制格子。
+- 游戏本地化语言同时兼容 `schinese` 与 `chinese` 两种 Mod 常见语言标识，并清理 `[colour_start]`、`[C2]` 等游戏富文本标记后再显示。
 - 首轮开放基础资源数量编辑。编辑只改变后端 CampaignEditSession 的内存模型，使用 `/api/campaign/resource`，不能绕过 Operation/Validation 直接写 DSON。
 - Town Shell 顶部右侧提供后端 Undo/Redo，所有请求带 Session revision；底部中央保留 Save 按钮和 dirty 状态。安全候选生成、目标 Profile 选择、备份和显式磁盘写回归入 F4。
 - 建筑仍只显示集中名单；英雄、饰品、建筑的详细编辑和内容搜索在后续纵切片中按 Capability 接入。
