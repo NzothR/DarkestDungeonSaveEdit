@@ -10,6 +10,7 @@
 #include <charconv>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <system_error>
@@ -368,6 +369,90 @@ parse_localization_xml(std::string_view bytes, const ContentSourceRoot& source,
     return core::Result<std::vector<ScannedLocalization>, core::Error>::success(std::move(entries));
 }
 
+std::uint32_t darkest_name_hash(std::string_view value) {
+    std::uint32_t hash = 0;
+    for (const auto byte : value)
+        hash = hash * 53U + static_cast<unsigned char>(byte);
+    return hash;
+}
+
+std::optional<std::uint32_t> read_u32_le(std::string_view bytes, std::size_t offset) {
+    if (offset > bytes.size() || bytes.size() - offset < sizeof(std::uint32_t)) return std::nullopt;
+    const auto* data = reinterpret_cast<const unsigned char*>(bytes.data() + offset);
+    return static_cast<std::uint32_t>(data[0]) |
+           (static_cast<std::uint32_t>(data[1]) << 8U) |
+           (static_cast<std::uint32_t>(data[2]) << 16U) |
+           (static_cast<std::uint32_t>(data[3]) << 24U);
+}
+
+std::string loc2_language(std::string_view virtual_path) {
+    const auto slash = virtual_path.find_last_of('/');
+    auto filename = std::string{virtual_path.substr(slash == std::string_view::npos ? 0 : slash + 1)};
+    const auto extension = filename.rfind(".loc2");
+    if (extension != std::string::npos) filename.erase(extension);
+    const auto separator = filename.find_last_of('_');
+    auto language = separator == std::string::npos ? filename : filename.substr(separator + 1);
+    return lower_ascii(std::move(language));
+}
+
+core::Result<std::vector<ScannedLocalization>, core::Error>
+parse_localization_loc2(std::string_view bytes, const ContentSourceRoot& source,
+                        std::string_view virtual_path,
+                        const std::vector<std::string>& keys) {
+    // localization.exe emits four sections. The first three section offsets
+    // are stored in the header; the tables use 12, 8, and 12 byte records.
+    constexpr std::size_t table_start = 0x100c;
+    if (bytes.size() < table_start || bytes.size() < 12) {
+        return core::Result<std::vector<ScannedLocalization>, core::Error>::failure(
+            {core::ErrorCode::ContentParseFailed, "Truncated .loc2 header", "ContentParser",
+             {{"path", std::string{virtual_path}}}});
+    }
+    const auto first_end = read_u32_le(bytes, 0);
+    const auto second_end = read_u32_le(bytes, 4);
+    const auto string_table_end = read_u32_le(bytes, 8);
+    if (!first_end || !second_end || !string_table_end ||
+        *first_end < table_start || *first_end > *second_end ||
+        *second_end > *string_table_end || *string_table_end > bytes.size() ||
+        ((*first_end - table_start) % 12U) != 0 ||
+        ((*second_end - *first_end) % 8U) != 0 ||
+        ((*string_table_end - *second_end) % 12U) != 0) {
+        return core::Result<std::vector<ScannedLocalization>, core::Error>::failure(
+            {core::ErrorCode::ContentParseFailed, "Invalid .loc2 section layout", "ContentParser",
+             {{"path", std::string{virtual_path}}}});
+    }
+
+    const auto hash_count = (*first_end - table_start) / 12U;
+    const auto index_count = (*second_end - *first_end) / 8U;
+    const auto string_count = (*string_table_end - *second_end) / 12U;
+    const auto language = loc2_language(virtual_path);
+    std::vector<ScannedLocalization> entries;
+    for (const auto& key : keys) {
+        const auto wanted_hash = darkest_name_hash(key);
+        std::optional<std::uint32_t> key_index;
+        for (std::size_t i = 0; i < hash_count; ++i) {
+            const auto hash = read_u32_le(bytes, table_start + i * 12U);
+            const auto index = read_u32_le(bytes, table_start + i * 12U + 4U);
+            if (hash && index && *hash == wanted_hash) {
+                key_index = *index;
+                break;
+            }
+        }
+        if (!key_index || *key_index >= index_count) continue;
+        const auto string_index = read_u32_le(bytes, *first_end + static_cast<std::size_t>(*key_index) * 8U);
+        if (!string_index || *string_index >= string_count) continue;
+        const auto string_offset = *second_end + static_cast<std::size_t>(*string_index) * 12U;
+        const auto value_offset = read_u32_le(bytes, string_offset);
+        const auto value_length = read_u32_le(bytes, string_offset + 4U);
+        if (!value_offset || !value_length || *value_offset >= bytes.size() - *string_table_end) continue;
+        const auto available = bytes.size() - *string_table_end - *value_offset;
+        const auto length = std::min<std::size_t>(*value_length, available);
+        auto value = std::string{bytes.substr(*string_table_end + *value_offset, length)};
+        if (const auto nul = value.find('\0'); nul != std::string::npos) value.erase(nul);
+        entries.push_back({language, key, std::move(value), source.id, std::string{virtual_path}});
+    }
+    return core::Result<std::vector<ScannedLocalization>, core::Error>::success(std::move(entries));
+}
+
 struct DarkestRecord {
     std::string type;
     std::map<std::string, std::vector<std::string>, std::less<>> fields;
@@ -549,6 +634,7 @@ core::Result<void, core::Error> collect_files(const IFileSystem& file_system,
             }
             source_file.content_fingerprint = fingerprint(read.value());
             const auto lower_virtual_path = lower_ascii(virtual_path);
+            const bool is_loc2 = extension == ".loc2";
             const bool is_darkest_definition_payload =
                 extension == ".darkest" &&
                 (lower_virtual_path.ends_with(".info.darkest") ||
@@ -556,7 +642,7 @@ core::Result<void, core::Error> collect_files(const IFileSystem& file_system,
                  lower_virtual_path.find("/inventory/") != std::string::npos);
             const bool is_text = is_text_payload(read.value()) ||
                 (is_darkest_definition_payload && is_legacy_darkest_text_payload(read.value()));
-            if (!is_text) {
+            if (!is_text && !is_loc2) {
                 result.diagnostics.push_back({source.id, virtual_path,
                     "Binary payload with a text-designated extension was retained without parsing"});
             } else if (extension == ".json") {
@@ -653,6 +739,36 @@ BaseContentScanner::scan(const BaseContentScanConfig& config) const {
         else roots.push_back(source.path);
         auto collected = collect_files(file_system_, config, source, roots, result);
         if (!collected) return core::Result<BaseContentScanResult, core::Error>::failure(collected.error());
+    }
+
+    // A workshop/local mod may ship only the compiled .loc2 table. Resolve
+    // the keys that were discovered from its definitions after the complete
+    // source tree has been scanned, so directory traversal order cannot make
+    // localization hydration dependent on which file happened to come first.
+    std::set<std::string, std::less<>> localization_keys;
+    for (const auto& definition : result.definitions)
+        if (!definition.localization_key.empty()) localization_keys.insert(definition.localization_key);
+    const bool scanning_mod_root = config.dlc_directory == "__ddse_mod_content_directory__";
+    for (const auto& source : sources) {
+        if (source.id == "vanilla" && !scanning_mod_root)
+            continue; // the base game XML tables are the canonical source.
+        for (const auto& source_file : result.source_files) {
+            if (source_file.source_id != source.id || source_file.extension != ".loc2") continue;
+            auto read = file_system_.read_file(source.path / std::filesystem::path{source_file.virtual_path});
+            if (!read) {
+                result.diagnostics.push_back({source.id, source_file.virtual_path, read.error().message});
+                continue;
+            }
+            auto parsed = parse_localization_loc2(read.value(), source, source_file.virtual_path,
+                                                   std::vector<std::string>{localization_keys.begin(), localization_keys.end()});
+            if (!parsed) {
+                result.diagnostics.push_back({source.id, source_file.virtual_path, parsed.error().message});
+                continue;
+            }
+            result.localizations.insert(result.localizations.end(),
+                                        std::make_move_iterator(parsed.value().begin()),
+                                        std::make_move_iterator(parsed.value().end()));
+        }
     }
     std::sort(result.source_files.begin(), result.source_files.end(), [](const auto& a, const auto& b) {
         return std::tie(a.source_id, a.virtual_path) < std::tie(b.source_id, b.virtual_path);
