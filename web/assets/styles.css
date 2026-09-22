@@ -165,8 +165,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
 .chest-grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 13px; margin: 18px auto; max-width: 720px; overflow: auto; }
-.trinket-entry { position: relative; display: grid; place-items: center; width: 64px; height: 64px; }
-.trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 64px; height: 64px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
+.trinket-entry { position: relative; display: grid; place-items: center; width: 128px; height: 128px; }
+.trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 128px; height: 128px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
 .trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }

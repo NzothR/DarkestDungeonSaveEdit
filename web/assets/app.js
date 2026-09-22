@@ -145,8 +145,10 @@ function showTownShell() {
 function localizedResourceName(resource) {
   const keys = {
     gold: "town.gold", bust: "town.heirlooms", portraits: "town.portraits",
-    deeds: "town.deeds", crests: "town.crests", shards: "town.crystalline",
+    deeds: "town.deeds", deed: "town.deeds", crests: "town.crests", crest: "town.crests",
+    shards: "town.crystalline", shard: "town.crystalline",
     heirlooms: "town.heirlooms", statue: "town.heirlooms", portrait: "town.portraits",
+    memory: "town.memory", blueprint: "town.blueprint",
   };
   const key = keys[String(resource.id || "").toLowerCase()];
   return key && strings[key] ? t(key) : (resource.name || resource.id || t("town.resource"));

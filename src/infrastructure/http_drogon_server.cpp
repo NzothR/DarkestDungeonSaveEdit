@@ -340,6 +340,16 @@ std::optional<std::string> hero_roster_portrait(const domain::DefinitionReferenc
     return std::nullopt;
 }
 
+std::string strip_game_markup(std::string value) {
+    std::size_t start = 0;
+    while ((start = value.find('[', start)) != std::string::npos) {
+        const auto end = value.find(']', start + 1);
+        if (end == std::string::npos) break;
+        value.erase(start, end - start + 1);
+    }
+    return value;
+}
+
 Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     const auto& model = campaign.edits->model();
     Json::Value value(Json::objectValue);
@@ -356,7 +366,9 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         Json::Value item(Json::objectValue);
         item["index"] = static_cast<Json::UInt64>(resource.index);
         item["id"] = resource.id.value ? *resource.id.value : resource.definition.raw_id;
-        item["name"] = resource.definition.display_name.empty() ? item["id"] : resource.definition.display_name;
+        item["name"] = strip_game_markup(resource.definition.display_name.empty()
+            ? (resource.id.value ? *resource.id.value : resource.definition.raw_id)
+            : resource.definition.display_name);
         item["amount"] = resource.amount.value ? Json::Value(*resource.amount.value) : Json::Value(Json::nullValue);
         item["editable"] = resource.amount.value.has_value() && resource.amount.raw.has_value();
         item["assets"] = definition_assets(resource.definition);
@@ -368,9 +380,11 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     for (const auto& hero : model.heroes) {
         Json::Value item(Json::objectValue);
         item["id"] = hero.persistent_id;
-        item["name"] = hero.name.value ? *hero.name.value : hero.persistent_id;
+        item["name"] = strip_game_markup(hero.name.value ? *hero.name.value : hero.persistent_id);
         item["classId"] = hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id;
-        item["className"] = hero.definition.display_name.empty() ? item["classId"] : hero.definition.display_name;
+        item["className"] = strip_game_markup(hero.definition.display_name.empty()
+            ? (hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id)
+            : hero.definition.display_name);
         item["state"] = hero.state == domain::EntityState::Resolved ? "resolved" : "partial";
         item["assets"] = definition_assets(hero.definition);
         if (const auto portrait = hero_roster_portrait(hero.definition)) item["portraitPath"] = *portrait;
@@ -383,7 +397,9 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         Json::Value item(Json::objectValue);
         item["index"] = static_cast<Json::UInt64>(trinket.index);
         item["id"] = trinket.id.value ? *trinket.id.value : trinket.definition.raw_id;
-        item["name"] = trinket.definition.display_name.empty() ? item["id"] : trinket.definition.display_name;
+        item["name"] = strip_game_markup(trinket.definition.display_name.empty()
+            ? (trinket.id.value ? *trinket.id.value : trinket.definition.raw_id)
+            : trinket.definition.display_name);
         item["amount"] = trinket.amount.value ? Json::Value(*trinket.amount.value) : Json::Value(Json::nullValue);
         item["assets"] = definition_assets(trinket.definition);
         trinkets.append(std::move(item));
