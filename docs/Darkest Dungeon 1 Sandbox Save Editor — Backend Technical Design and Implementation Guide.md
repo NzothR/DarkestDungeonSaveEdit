@@ -1300,7 +1300,14 @@ Controller 禁止：
 /api/backups
 ```
 
-具体 endpoint 与 DTO 在 HTTP 阶段根据稳定 Application Service 设计，不在核心阶段提前冻结。
+当前前端纵切片已冻结以下只读/Session API：`GET /api/campaign` 返回资源、英雄、饰品及 revision；
+`POST /api/campaign/resource` 修改一个资源数量；`POST /api/campaign/undo` 与
+`POST /api/campaign/redo` 执行历史操作。资源操作只进入内存 `CampaignEditSession`，仍须经过
+Operation、Validation 和 revision 检查；显式磁盘 Commit 继续由后续保存阶段接入。
+
+`GET /api/content-asset?path=...` 依据有效内容环境解析资源数据库中的 virtual path，再从对应
+source root 读取头像或饰品贴图。路径不是玩家配置的任意文件路径，解析失败只返回 404，不影响模型中
+保留原始 ID。
 
 ## 18.4 本地安全
 

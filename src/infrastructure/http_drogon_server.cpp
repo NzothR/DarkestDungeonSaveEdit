@@ -1,9 +1,12 @@
 #include "ddse/infrastructure/http_drogon_server.hpp"
 
 #include "ddse/application/save_profile.hpp"
+#include "ddse/application/campaign_model_builder.hpp"
+#include "ddse/application/campaign_edit_session.hpp"
 #include "ddse/application/mod_environment.hpp"
 #include "ddse/infrastructure/database_initialization.hpp"
 #include "ddse/infrastructure/database_mod_query.hpp"
+#include "ddse/infrastructure/sqlite_content_environment.hpp"
 
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
@@ -19,6 +22,9 @@
 #include <future>
 #include <iostream>
 #include <optional>
+#include <mutex>
+#include <memory>
+#include <limits>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -66,6 +72,10 @@ struct ServerContext {
         : web_root(std::move(root)), session_token(std::move(token)),
           status_service(status), configuration_store(store), file_system(files),
           initialization(files) {}
+    void invalidate_campaign() {
+        std::lock_guard lock(campaign_mutex);
+        campaign.reset();
+    }
     std::filesystem::path web_root;
     std::string session_token;
     std::string origin;
@@ -74,6 +84,13 @@ struct ServerContext {
     application::AppConfigurationStore& configuration_store;
     application::IFileSystem& file_system;
     DatabaseInitializationManager initialization;
+    struct CampaignSession {
+        application::RawSaveProfile profile;
+        std::unique_ptr<SqliteContentEnvironment> content;
+        std::unique_ptr<application::CampaignEditSession> edits;
+    };
+    std::mutex campaign_mutex;
+    std::unique_ptr<CampaignSession> campaign;
 };
 
 std::string make_session_token() {
@@ -259,6 +276,235 @@ drogon::HttpResponsePtr json_ok(Json::Value value) {
     return response;
 }
 
+std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
+    const auto& configuration = context.configuration_store.current();
+    if (configuration.save_roots.empty() || configuration.save_roots.front().empty())
+        return core::Error{core::ErrorCode::InvalidConfiguration,
+                           "A save profile must be selected before opening the town editor.",
+                           "CampaignSession"};
+    const auto initialization = context.initialization.state();
+    if (initialization.status != "completed")
+        return core::Error{core::ErrorCode::DatabaseError,
+                           "The content databases are not ready yet.", "CampaignSession"};
+    const auto save_root = configuration.save_roots.front();
+    if (context.campaign && context.campaign->profile.descriptor.root_path == save_root)
+        return std::nullopt;
+
+    auto profile = application::SaveProfileDiscovery{context.file_system}.load(save_root);
+    if (!profile) return profile.error();
+    if (profile.value().status != application::ProfileReadStatus::Complete)
+        return core::Error{core::ErrorCode::InvalidConfiguration,
+                           "The selected save profile is not structurally complete.",
+                           "CampaignSession"};
+
+    infrastructure::SqliteContentEnvironmentConfig environment_config;
+    environment_config.base_content_database = context.initialization.base_database_path();
+    environment_config.mod_environment_database = context.initialization.mod_database_path();
+    environment_config.selection.language = context.configuration_store.current().language == "zh_cn"
+        ? "schinese" : "english";
+    environment_config.selection.fallback_language = "english";
+    auto content = std::make_unique<SqliteContentEnvironment>(std::move(environment_config));
+    auto model = application::CampaignModelBuilder{}.build(profile.value(), *content);
+
+    auto session = std::make_unique<ServerContext::CampaignSession>();
+    session->profile = std::move(profile.value());
+    session->content = std::move(content);
+    session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
+    context.campaign = std::move(session);
+    return std::nullopt;
+}
+
+Json::Value definition_assets(const domain::DefinitionReference& definition) {
+    Json::Value assets(Json::arrayValue);
+    for (const auto& asset : definition.assets) {
+        Json::Value item(Json::objectValue);
+        item["role"] = asset.role;
+        item["path"] = asset.virtual_path;
+        item["sourceId"] = asset.source_id;
+        item["resolved"] = asset.resolved;
+        if (!asset.virtual_path.empty()) item["url"] = "/api/content-asset?path=" + asset.virtual_path;
+        assets.append(std::move(item));
+    }
+    return assets;
+}
+
+Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
+    const auto& model = campaign.edits->model();
+    Json::Value value(Json::objectValue);
+    value["profileId"] = model.summary.profile_id;
+    value["state"] = model.state == domain::ModelState::Complete ? "complete" :
+                      model.state == domain::ModelState::Partial ? "partial" : "invalid";
+    value["revision"] = Json::UInt64(campaign.edits->revision());
+    value["dirty"] = !campaign.edits->pending_changes().empty();
+    value["canUndo"] = campaign.edits->can_undo();
+    value["canRedo"] = campaign.edits->can_redo();
+
+    Json::Value resources(Json::arrayValue);
+    for (const auto& resource : model.resources) {
+        Json::Value item(Json::objectValue);
+        item["index"] = static_cast<Json::UInt64>(resource.index);
+        item["id"] = resource.id.value ? *resource.id.value : resource.definition.raw_id;
+        item["name"] = resource.definition.display_name.empty() ? item["id"] : resource.definition.display_name;
+        item["amount"] = resource.amount.value ? Json::Value(*resource.amount.value) : Json::Value(Json::nullValue);
+        item["editable"] = resource.amount.value.has_value() && resource.amount.raw.has_value();
+        item["assets"] = definition_assets(resource.definition);
+        resources.append(std::move(item));
+    }
+    value["resources"] = std::move(resources);
+
+    Json::Value heroes(Json::arrayValue);
+    for (const auto& hero : model.heroes) {
+        Json::Value item(Json::objectValue);
+        item["id"] = hero.persistent_id;
+        item["name"] = hero.name.value ? *hero.name.value : hero.persistent_id;
+        item["classId"] = hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id;
+        item["className"] = hero.definition.display_name.empty() ? item["classId"] : hero.definition.display_name;
+        item["state"] = hero.state == domain::EntityState::Resolved ? "resolved" : "partial";
+        item["assets"] = definition_assets(hero.definition);
+        heroes.append(std::move(item));
+    }
+    value["heroes"] = std::move(heroes);
+
+    Json::Value trinkets(Json::arrayValue);
+    for (const auto& trinket : model.trinket_inventory) {
+        Json::Value item(Json::objectValue);
+        item["index"] = static_cast<Json::UInt64>(trinket.index);
+        item["id"] = trinket.id.value ? *trinket.id.value : trinket.definition.raw_id;
+        item["name"] = trinket.definition.display_name.empty() ? item["id"] : trinket.definition.display_name;
+        item["amount"] = trinket.amount.value ? Json::Value(*trinket.amount.value) : Json::Value(Json::nullValue);
+        item["assets"] = definition_assets(trinket.definition);
+        trinkets.append(std::move(item));
+    }
+    value["trinkets"] = std::move(trinkets);
+    return value;
+}
+
+void handle_campaign(const drogon::HttpRequestPtr& request,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                     const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    callback(json_ok(campaign_value(*context->campaign)));
+}
+
+void handle_campaign_resource(const drogon::HttpRequestPtr& request,
+                              std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                              const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    const auto is_integer = [](const Json::Value& value) {
+        return value.isInt() || value.isUInt() || value.isInt64() || value.isUInt64();
+    };
+    if (!body || !body->isObject() || !is_integer((*body)["index"]) || !is_integer((*body)["amount"]) ||
+        !is_integer((*body)["revision"]) || (*body)["index"].asInt64() < 0 || (*body)["revision"].asInt64() < 0) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION",
+                            "Resource edit requires index, non-negative amount, and revision."));
+        return;
+    }
+    const auto amount = (*body)["amount"].asInt64();
+    if (amount < 0 || amount > std::numeric_limits<std::int32_t>::max()) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION",
+                            "Resource amount is outside the supported range."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    application::SetCampaignValueOperation operation{
+        application::CampaignOperationTarget{"Estate.Resource.Amount", {},
+                                             std::optional<std::size_t>{static_cast<std::size_t>((*body)["index"].asUInt64())}},
+        static_cast<std::int32_t>(amount)};
+    auto applied = context->campaign->edits->apply(application::CampaignOperation{std::move(operation)},
+                                                    (*body)["revision"].asUInt64());
+    if (!applied) {
+        const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision
+            ? drogon::k409Conflict : drogon::k400BadRequest;
+        callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+        return;
+    }
+    callback(json_ok(campaign_value(*context->campaign)));
+}
+
+void handle_campaign_history(const drogon::HttpRequestPtr& request,
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                             const std::shared_ptr<ServerContext>& context, bool undo) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !body->isMember("revision") ||
+        !((*body)["revision"].isInt() || (*body)["revision"].isUInt() ||
+          (*body)["revision"].isInt64() || (*body)["revision"].isUInt64()) ||
+        (*body)["revision"].asInt64() < 0) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION", "Revision is required."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    auto result = undo ? context->campaign->edits->undo((*body)["revision"].asUInt64())
+                       : context->campaign->edits->redo((*body)["revision"].asUInt64());
+    if (!result) {
+        const auto status = result.error().code == core::ErrorCode::StaleSessionRevision
+            ? drogon::k409Conflict : drogon::k400BadRequest;
+        callback(json_error(status, std::string{core::to_string(result.error().code)}, result.error().message));
+        return;
+    }
+    callback(json_ok(campaign_value(*context->campaign)));
+}
+
+void handle_content_asset(const drogon::HttpRequestPtr& request,
+                          std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                          const std::shared_ptr<ServerContext>& context) {
+    if (!has_expected_host(request, *context) || !has_expected_origin(request, *context) ||
+        !has_session_cookie(request, *context)) {
+        callback(forbidden_response("LOCAL_SESSION_REQUIRED", "Open the editor page before calling the local API."));
+        return;
+    }
+    const auto path = request->getParameter("path");
+    if (path.empty()) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    const auto resolved = context->campaign->content->resolve_asset(path);
+    if (!resolved || !resolved.value() || !std::filesystem::is_regular_file(resolved.value()->physical_path)) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    std::ifstream input(resolved.value()->physical_path, std::ios::binary);
+    if (!input) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    const std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setBody(bytes);
+    const auto extension = resolved.value()->extension;
+    if (extension == ".png") response->setContentTypeCode(drogon::CT_IMAGE_PNG);
+    else if (extension == ".jpg" || extension == ".jpeg") response->setContentTypeCode(drogon::CT_IMAGE_JPG);
+    else if (extension == ".webp") response->setContentTypeCode(drogon::CT_IMAGE_WEBP);
+    else response->setContentTypeString("application/octet-stream");
+    response->addHeader("Cache-Control", "no-store");
+    callback(response);
+}
+
 void handle_configuration(const drogon::HttpRequestPtr& request,
                           std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                           const std::shared_ptr<ServerContext>& context) {
@@ -309,6 +555,7 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
         return;
     }
+    context->invalidate_campaign();
     context->initialization.start(context->configuration_store.current());
     callback(json_ok(configuration_value(context->configuration_store.current())));
 }
@@ -346,6 +593,7 @@ void handle_initialization(const drogon::HttpRequestPtr& request,
         bool force = false;
         if (const auto body = request->getJsonObject(); body && body->isMember("force") && (*body)["force"].isBool())
             force = (*body)["force"].asBool();
+        if (force) context->invalidate_campaign();
         context->initialization.start(config, force);
     }
     callback(json_ok(initialization_value(context->initialization.state())));
@@ -809,6 +1057,31 @@ int run_drogon_http_server(
                                        std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_town_asset(request, std::move(callback), context);
         }, {drogon::Get});
+    server.registerHandler(
+        "/api/content-asset", [context](const drogon::HttpRequestPtr& request,
+                                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_content_asset(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/campaign", [context](const drogon::HttpRequestPtr& request,
+                                      std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/campaign/resource", [context](const drogon::HttpRequestPtr& request,
+                                               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_resource(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/undo", [context](const drogon::HttpRequestPtr& request,
+                                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_history(request, std::move(callback), context, true);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/redo", [context](const drogon::HttpRequestPtr& request,
+                                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_history(request, std::move(callback), context, false);
+        }, {drogon::Post});
     server.registerHandler(
         "/api/initialization", [context](const drogon::HttpRequestPtr& request,
                                           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {

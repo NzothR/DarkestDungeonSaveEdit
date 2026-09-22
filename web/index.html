@@ -85,13 +85,7 @@
           </div>
           <header class="town-resource-bar">
             <div class="town-estate"><span class="town-mark">DD</span><span data-i18n="town.estateName">Estate</span></div>
-            <div class="town-resources">
-              <span class="resource"><b>Gold</b><strong>12,450</strong></span>
-              <span class="resource"><b>Heirlooms</b><strong>186</strong></span>
-              <span class="resource"><b>Portraits</b><strong>42</strong></span>
-              <span class="resource"><b>Deeds</b><strong>73</strong></span>
-              <span class="resource"><b>Crests</b><strong>91</strong></span>
-            </div>
+            <div id="town-header-resources" class="town-resources"></div>
           </header>
           <div class="town-title"><span data-i18n="town.title">Hamlet</span><small data-i18n="town.preview">F2 visual preview</small></div>
           <aside class="town-building-panel">
@@ -111,32 +105,23 @@
           </aside>
           <aside class="town-roster-panel">
             <h2 data-i18n="town.roster">Roster</h2>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
-            <div class="roster-placeholder"><span class="missing-art portrait-fallback"></span><div><b data-i18n="town.heroPlaceholder">Hero roster</b><small data-i18n="town.notConnected">Not connected in F2</small></div></div>
+            <div id="hero-list" class="hero-list"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-trinket-panel">
             <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
-            <div class="chest-grid"><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span><span class="missing-art item-fallback"></span></div>
-            <small data-i18n="town.notConnected">Not connected in F2</small>
+            <div id="trinket-grid" class="chest-grid"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-resource-panel">
-            <div class="town-panel-heading"><h2 data-i18n="town.resources">资源</h2><small data-i18n="town.previewOnly">仅界面预览</small></div>
-            <div class="resource-grid">
-              <span class="resource"><b data-i18n="town.gold">金币</b><strong>12,450</strong></span>
-              <span class="resource"><b data-i18n="town.heirlooms">雕像</b><strong>186</strong></span>
-              <span class="resource"><b data-i18n="town.portraits">画像</b><strong>42</strong></span>
-              <span class="resource"><b data-i18n="town.deeds">地契</b><strong>73</strong></span>
-              <span class="resource"><b data-i18n="town.crests">纹章</b><strong>91</strong></span>
-              <span class="resource"><b data-i18n="town.crystalline">星晶</b><strong>—</strong></span>
-            </div>
+            <div class="town-panel-heading"><h2 data-i18n="town.resources">资源</h2><small data-i18n="town.editableResources">可编辑</small></div>
+            <div id="resource-grid" class="resource-grid"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
+          <div class="town-history-controls" aria-label="History controls">
+            <button id="town-undo" type="button" class="secondary" data-i18n="town.undo">撤销</button>
+            <button id="town-redo" type="button" class="secondary" data-i18n="town.redo">重做</button>
+          </div>
           <button id="town-settings-button" class="town-settings-button" type="button" data-i18n="town.settings">设置</button>
-          <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span class="town-save-state" data-i18n="town.previewOnly">Preview only</span></footer>
+          <button id="town-save" class="town-save-button" type="button" data-i18n="town.save">保存</button>
+          <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span id="town-save-state" class="town-save-state" data-i18n="town.clean">未修改</span></footer>
         </div>
       </section>
 

@@ -56,4 +56,8 @@ export const editorGateway = Object.freeze({
   selectDirectory: (kind) => request("/api/select-directory", "POST", { kind }),
   restoreRecovery: () => request("/api/recovery/restore", "POST", {}),
   discardRecovery: () => request("/api/recovery", "POST", {}),
+  getCampaign: () => request("/api/campaign"),
+  setCampaignResource: (index, amount, revision) => request("/api/campaign/resource", "POST", { index, amount, revision }),
+  undoCampaign: (revision) => request("/api/campaign/undo", "POST", { revision }),
+  redoCampaign: (revision) => request("/api/campaign/redo", "POST", { revision }),
 });

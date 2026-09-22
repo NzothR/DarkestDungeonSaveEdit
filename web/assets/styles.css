@@ -123,7 +123,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-estate { display: flex; align-items: center; gap: 10px; font: 600 clamp(14px, 1.5vw, 24px) Georgia, serif; color: #d7ae69; }
 .town-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #c59a53; transform: rotate(45deg); font: 600 10px Arial; }
 .town-mark::first-line { transform: rotate(-45deg); }
-.town-resources { display: none; }
+.town-resources { display: flex; align-items: center; gap: 15px; margin-left: auto; }
 .resource { display: grid; gap: 2px; min-width: 54px; text-align: right; }
 .resource b { color: #a99b85; font-size: clamp(9px, .75vw, 13px); font-weight: 500; }
 .resource strong { color: #f0d49a; font-size: clamp(12px, 1.1vw, 18px); font-variant-numeric: tabular-nums; }
@@ -152,14 +152,33 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .roster-placeholder div { display: grid; gap: 3px; }
 .roster-placeholder b { color: #e4d5bc; font-size: clamp(10px, .85vw, 14px); }
 .roster-placeholder small, .town-trinket-panel > small, .town-resource-panel > small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
+.hero-list { height: calc(100% - 34px); overflow: auto; }
+.hero-entry { display: flex; align-items: center; gap: 9px; min-height: 54px; padding: 7px 0; border-top: 1px solid #ffffff14; }
+.hero-entry img, .hero-entry .portrait-fallback { width: 42px; height: 48px; flex: 0 0 42px; object-fit: cover; }
+.hero-entry-text { display: grid; min-width: 0; gap: 3px; }
+.hero-entry-text strong { overflow: hidden; color: #e4d5bc; font-size: clamp(10px, .85vw, 14px); text-overflow: ellipsis; white-space: nowrap; }
+.hero-entry-text small { overflow: hidden; color: #9f9382; font-size: clamp(8px, .65vw, 11px); text-overflow: ellipsis; white-space: nowrap; }
+.town-data-message { margin: 12px 0; color: #9f9382; font-size: 11px; }
 .missing-art { position: relative; display: inline-grid; place-items: center; border: 1px solid #d0d0d099; background: #f6f4ee; color: #332d26; }
 .missing-art::after { content: "缺失资源"; font-size: 9px; text-align: center; }
 .town-background-fallback::after { content: "缺失资源 · town.background"; color: #eee4d2; font-size: 14px; }
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
 .chest-grid { display: grid; grid-template-columns: repeat(4, minmax(34px, 1fr)); gap: 10px; margin: 18px auto; max-width: 560px; }
+.trinket-entry { position: relative; display: grid; place-items: center; min-width: 42px; min-height: 42px; border: 1px solid #ffffff18; background: #09080788; }
+.trinket-entry img, .trinket-entry .item-fallback { width: 38px; height: 38px; object-fit: contain; }
+.trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }
+.resource-editor { display: grid; gap: 2px; }
+.resource-editor b { overflow: hidden; color: #a99b85; font-size: clamp(9px, .75vw, 13px); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.resource-editor input { width: 100%; box-sizing: border-box; padding: 2px 3px; color: #f0d49a; border: 1px solid #c59a5344; background: #090807aa; font: inherit; font-size: clamp(12px, 1.1vw, 18px); font-variant-numeric: tabular-nums; }
+.resource-editor input:focus { outline: 1px solid #d7ae69; }
+.town-history-controls { position: absolute; z-index: 9; top: 1.5%; right: 1.8%; display: flex; gap: 5px; }
+.town-history-controls button, .town-save-button { padding: 6px 15px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; }
+.town-history-controls button:disabled { opacity: .45; cursor: not-allowed; }
+.town-save-button { position: absolute; z-index: 9; left: 50%; bottom: 1.1%; transform: translateX(-50%); min-width: 110px; }
+.town-save-button:disabled { opacity: .5; cursor: not-allowed; }
 .town-settings-button { position: absolute; right: 1.8%; bottom: 1.1%; z-index: 8; padding: 6px 15px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; }
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }

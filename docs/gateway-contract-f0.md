@@ -99,6 +99,40 @@ POST 请求体传 `{ "force": true }` 时主动重新扫描 Mod 环境数据库�
 
 小镇背景优先请求 `fx/town_ground/town_ground.sprite.png`。`GET /api/town-asset?role=background` 会在原版资源数据库中按索引查找同一背景，作为数据库存在但文件布局需要兼容时的回退接口。
 
+## F3 Campaign Session
+
+### `GET /api/campaign`
+
+初始化完成且已配置 Profile 后返回当前 Session：
+
+```json
+{
+  "profileId": "profile_0",
+  "revision": 0,
+  "dirty": false,
+  "canUndo": false,
+  "canRedo": false,
+  "resources": [{ "index": 0, "id": "gold", "name": "Gold", "amount": 12450, "editable": true }],
+  "heroes": [{ "id": "...", "name": "英雄名", "classId": "crusader", "className": "Crusader", "assets": [] }],
+  "trinkets": [{ "index": 0, "id": "...", "name": "Trinket", "amount": 1, "assets": [] }]
+}
+```
+
+### `POST /api/campaign/resource`
+
+请求体为 `{ "index": 0, "amount": 15000, "revision": 0 }`。后端按资源原始 occurrence index
+创建 `Estate.Resource.Amount` Operation，检查非负整数、字段定位和 revision，成功后返回完整 Campaign DTO。
+
+### `POST /api/campaign/undo` / `POST /api/campaign/redo`
+
+请求体为 `{ "revision": 1 }`，由后端 Session 执行撤销或重做并返回新 DTO。revision 过期返回
+`STALE_SESSION_REVISION`。
+
+### `GET /api/content-asset?path=...`
+
+从有效内容数据库解析 virtual path 后读取头像、饰品等资源；响应只允许数据库解析出的 source root
+文件，资源缺失返回 404。数据库不保存额外图标路径。
+
 ## 浏览器 Gateway
 
 `web/assets/gateway.js` 是唯一页面 API 入口。调用方接收状态 DTO 或 `GatewayError`，不直接使用 `fetch`，也不访问服务端实现细节。

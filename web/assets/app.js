@@ -44,10 +44,19 @@ const elements = {
   townBackground: document.querySelector("#town-background"),
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
   townSettingsButton: document.querySelector("#town-settings-button"),
+  townHeaderResources: document.querySelector("#town-header-resources"),
+  heroList: document.querySelector("#hero-list"),
+  trinketGrid: document.querySelector("#trinket-grid"),
+  resourceGrid: document.querySelector("#resource-grid"),
+  townUndo: document.querySelector("#town-undo"),
+  townRedo: document.querySelector("#town-redo"),
+  townSave: document.querySelector("#town-save"),
+  townSaveState: document.querySelector("#town-save-state"),
 };
 
 let locale = "zh_cn";
 let strings = {};
+let latestCampaign = null;
 
 function t(key, variables = {}) {
   let value = strings[key] ?? key;
@@ -126,6 +135,142 @@ function showTownShell() {
     image.onerror = tryNext;
     tryNext();
   }
+  loadCampaign().catch((error) => {
+    const message = displayError(error) || t("town.dataUnavailable");
+    elements.heroList.textContent = message;
+    elements.trinketGrid.textContent = message;
+    elements.resourceGrid.textContent = message;
+  });
+}
+
+function localizedResourceName(resource) {
+  const keys = {
+    gold: "town.gold", bust: "town.heirlooms", portraits: "town.portraits",
+    deeds: "town.deeds", crests: "town.crests", shards: "town.crystalline",
+    heirlooms: "town.heirlooms", statue: "town.heirlooms", portrait: "town.portraits",
+  };
+  const key = keys[String(resource.id || "").toLowerCase()];
+  return key && strings[key] ? t(key) : (resource.name || resource.id || t("town.resource"));
+}
+
+function chooseAsset(assets = [], preferred = []) {
+  const ordered = [...assets].sort((left, right) => {
+    const a = preferred.findIndex((role) => String(left.role || "").toLowerCase().includes(role));
+    const b = preferred.findIndex((role) => String(right.role || "").toLowerCase().includes(role));
+    return (a < 0 ? 999 : a) - (b < 0 ? 999 : b);
+  });
+  return ordered.find((asset) => asset.resolved && asset.path) || ordered.find((asset) => asset.path);
+}
+
+function assetUrl(asset) {
+  return asset ? `/api/content-asset?path=${encodeURIComponent(asset.path)}` : "";
+}
+
+function renderCampaign(campaign) {
+  latestCampaign = campaign;
+  const resources = campaign.resources || [];
+  elements.townHeaderResources.replaceChildren();
+  const headerResources = resources.slice(0, 5);
+  for (const resource of headerResources) {
+    const item = document.createElement("span");
+    item.className = "resource";
+    const name = document.createElement("b");
+    name.textContent = localizedResourceName(resource);
+    const amount = document.createElement("strong");
+    amount.textContent = resource.amount == null ? "—" : Number(resource.amount).toLocaleString();
+    item.append(name, amount);
+    elements.townHeaderResources.append(item);
+  }
+
+  elements.resourceGrid.replaceChildren();
+  if (!resources.length) {
+    elements.resourceGrid.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noResources") }));
+  }
+  for (const resource of resources) {
+    const item = document.createElement("label");
+    item.className = "resource-editor";
+    const name = document.createElement("b");
+    name.textContent = localizedResourceName(resource);
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.step = "1";
+    input.value = resource.amount == null ? "" : resource.amount;
+    input.disabled = !resource.editable;
+    input.title = resource.id || "";
+    input.addEventListener("change", async () => {
+      if (input.disabled || input.value === "") return;
+      input.disabled = true;
+      try {
+        const updated = await editorGateway.setCampaignResource(resource.index, Number(input.value), campaign.revision);
+        renderCampaign(updated);
+      } catch (error) {
+        input.disabled = false;
+        elements.townSaveState.textContent = displayError(error);
+      }
+    });
+    item.append(name, input);
+    elements.resourceGrid.append(item);
+  }
+
+  elements.heroList.replaceChildren();
+  if (!campaign.heroes?.length) {
+    elements.heroList.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noHeroes") }));
+  }
+  for (const hero of campaign.heroes || []) {
+    const row = document.createElement("div");
+    row.className = "hero-entry";
+    const asset = chooseAsset(hero.assets, ["portrait", "hero", "roster", "icon"]);
+    if (asset) {
+      const image = document.createElement("img");
+      image.alt = "";
+      image.src = assetUrl(asset);
+      image.onerror = () => { image.replaceWith(Object.assign(document.createElement("span"), { className: "missing-art portrait-fallback" })); };
+      row.append(image);
+    } else row.append(Object.assign(document.createElement("span"), { className: "missing-art portrait-fallback" }));
+    const text = document.createElement("div");
+    text.className = "hero-entry-text";
+    const name = document.createElement("strong");
+    name.textContent = hero.name || hero.id;
+    const className = document.createElement("small");
+    className.textContent = hero.className || hero.classId || t("town.unknownClass");
+    text.append(name, className);
+    row.append(text);
+    elements.heroList.append(row);
+  }
+
+  elements.trinketGrid.replaceChildren();
+  if (!campaign.trinkets?.length) {
+    elements.trinketGrid.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noTrinkets") }));
+  }
+  for (const trinket of campaign.trinkets || []) {
+    const item = document.createElement("div");
+    item.className = "trinket-entry";
+    const asset = chooseAsset(trinket.assets, ["trinket", "item", "icon"]);
+    if (asset) {
+      const image = document.createElement("img");
+      image.alt = trinket.name || trinket.id || "";
+      image.src = assetUrl(asset);
+      image.onerror = () => { image.replaceWith(Object.assign(document.createElement("span"), { className: "missing-art item-fallback" })); };
+      item.append(image);
+    } else item.append(Object.assign(document.createElement("span"), { className: "missing-art item-fallback" }));
+    if (trinket.amount > 1) {
+      const count = document.createElement("small");
+      count.textContent = `×${trinket.amount}`;
+      item.append(count);
+    }
+    item.title = trinket.name || trinket.id || "";
+    elements.trinketGrid.append(item);
+  }
+  elements.townUndo.disabled = !campaign.canUndo;
+  elements.townRedo.disabled = !campaign.canRedo;
+  elements.townSave.disabled = !campaign.dirty;
+  elements.townSaveState.textContent = campaign.dirty ? t("town.unsaved") : t("town.clean");
+}
+
+async function loadCampaign() {
+  const campaign = await editorGateway.getCampaign();
+  renderCampaign(campaign);
 }
 
 function showConfiguration(config) {
@@ -301,6 +446,21 @@ elements.reinitializeMods.addEventListener("click", async () => {
 elements.townSettingsButton.addEventListener("click", () => {
   elements.townShell.hidden = true;
   elements.panel.hidden = false;
+});
+elements.townUndo.addEventListener("click", async () => {
+  if (!latestCampaign?.canUndo) return;
+  elements.townUndo.disabled = true;
+  try { renderCampaign(await editorGateway.undoCampaign(latestCampaign.revision)); }
+  catch (error) { elements.townSaveState.textContent = displayError(error); }
+});
+elements.townRedo.addEventListener("click", async () => {
+  if (!latestCampaign?.canRedo) return;
+  elements.townRedo.disabled = true;
+  try { renderCampaign(await editorGateway.redoCampaign(latestCampaign.revision)); }
+  catch (error) { elements.townSaveState.textContent = displayError(error); }
+});
+elements.townSave.addEventListener("click", () => {
+  elements.townSaveState.textContent = t("town.saveDeferred");
 });
 elements.language.addEventListener("change", async () => {
   await setLocale(elements.language.value);
