@@ -79,17 +79,17 @@ async function loadProfiles() {
   elements.profileList.replaceChildren();
   try {
     const result = await editorGateway.listProfiles();
-    if (!result.profiles.length) {
+    if (!result.profile || !result.mods.length) {
       elements.profilesMessage.textContent = t("profiles.empty");
       return;
     }
-    elements.profilesMessage.textContent = t("profiles.found", { count: result.profiles.length });
-    for (const profile of result.profiles) {
+    elements.profilesMessage.textContent = t("profiles.found", { count: result.mods.length });
+    for (const mod of result.mods) {
       const item = document.createElement("li");
       const title = document.createElement("strong");
-      title.textContent = `${profile.id} · ${profile.status}`;
+      title.textContent = t("profiles.detail", { order: mod.order + 1, name: mod.displayName, key: mod.key });
       const detail = document.createElement("span");
-      detail.textContent = t("profiles.detail", { path: profile.rootPath, count: profile.documentCount });
+      detail.textContent = mod.provider ? `${mod.provider}${mod.externalId ? ` · ${mod.externalId}` : ""}` : mod.key;
       item.append(title, detail);
       elements.profileList.append(item);
     }
@@ -152,6 +152,10 @@ elements.form.addEventListener("submit", async (event) => {
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
+elements.language.addEventListener("change", async () => {
+  await setLocale(elements.language.value);
+  await loadProfiles();
+});
 
 for (const button of document.querySelectorAll("[data-directory-kind]")) {
   button.addEventListener("click", async () => {

@@ -1,6 +1,7 @@
 #include "ddse/infrastructure/http_drogon_server.hpp"
 
 #include "ddse/application/save_profile.hpp"
+#include "ddse/application/mod_environment.hpp"
 
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
@@ -281,6 +282,17 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
     if ((*body).isMember("maxBackupCount") && (*body)["maxBackupCount"].isUInt()) configuration.max_backup_count = (*body)["maxBackupCount"].asUInt();
     if ((*body).isMember("autoEditSaveEnabled") && (*body)["autoEditSaveEnabled"].isBool()) configuration.auto_edit_save_enabled = (*body)["autoEditSaveEnabled"].asBool();
     if ((*body).isMember("autoEditSaveIntervalSeconds") && (*body)["autoEditSaveIntervalSeconds"].isUInt()) configuration.auto_edit_save_interval_seconds = (*body)["autoEditSaveIntervalSeconds"].asUInt();
+    if (!configuration.save_roots.empty() && !configuration.save_roots.front().empty()) {
+        const auto profile = application::SaveProfileDiscovery{context->file_system}.load(configuration.save_roots.front());
+        if (!profile) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_SAVE_PROFILE", profile.error().message));
+            return;
+        }
+        if (profile.value().status != application::ProfileReadStatus::Complete) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_SAVE_PROFILE", "The selected save profile is not structurally complete."));
+            return;
+        }
+    }
     const auto result = context->configuration_store.save(configuration);
     if (!result) {
         callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
@@ -354,35 +366,61 @@ void handle_profiles(const drogon::HttpRequestPtr& request,
     std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
         [&](const drogon::HttpResponsePtr& response) { callback(response); };
     if (!authorized_api_request(request, *context, callback_ref)) return;
-    Json::Value profiles(Json::arrayValue);
+    const auto& roots = context->configuration_store.current().save_roots;
+    if (roots.empty() || roots.front().empty()) {
+        Json::Value value(Json::objectValue);
+        value["profile"] = Json::Value(Json::nullValue);
+        value["mods"] = Json::Value(Json::arrayValue);
+        callback(json_ok(std::move(value)));
+        return;
+    }
     application::SaveProfileDiscovery discovery(context->file_system);
-    for (const auto& root : context->configuration_store.current().save_roots) {
-        const auto discovered = discovery.discover(root);
-        if (!discovered) {
-            callback(json_error(drogon::k400BadRequest, "PROFILE_DISCOVERY_FAILED", discovered.error().message));
-            return;
+    const auto profile = discovery.load(roots.front());
+    if (!profile) {
+        callback(json_error(drogon::k400BadRequest, "PROFILE_DISCOVERY_FAILED", profile.error().message));
+        return;
+    }
+    Json::Value profile_value(Json::objectValue);
+    profile_value["id"] = profile.value().descriptor.id;
+    profile_value["rootPath"] = profile.value().descriptor.root_path.string();
+    profile_value["status"] = std::string{application::to_string(profile.value().status)};
+    profile_value["baselineFingerprint"] = Json::UInt64(profile.value().baseline_fingerprint);
+    profile_value["documentCount"] = static_cast<Json::UInt>(profile.value().documents.size());
+
+    Json::Value mods(Json::arrayValue);
+    const auto save_order = application::read_save_mod_order(profile.value());
+    if (!save_order) {
+        callback(json_error(drogon::k400BadRequest, "SAVE_MOD_ORDER_INVALID", save_order.error().message));
+        return;
+    }
+    application::ModEnvironmentScanResult environment;
+    application::ModEnvironmentScanConfig scan_config;
+    scan_config.save_profile_root = roots.front();
+    const auto& config = context->configuration_store.current();
+    if (!config.workshop_roots.empty()) scan_config.workshop_root = config.workshop_roots.front();
+    if (!config.local_mod_roots.empty()) scan_config.local_mod_roots.push_back(config.local_mod_roots.front());
+    const auto scanned = application::ModEnvironmentScanner{context->file_system}.scan(scan_config);
+    if (scanned) environment = scanned.value();
+    for (const auto& entry : save_order.value()) {
+        Json::Value item(Json::objectValue);
+        item["order"] = static_cast<Json::UInt>(entry.position);
+        item["key"] = entry.identity;
+        item["provider"] = entry.provider_id;
+        item["externalId"] = entry.external_id;
+        item["name"] = entry.name;
+        item["displayName"] = entry.name;
+        item["enabled"] = entry.enabled;
+        if (scanned) {
+            const auto found = std::find_if(environment.mods.begin(), environment.mods.end(), [&](const auto& mod) {
+                return mod.id == entry.matched_mod_id;
+            });
+            if (found != environment.mods.end() && !found->display_name.empty()) item["displayName"] = found->display_name;
         }
-        for (const auto& profile : discovered.value()) {
-            Json::Value value(Json::objectValue);
-            value["id"] = profile.descriptor.id;
-            value["rootPath"] = profile.descriptor.root_path.string();
-            value["status"] = std::string{application::to_string(profile.status)};
-            value["baselineFingerprint"] = Json::UInt64(profile.baseline_fingerprint);
-            value["documentCount"] = static_cast<Json::UInt>(profile.documents.size());
-            Json::Value diagnostics(Json::arrayValue);
-            for (const auto& diagnostic : profile.descriptor.diagnostics) {
-                Json::Value item(Json::objectValue);
-                item["documentId"] = diagnostic.document_id;
-                item["message"] = diagnostic.message;
-                item["core"] = diagnostic.core_document;
-                diagnostics.append(std::move(item));
-            }
-            value["diagnostics"] = std::move(diagnostics);
-            profiles.append(std::move(value));
-        }
+        mods.append(std::move(item));
     }
     Json::Value value(Json::objectValue);
-    value["profiles"] = std::move(profiles);
+    value["profile"] = std::move(profile_value);
+    value["mods"] = std::move(mods);
     callback(json_ok(std::move(value)));
 }
 
@@ -412,6 +450,17 @@ void handle_directory_picker(const drogon::HttpRequestPtr& request,
     if (!selected) {
         callback(json_error(drogon::k409Conflict, "DIRECTORY_PICKER_CANCELLED", "Directory selection was cancelled."));
         return;
+    }
+    if (kind == "save") {
+        const auto profile = application::SaveProfileDiscovery{context->file_system}.load(*selected);
+        if (!profile) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_SAVE_PROFILE", profile.error().message));
+            return;
+        }
+        if (profile.value().status != application::ProfileReadStatus::Complete) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_SAVE_PROFILE", "The selected save profile is not structurally complete."));
+            return;
+        }
     }
     Json::Value value(Json::objectValue);
     value["kind"] = kind;

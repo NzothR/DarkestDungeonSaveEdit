@@ -133,7 +133,7 @@ core::Result<AppConfiguration, core::Error> AppConfigurationStore::load() const 
 }
 
 core::Result<void, core::Error> AppConfigurationStore::save(const AppConfiguration& configuration) {
-    if (configuration.backup_root.empty() || configuration.data_root.empty() || configuration.max_backup_count == 0 ||
+    if (configuration.game_root.empty() || configuration.backup_root.empty() || configuration.data_root.empty() || configuration.max_backup_count == 0 ||
         configuration.max_backup_count > 10000 || configuration.auto_edit_save_interval_seconds == 0 ||
         configuration.auto_edit_save_interval_seconds > 86400)
         return core::Result<void, core::Error>::failure(
@@ -165,6 +165,21 @@ core::Result<AppConfiguration, core::Error> AppConfigurationStore::initialize() 
     auto loaded = load();
     if (!loaded) return loaded;
     configuration_ = loaded.value();
+    // First launch is allowed to persist an incomplete template so the UI can
+    // collect the required game and backup directories.
+    if (configuration_.game_root.empty()) {
+        auto parent = configuration_file_.parent_path();
+        if (!parent.empty()) {
+            auto made = file_system_.create_directories(parent);
+            if (!made) return core::Result<AppConfiguration, core::Error>::failure(made.error());
+        }
+        auto storage = ensure_storage();
+        if (!storage) return core::Result<AppConfiguration, core::Error>::failure(storage.error());
+        auto written = file_system_.write_file_atomic(configuration_file_, configuration_json(configuration_).dump(2) + "\n");
+        if (!written) return core::Result<AppConfiguration, core::Error>::failure(written.error());
+        initialized_ = true;
+        return core::Result<AppConfiguration, core::Error>::success(configuration_);
+    }
     auto saved = save(configuration_);
     if (!saved) return core::Result<AppConfiguration, core::Error>::failure(saved.error());
     return core::Result<AppConfiguration, core::Error>::success(configuration_);

@@ -51,13 +51,14 @@
 
 ### `PUT /api/configuration`
 
-请求体为同一组字段的 JSON 对象。后端负责范围校验、写入配置文件并创建备份目录；页面不得自行创建目录。
-游戏目录、存档目录、Workshop Mod 目录、额外本地 Mod 目录和备份目录各只有一个配置值。
+请求体为同一组字段的 JSON 对象。`gameRoot` 和 `backupRoot` 必须填写；存档 Profile、Workshop Mod 和额外本地 Mod 路径可以留空。
+后端负责范围校验、写入配置文件并创建备份目录；页面不得自行创建目录。所有目录配置各只有一个路径。
 
 ### `POST /api/select-directory`
 
 请求体为 `{ "kind": "game|save|workshop|localMod|backup" }`。Windows 下打开原生目录选择器，
-返回用户选择的绝对路径；取消选择返回 `DIRECTORY_PICKER_CANCELLED`。前端不依赖浏览器的文件系统路径模拟能力。
+返回用户选择的绝对路径；`save` 选择器接收单个 `profile_*` 目录并立即验证存档结构，验证失败不会返回可写路径。
+取消选择返回 `DIRECTORY_PICKER_CANCELLED`。前端不依赖浏览器的文件系统路径模拟能力。
 
 ### `GET /api/recovery`
 
@@ -74,8 +75,9 @@
 
 ### `GET /api/profiles`
 
-按配置中的 `saveRoots` 发现 `profile_*` 目录，返回 Profile 标识、路径、读取状态、文档数量、指纹和诊断。
-前端只显示这些 DTO，不自行遍历存档目录。
+读取配置中的单个 Profile 目录，从存档 `persist.game.json` 提取启用 Mod 列表并按存档顺序返回。
+如果已配置 Workshop 或本地 Mod 目录，能够匹配的条目返回本地化 Mod 名称；未匹配条目保留存档中的 key/name。
+该查询只用于初始化验证，不写入内容数据库。
 
 ## 浏览器 Gateway
 

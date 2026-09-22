@@ -338,10 +338,13 @@ ModEnvironmentScanner::scan(const ModEnvironmentScanConfig& config) const {
     if (!config.manager_order_json.empty()) result.protected_roots.push_back(config.manager_order_json);
     if (!config.base_content_database.empty()) result.protected_roots.push_back(config.base_content_database);
 
-    auto workshop = add_directory_mods(file_system_, config.workshop_root, true, 0,
-                                       result.mods, result.diagnostics);
-    if (!workshop) return core::Result<ModEnvironmentScanResult, core::Error>::failure(workshop.error());
+    if (!config.workshop_root.empty()) {
+        auto workshop = add_directory_mods(file_system_, config.workshop_root, true, 0,
+                                           result.mods, result.diagnostics);
+        if (!workshop) return core::Result<ModEnvironmentScanResult, core::Error>::failure(workshop.error());
+    }
     for (std::size_t i = 0; i < config.local_mod_roots.size(); ++i) {
+        if (config.local_mod_roots[i].empty()) continue;
         auto local = add_directory_mods(file_system_, config.local_mod_roots[i], false, i,
                                         result.mods, result.diagnostics);
         if (!local) return core::Result<ModEnvironmentScanResult, core::Error>::failure(local.error());
@@ -481,6 +484,11 @@ ModEnvironmentScanner::scan(const ModEnvironmentScanConfig& config) const {
         return std::tie(a.mod_id, a.virtual_path, a.message) < std::tie(b.mod_id, b.virtual_path, b.message);
     });
     return core::Result<ModEnvironmentScanResult, core::Error>::success(std::move(result));
+}
+
+core::Result<std::vector<ModOrderEntry>, core::Error>
+read_save_mod_order(const RawSaveProfile& profile) {
+    return extract_save_order(profile);
 }
 
 std::string_view to_string(ModOrderSource source) noexcept {

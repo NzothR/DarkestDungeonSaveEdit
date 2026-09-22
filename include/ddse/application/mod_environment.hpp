@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ddse/application/content_scanner.hpp"
+#include "ddse/application/save_profile.hpp"
 #include "ddse/core/error.hpp"
 #include "ddse/core/result.hpp"
 
@@ -87,6 +88,12 @@ public:
 private:
     const IFileSystem& file_system_;
 };
+
+// Reads the enabled Mod order persisted in persist.game.json without scanning
+// installed Mod roots. Used by the initialization UI for lightweight
+// verification before an effective content environment is built.
+[[nodiscard]] core::Result<std::vector<ModOrderEntry>, core::Error>
+read_save_mod_order(const RawSaveProfile& profile);
 
 [[nodiscard]] std::string_view to_string(ModOrderSource source) noexcept;
 

@@ -440,9 +440,11 @@ AppConfiguration
 ```
 
 `language` 是界面 locale，只允许 `en_us` 和 `zh_cn`，默认 `zh_cn`。游戏内容查询使用独立的内容语言配置，
-不与 UI locale 混用。目录设置在当前产品流程中各只有一个路径；HTTP 适配器将其传递为单元素列表给扫描器。
+不与 UI locale 混用。`gameRoot`、`backupRoot` 是必填目录；Profile、Workshop Mod 和额外本地 Mod 目录可选，
+当前产品流程中各只有一个路径，HTTP 适配器将其传递为单元素列表给扫描器。
 
 Windows 的 `/api/select-directory` 由后端调用原生目录选择器并返回绝对路径，前端不直接接触本机文件系统 API。
+选择 `save` 时必须是单个 `profile_*` 目录，并在返回前完成 Profile 结构校验。
 
 首次启动在 `dataRoot/config.json` 写入配置，并初始化 `backupRoot` 与
 `backupRoot/AutoEditSave`。配置写入采用原子替换；备份目录不可创建或不可写时，启动阶段返回结构化诊断。
