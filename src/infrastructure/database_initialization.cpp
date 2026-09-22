@@ -81,7 +81,8 @@ void DatabaseInitializationManager::start(const application::AppConfiguration& c
         state_.phase = "queued";
         state_.current_work = "Preparing database initialization";
         state_.progress_percent = 0;
-    mod_database_path_ = database_root_for(configuration) / "mod_environment.db";
+        mod_database_path_ = database_root_for(configuration) / "mod_environment.db";
+        base_database_path_ = database_root_for(configuration) / "base_content.db";
     }
     if (worker_.joinable()) worker_.join();
     worker_ = std::thread([this, configuration] { run(configuration); });
@@ -97,6 +98,11 @@ std::filesystem::path DatabaseInitializationManager::mod_database_path() const {
     return mod_database_path_;
 }
 
+std::filesystem::path DatabaseInitializationManager::base_database_path() const {
+    std::lock_guard lock(mutex_);
+    return base_database_path_;
+}
+
 void DatabaseInitializationManager::run(application::AppConfiguration configuration) {
     const auto total_started = Clock::now();
     const auto database_root = database_root_for(configuration);
@@ -105,6 +111,7 @@ void DatabaseInitializationManager::run(application::AppConfiguration configurat
     {
         std::lock_guard lock(mutex_);
         mod_database_path_ = mod_path;
+        base_database_path_ = base_path;
         set_progress(state_, "base", "Checking base content database", 5);
     }
 

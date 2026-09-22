@@ -28,4 +28,7 @@ read_enabled_mods(const std::filesystem::path& database_path);
 [[nodiscard]] core::Result<std::filesystem::path, core::Error>
 find_mod_cover(const std::filesystem::path& database_path, std::string_view mod_id);
 
+[[nodiscard]] core::Result<std::filesystem::path, core::Error>
+find_town_asset(const std::filesystem::path& database_path, std::string_view role);
+
 } // namespace ddse::infrastructure

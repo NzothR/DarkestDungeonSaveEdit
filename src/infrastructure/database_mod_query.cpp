@@ -4,7 +4,11 @@
 #include "ddse/infrastructure/sqlite/statement.hpp"
 
 #include <array>
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <system_error>
+#include <limits>
 
 namespace ddse::infrastructure {
 namespace {
@@ -74,6 +78,59 @@ find_mod_cover(const std::filesystem::path& database_path, std::string_view mod_
     }
     return core::Result<std::filesystem::path, core::Error>::failure(
         {core::ErrorCode::FileNotFound, "Mod cover image was not found", "DatabaseModQuery"});
+}
+
+core::Result<std::filesystem::path, core::Error>
+find_town_asset(const std::filesystem::path& database_path, std::string_view role) {
+    auto opened = sqlite::ConnectionFactory{}.open(database_path);
+    if (!opened) return core::Result<std::filesystem::path, core::Error>::failure(opened.error());
+    auto database = std::move(opened.value());
+    auto prepared = database.prepare(
+        "SELECT s.root_path,f.virtual_path,a.size_bytes FROM assets a "
+        "JOIN source_files f USING(source_file_id) JOIN content_sources s USING(source_id) "
+        "WHERE lower(f.virtual_path) LIKE '%town%' OR lower(f.virtual_path) LIKE '%hamlet%' "
+        "OR lower(f.virtual_path) LIKE '%estate%'");
+    if (!prepared) return core::Result<std::filesystem::path, core::Error>::failure(prepared.error());
+    auto statement = std::move(prepared.value());
+    std::filesystem::path best;
+    int best_score = std::numeric_limits<int>::min();
+    std::int64_t best_size = -1;
+    while (true) {
+        auto stepped = statement.step();
+        if (!stepped) return core::Result<std::filesystem::path, core::Error>::failure(stepped.error());
+        if (!stepped.value()) break;
+        const auto root = path_from_utf8(statement.column_text(0));
+        const auto virtual_path = std::string{statement.column_text(1)};
+        const auto size_bytes = statement.column_int64(2);
+        const auto lower = [&] {
+            auto value = virtual_path;
+            std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return value;
+        }();
+        const auto candidate = root / std::filesystem::path{virtual_path};
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(candidate, ec)) continue;
+        int score = 0;
+        if (lower.find("town") != std::string::npos) score += 20;
+        if (lower.find("hamlet") != std::string::npos) score += 18;
+        if (lower.find("estate") != std::string::npos) score += 12;
+        if (lower.find("fx/town_ground/town_ground.sprite.png") != std::string::npos ||
+            lower.find("fx\\town_ground\\town_ground.sprite.png") != std::string::npos) score += 10000;
+        if (lower.find("background") != std::string::npos) score += 30;
+        if (lower.find("scene") != std::string::npos) score += 15;
+        if (lower.ends_with(".png")) score += 5;
+        if (role == "background" && lower.find("building") != std::string::npos) score -= 12;
+        if (score > best_score || (score == best_score && size_bytes > best_size)) {
+            best_score = score;
+            best_size = size_bytes;
+            best = candidate;
+        }
+    }
+    if (!best.empty()) return core::Result<std::filesystem::path, core::Error>::success(best);
+    return core::Result<std::filesystem::path, core::Error>::failure(
+        {core::ErrorCode::FileNotFound, "Town asset was not found in the base content database", "DatabaseModQuery"});
 }
 
 } // namespace ddse::infrastructure

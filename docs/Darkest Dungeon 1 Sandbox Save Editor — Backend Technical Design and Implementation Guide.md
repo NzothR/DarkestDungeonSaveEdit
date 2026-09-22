@@ -2124,7 +2124,7 @@ F1 的初始化由本地服务托管的 `DatabaseInitializationManager` 执行�
 - 单个 Mod 无法找到或内容损坏会记录诊断，仍提交可用的其他 Mod；后续语义编辑根据内容是否可解析决定能力是否开放。
 - `GET /api/database/mods` 只查询环境库中的 `mod_order_entries` 和 `mod_sources`，不再让 HTTP Controller 直接扫描存档或 Mod 目录。
 - Mod 封面通过数据库中的 `root_path` 拼接固定文件名 `preview_icon.png` 查找，不保存图标路径；缺失封面不影响 Mod 条目。
-- F2 小镇主界面的只读美术资源通过 `/api/game-asset` 从已配置游戏目录读取，路径限制在游戏目录内，不进入数据库也不允许写入。
+- F2 小镇主界面的只读美术资源通过 `/api/game-asset` 从已配置游戏目录读取，路径限制在游戏目录内，不进入数据库也不允许写入；背景优先读取 `fx/town_ground/town_ground.sprite.png`。数据库初始化完成后，`/api/town-asset?role=background` 可按资源索引查找同一背景作为兼容回退。
 
 初始化状态完成后返回原版、Mod 环境和总耗时，供后续性能优化比较；完整配置启动服务时自动开始初始化，保存设置也会重新触发任务。
 

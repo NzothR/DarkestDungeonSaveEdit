@@ -512,6 +512,39 @@ void handle_game_asset(const drogon::HttpRequestPtr& request,
     callback(response);
 }
 
+void handle_town_asset(const drogon::HttpRequestPtr& request,
+                       std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                       const std::shared_ptr<ServerContext>& context) {
+    if (!has_expected_host(request, *context) || !has_expected_origin(request, *context) ||
+        !has_session_cookie(request, *context)) {
+        callback(forbidden_response("LOCAL_SESSION_REQUIRED", "Open the editor page before calling the local API."));
+        return;
+    }
+    const auto asset = find_town_asset(context->initialization.base_database_path(), request->getParameter("role"));
+    if (!asset) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    std::ifstream input(asset.value(), std::ios::binary);
+    if (!input) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    const std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setBody(bytes);
+    auto extension = asset.value().extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (extension == ".png") response->setContentTypeCode(drogon::CT_IMAGE_PNG);
+    else if (extension == ".jpg" || extension == ".jpeg") response->setContentTypeCode(drogon::CT_IMAGE_JPG);
+    else if (extension == ".webp") response->setContentTypeCode(drogon::CT_IMAGE_WEBP);
+    else response->setContentTypeString("application/octet-stream");
+    response->addHeader("Cache-Control", "no-store");
+    callback(response);
+}
+
 void handle_directory_picker(const drogon::HttpRequestPtr& request,
                              std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                              const std::shared_ptr<ServerContext>& context) {
@@ -766,6 +799,11 @@ int run_drogon_http_server(
         "/api/game-asset", [context](const drogon::HttpRequestPtr& request,
                                        std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_game_asset(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/town-asset", [context](const drogon::HttpRequestPtr& request,
+                                       std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_town_asset(request, std::move(callback), context);
         }, {drogon::Get});
     server.registerHandler(
         "/api/initialization", [context](const drogon::HttpRequestPtr& request,

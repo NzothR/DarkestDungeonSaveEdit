@@ -96,6 +96,8 @@
 
 从已配置游戏目录读取只读美术资源。路径必须是游戏目录内的相对路径，禁止绝对路径和 `..` 穿越；首版小镇界面使用该接口读取背景和建筑图片，资源不存在时由前端显示占位图。
 
+小镇背景优先请求 `fx/town_ground/town_ground.sprite.png`。`GET /api/town-asset?role=background` 会在原版资源数据库中按索引查找同一背景，作为数据库存在但文件布局需要兼容时的回退接口。
+
 ## 浏览器 Gateway
 
 `web/assets/gateway.js` 是唯一页面 API 入口。调用方接收状态 DTO 或 `GatewayError`，不直接使用 `fetch`，也不访问服务端实现细节。

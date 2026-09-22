@@ -36,6 +36,7 @@ public:
     void start(const application::AppConfiguration& configuration);
     [[nodiscard]] DatabaseInitializationState state() const;
     [[nodiscard]] std::filesystem::path mod_database_path() const;
+    [[nodiscard]] std::filesystem::path base_database_path() const;
 
 private:
     void run(application::AppConfiguration configuration);
@@ -44,6 +45,7 @@ private:
     mutable std::mutex mutex_;
     DatabaseInitializationState state_;
     std::filesystem::path mod_database_path_;
+    std::filesystem::path base_database_path_;
     std::thread worker_;
 };
 

@@ -39,6 +39,7 @@ const elements = {
   initializationTotalTime: document.querySelector("#initialization-total-time"),
   databaseModsCard: document.querySelector("#database-mods-card"),
   townShell: document.querySelector("#town-shell"),
+  townStage: document.querySelector("#town-stage"),
   townBackground: document.querySelector("#town-background"),
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
 };
@@ -76,20 +77,31 @@ function showTownShell() {
   elements.panel.hidden = true;
   elements.townShell.hidden = false;
   const candidates = [
+    "fx/town_ground/town_ground.sprite.png",
+    "__database__",
     "panels/town/town.png",
     "panels/town/estate.png",
     "campaign/town/town.png",
   ];
   let index = 0;
+  elements.townStage.classList.remove("art-missing");
+  elements.townBackground.onload = () => {
+    elements.townStage.classList.remove("art-missing");
+    elements.townBackgroundFallback.hidden = true;
+  };
   const tryNext = () => {
     if (index >= candidates.length) {
       elements.townBackground.hidden = true;
       elements.townBackgroundFallback.hidden = false;
+      elements.townStage.classList.add("art-missing");
       return;
     }
     elements.townBackground.hidden = false;
     elements.townBackgroundFallback.hidden = true;
-    elements.townBackground.src = `/api/game-asset?path=${encodeURIComponent(candidates[index++])}`;
+    const candidate = candidates[index++];
+    elements.townBackground.src = candidate === "__database__"
+      ? "/api/town-asset?role=background"
+      : `/api/game-asset?path=${encodeURIComponent(candidate)}`;
   };
   elements.townBackground.onerror = tryNext;
   tryNext();
