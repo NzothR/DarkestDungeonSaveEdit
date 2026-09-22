@@ -63,8 +63,8 @@ find_mod_cover(const std::filesystem::path& database_path, std::string_view mod_
     if (!stepped.value()) return core::Result<std::filesystem::path, core::Error>::failure(
         {core::ErrorCode::FileNotFound, "Mod was not found in the database", "DatabaseModQuery"});
     const auto root = path_from_utf8(statement.column_text(0));
-    constexpr std::array<std::string_view, 8> names{
-        "preview.png", "preview.jpg", "preview.jpeg", "cover.png",
+    constexpr std::array<std::string_view, 9> names{
+        "preview_icon.png", "preview.png", "preview.jpg", "preview.jpeg", "cover.png",
         "cover.jpg", "cover.jpeg", "mod_preview.png", "mod_preview.jpg"};
     std::error_code ec;
     for (const auto name : names) {

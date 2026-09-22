@@ -28,7 +28,7 @@ struct BaseContentScanConfig {
     std::vector<std::string> excluded_directories{"mods", "modes"};
     std::vector<std::string> content_extensions{".json", ".darkest", ".xml"};
     std::vector<std::string> asset_extensions{
-        ".png", ".tga", ".atlas", ".skel", ".fnt", ".bank", ".wav", ".ogg", ".mp3"};
+        ".png", ".jpg", ".jpeg", ".tga", ".atlas", ".skel", ".fnt", ".bank", ".wav", ".ogg", ".mp3"};
     std::string preferred_language{"english"};
 
     [[nodiscard]] static BaseContentScanConfig defaults(std::filesystem::path game_root);

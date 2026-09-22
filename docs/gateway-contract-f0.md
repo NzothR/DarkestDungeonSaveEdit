@@ -89,8 +89,8 @@
 
 ### `GET /api/database/mod-cover?modId=...`
 
-根据数据库记录的 Mod 根目录读取 `preview.*`、`cover.*` 或 `mod_preview.*` 封面图，仅用于列表展示，
-不存在封面时返回 404。
+根据数据库记录的 Mod 根目录读取固定文件 `preview_icon.png`（同时兼容已有的 `preview.*`、`cover.*` 和
+`mod_preview.*` 文件名），图标路径不写入数据库，仅用于列表展示；不存在封面时返回 404。
 
 ## 浏览器 Gateway
 

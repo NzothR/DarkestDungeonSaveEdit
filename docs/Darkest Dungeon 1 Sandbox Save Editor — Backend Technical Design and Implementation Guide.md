@@ -2123,7 +2123,7 @@ F1 的初始化由本地服务托管的 `DatabaseInitializationManager` 执行�
 - `dataRoot/mod_environment.db` 按当前 Profile、Workshop 和本地 Mod 配置重建，原版库不因 Mod 环境刷新而重复扫描。
 - 单个 Mod 无法找到或内容损坏会记录诊断，仍提交可用的其他 Mod；后续语义编辑根据内容是否可解析决定能力是否开放。
 - `GET /api/database/mods` 只查询环境库中的 `mod_order_entries` 和 `mod_sources`，不再让 HTTP Controller 直接扫描存档或 Mod 目录。
-- Mod 封面通过数据库中的 `root_path` 查找受限文件名（`preview.*`、`cover.*`、`mod_preview.*`），缺失封面不影响 Mod 条目。
+- Mod 封面通过数据库中的 `root_path` 拼接固定文件名 `preview_icon.png` 查找，不保存图标路径；缺失封面不影响 Mod 条目。
 
 初始化状态完成后返回原版、Mod 环境和总耗时，供后续性能优化比较；完整配置启动服务时自动开始初始化，保存设置也会重新触发任务。
 

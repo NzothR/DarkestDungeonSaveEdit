@@ -432,7 +432,8 @@ void handle_database_mods(const drogon::HttpRequestPtr& request,
         item["displayName"] = entry.display_name;
         item["matchedModId"] = entry.matched_mod_id;
         item["enabled"] = entry.enabled;
-        if (!entry.matched_mod_id.empty())
+        if (!entry.matched_mod_id.empty() &&
+            find_mod_cover(context->initialization.mod_database_path(), entry.matched_mod_id))
             item["coverUrl"] = "/api/database/mod-cover?modId=" + entry.matched_mod_id;
         mods.append(std::move(item));
     }
