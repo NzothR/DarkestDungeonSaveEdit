@@ -86,6 +86,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .settings-form .checkbox { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
 .settings-form button, .actions button { border: 1px solid var(--gold); padding: 9px 13px; background: #3b2c19; color: #f1dfba; cursor: pointer; font: inherit; }
 .settings-form button:hover, .actions button:hover { background: #594321; }
+.settings-form button:disabled { cursor: wait; opacity: .55; background: #25221e; color: var(--muted); }
 .form-message { min-height: 1.4em; margin: 0; color: #a9c38b; font-size: 13px; line-height: 1.5; }
 .recovery-card { margin-top: 20px; padding: 16px; border-left: 3px solid var(--gold); background: #c59a5310; }
 .recovery-card h3 { margin: 0 0 7px; font-size: 15px; }

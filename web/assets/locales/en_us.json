@@ -46,6 +46,7 @@
   "initialization.totalTime": "Total time",
   "initialization.milliseconds": "{value} ms",
   "initialization.continue": "Done, view Mod list",
+  "initialization.runningButton": "Initializing database…",
   "recovery.title": "An unfinished edit was found",
   "recovery.restore": "Restore previous edit",
   "recovery.discard": "Discard recovery",

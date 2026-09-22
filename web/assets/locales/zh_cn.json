@@ -46,6 +46,7 @@
   "initialization.totalTime": "总耗时",
   "initialization.milliseconds": "{value} ms",
   "initialization.continue": "完成，查看 Mod 列表",
+  "initialization.runningButton": "数据库初始化中…",
   "recovery.title": "发现上次未完成的编辑",
   "recovery.restore": "恢复上次编辑",
   "recovery.discard": "放弃恢复",

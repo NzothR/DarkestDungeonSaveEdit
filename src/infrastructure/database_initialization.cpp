@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <array>
 
 namespace ddse::infrastructure {
 namespace {
@@ -50,6 +51,19 @@ std::filesystem::path database_root_for(const application::AppConfiguration& con
     }
     if (inside) return std::filesystem::temp_directory_path() / "ddse-darkest-dungeon";
     return configuration.data_root;
+}
+
+bool has_base_schema(const std::filesystem::path& path) {
+    auto opened = sqlite::ConnectionFactory{}.open(path);
+    if (!opened) return false;
+    auto query = opened.value().prepare(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
+        "('content_sources','source_files','content_definitions','localization_entries',"
+        "'assets','content_asset_references','content_relationships')");
+    if (!query) return false;
+    auto statement = std::move(query.value());
+    auto row = statement.step();
+    return row && row.value() && statement.column_int64(0) == 7;
 }
 
 } // namespace
@@ -108,20 +122,11 @@ void DatabaseInitializationManager::run(application::AppConfiguration configurat
     const auto base_started = Clock::now();
     bool base_ready = std::filesystem::is_regular_file(base_path, ec);
     if (base_ready) {
-        auto opened = sqlite::ConnectionFactory{}.open(base_path);
-        if (!opened) {
+        if (!has_base_schema(base_path)) {
             std::filesystem::remove(base_path, ec);
             base_ready = false;
             std::lock_guard lock(mutex_);
-            state_.diagnostics.push_back("Existing base database was invalid and will be rebuilt.");
-        } else {
-            auto schema = opened.value().prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='content_sources'");
-            if (!schema || !schema.value().step()) {
-                std::filesystem::remove(base_path, ec);
-                base_ready = false;
-                std::lock_guard lock(mutex_);
-                state_.diagnostics.push_back("Existing base database schema was incomplete and will be rebuilt.");
-            }
+            state_.diagnostics.push_back("Existing base database schema was incomplete and will be rebuilt.");
         }
     }
     if (!base_ready) {

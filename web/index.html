@@ -47,7 +47,7 @@
           <label><span data-i18n="settings.language"></span><select id="language" name="language" required><option value="en_us"></option><option value="zh_cn"></option></select></label>
           <label class="checkbox"><input id="auto-edit-save-enabled" name="autoEditSaveEnabled" type="checkbox"><span data-i18n="settings.autoEditSave"></span></label>
           <label><span data-i18n="settings.autoEditSaveInterval"></span><input id="auto-edit-save-interval" name="autoEditSaveIntervalSeconds" type="number" min="1" max="86400" required></label>
-          <button type="submit" data-i18n="settings.save"></button>
+          <button id="configuration-submit" type="submit" data-i18n="settings.save"></button>
           <p id="configuration-message" class="form-message" role="status"></p>
         </form>
         <section id="initialization-card" class="initialization-card" hidden>
@@ -60,7 +60,6 @@
             <div><dt data-i18n="initialization.modTime"></dt><dd id="initialization-mod-time">—</dd></div>
             <div><dt data-i18n="initialization.totalTime"></dt><dd id="initialization-total-time">—</dd></div>
           </dl>
-          <button id="initialization-complete" type="button" hidden data-i18n="initialization.continue"></button>
         </section>
         <section id="database-mods-card" class="profile-section" hidden>
           <div class="profile-heading"><h3 data-i18n="profiles.title"></h3><button id="refresh-profiles" type="button" class="secondary" data-i18n="profiles.refresh"></button></div>

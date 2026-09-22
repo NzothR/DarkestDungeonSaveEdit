@@ -12,6 +12,7 @@ const elements = {
   panel: document.querySelector("#f1-panel"),
   configurationState: document.querySelector("#configuration-state"),
   form: document.querySelector("#configuration-form"),
+  configurationSubmit: document.querySelector("#configuration-submit"),
   gameRoot: document.querySelector("#game-root"),
   saveRoots: document.querySelector("#save-roots"),
   workshopRoots: document.querySelector("#workshop-roots"),
@@ -36,7 +37,6 @@ const elements = {
   initializationBaseTime: document.querySelector("#initialization-base-time"),
   initializationModTime: document.querySelector("#initialization-mod-time"),
   initializationTotalTime: document.querySelector("#initialization-total-time"),
-  initializationComplete: document.querySelector("#initialization-complete"),
   databaseModsCard: document.querySelector("#database-mods-card"),
 };
 
@@ -80,6 +80,9 @@ function showConfiguration(config) {
   elements.autoEditSaveEnabled.checked = config.autoEditSaveEnabled ?? true;
   elements.autoEditSaveInterval.value = config.autoEditSaveIntervalSeconds ?? 30;
   elements.configurationState.textContent = t("configuration.ready");
+  elements.configurationSubmit.disabled = false;
+  elements.configurationSubmit.dataset.mode = "save";
+  elements.configurationSubmit.textContent = t("settings.save");
   elements.panel.hidden = false;
 }
 
@@ -124,6 +127,9 @@ async function loadInitialization() {
   let state = await editorGateway.getInitialization();
   elements.initializationCard.hidden = false;
   while (state.status === "running" || state.status === "queued") {
+    elements.configurationSubmit.disabled = true;
+    elements.configurationSubmit.dataset.mode = "running";
+    elements.configurationSubmit.textContent = t("initialization.runningButton");
     elements.initializationWork.textContent = state.currentWork || t("initialization.working");
     elements.initializationProgress.style.width = `${state.progressPercent ?? 0}%`;
     elements.initializationMessage.textContent = t("initialization.progress", { percent: state.progressPercent ?? 0 });
@@ -137,11 +143,14 @@ async function loadInitialization() {
   elements.initializationTotalTime.textContent = formatMilliseconds(state.totalElapsedMs);
   if (state.status === "completed") {
     elements.initializationMessage.textContent = t("initialization.completed", { count: state.enabledMods ?? 0 });
-    elements.initializationComplete.hidden = false;
-    elements.databaseModsCard.hidden = false;
-    await loadProfiles();
+    elements.configurationSubmit.disabled = false;
+    elements.configurationSubmit.dataset.mode = "complete";
+    elements.configurationSubmit.textContent = t("initialization.continue");
   } else if (state.status === "failed") {
     elements.initializationMessage.textContent = [...(state.diagnostics ?? []), t("initialization.failed")].join(" ");
+    elements.configurationSubmit.disabled = false;
+    elements.configurationSubmit.dataset.mode = "save";
+    elements.configurationSubmit.textContent = t("settings.save");
   }
 }
 
@@ -182,6 +191,13 @@ async function loadConfiguration() {
 
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (elements.configurationSubmit.dataset.mode === "complete") {
+    elements.initializationCard.hidden = true;
+    elements.databaseModsCard.hidden = false;
+    await loadProfiles();
+    return;
+  }
+  elements.configurationSubmit.disabled = true;
   elements.configurationMessage.textContent = t("settings.saving");
   try {
     const configuration = await editorGateway.saveConfiguration({
@@ -200,15 +216,14 @@ elements.form.addEventListener("submit", async (event) => {
     elements.configurationMessage.textContent = t("settings.saved");
     await loadInitialization();
   } catch (error) {
+    elements.configurationSubmit.disabled = false;
+    elements.configurationSubmit.dataset.mode = "save";
+    elements.configurationSubmit.textContent = t("settings.save");
     elements.configurationMessage.textContent = displayError(error);
   }
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
-elements.initializationComplete.addEventListener("click", () => {
-  elements.initializationCard.hidden = true;
-  elements.databaseModsCard.hidden = false;
-});
 elements.language.addEventListener("change", async () => {
   await setLocale(elements.language.value);
   if (!elements.databaseModsCard.hidden) await loadProfiles();
