@@ -52,6 +52,12 @@
 ### `PUT /api/configuration`
 
 请求体为同一组字段的 JSON 对象。后端负责范围校验、写入配置文件并创建备份目录；页面不得自行创建目录。
+游戏目录、存档目录、Workshop Mod 目录、额外本地 Mod 目录和备份目录各只有一个配置值。
+
+### `POST /api/select-directory`
+
+请求体为 `{ "kind": "game|save|workshop|localMod|backup" }`。Windows 下打开原生目录选择器，
+返回用户选择的绝对路径；取消选择返回 `DIRECTORY_PICKER_CANCELLED`。前端不依赖浏览器的文件系统路径模拟能力。
 
 ### `GET /api/recovery`
 

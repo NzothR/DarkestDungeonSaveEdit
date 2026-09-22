@@ -33,6 +33,12 @@ void read_path_array(const json& object, const char* key, std::vector<std::files
     }
 }
 
+std::string normalize_locale(std::string value) {
+    if (value == "english") return "en_us";
+    if (value == "schinese" || value == "chinese") return "zh_cn";
+    return value;
+}
+
 // A small helper avoids exposing ranges to the JSON library and keeps this
 // code compatible with the C++20 toolchains used by CLion.
 template <typename Range>
@@ -73,10 +79,13 @@ core::Result<AppConfiguration, core::Error> parse_configuration(const std::strin
         read_path_array(object, "workshopRoots", result.workshop_roots);
         read_path_array(object, "localModRoots", result.local_mod_roots);
         read_path_array(object, "saveRoots", result.save_roots);
-        if (object.contains("language") && object.at("language").is_string()) result.language = object.at("language").get<std::string>();
+        if (object.contains("language") && object.at("language").is_string()) result.language = normalize_locale(object.at("language").get<std::string>());
         if (object.contains("maxBackupCount") && object.at("maxBackupCount").is_number_unsigned()) result.max_backup_count = object.at("maxBackupCount").get<std::uint32_t>();
         if (object.contains("autoEditSaveEnabled") && object.at("autoEditSaveEnabled").is_boolean()) result.auto_edit_save_enabled = object.at("autoEditSaveEnabled").get<bool>();
         if (object.contains("autoEditSaveIntervalSeconds") && object.at("autoEditSaveIntervalSeconds").is_number_unsigned()) result.auto_edit_save_interval_seconds = object.at("autoEditSaveIntervalSeconds").get<std::uint32_t>();
+        if (result.language != "en_us" && result.language != "zh_cn")
+            return core::Result<AppConfiguration, core::Error>::failure(
+                config_error(core::ErrorCode::InvalidConfiguration, "language must be en_us or zh_cn", path));
         if (result.max_backup_count == 0 || result.max_backup_count > 10000 ||
             result.auto_edit_save_interval_seconds == 0 || result.auto_edit_save_interval_seconds > 86400)
             return core::Result<AppConfiguration, core::Error>::failure(
@@ -130,6 +139,14 @@ core::Result<void, core::Error> AppConfigurationStore::save(const AppConfigurati
         return core::Result<void, core::Error>::failure(
             config_error(core::ErrorCode::InvalidConfiguration, "Configuration contains an empty path or invalid limit", configuration_file_));
     configuration_ = configuration;
+    if (configuration_.language == "english") configuration_.language = "en_us";
+    if (configuration_.language == "schinese" || configuration_.language == "chinese") configuration_.language = "zh_cn";
+    if (configuration_.language != "en_us" && configuration_.language != "zh_cn")
+        return core::Result<void, core::Error>::failure(
+            config_error(core::ErrorCode::InvalidConfiguration, "language must be en_us or zh_cn", configuration_file_));
+    if (configuration_.workshop_roots.size() > 1) configuration_.workshop_roots.resize(1);
+    if (configuration_.local_mod_roots.size() > 1) configuration_.local_mod_roots.resize(1);
+    if (configuration_.save_roots.size() > 1) configuration_.save_roots.resize(1);
     auto parent = configuration_file_.parent_path();
     if (!parent.empty()) {
         auto made = file_system_.create_directories(parent);

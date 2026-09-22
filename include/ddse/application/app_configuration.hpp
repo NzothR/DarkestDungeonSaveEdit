@@ -14,7 +14,8 @@ struct AppConfiguration {
     std::vector<std::filesystem::path> save_roots;
     std::filesystem::path backup_root;
     std::filesystem::path data_root;
-    std::string language{"english"};
+    // UI locale. Content localization keeps its own game-language selection.
+    std::string language{"zh_cn"};
     // The regular backup retention policy applies to complete profile backups
     // created during an explicit commit.  Auto edit saves use a separate
     // recovery slot under backup_root/AutoEditSave.

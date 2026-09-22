@@ -78,6 +78,9 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .badge { padding: 5px 8px; border: 1px solid #83a66e66; color: #a9c38b; font-size: 11px; }
 .settings-form { display: grid; gap: 13px; margin-top: 20px; }
 .settings-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.path-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.path-picker button { width: 40px; border: 1px solid #ffffff30; background: #ffffff08; color: var(--gold); cursor: pointer; font-size: 20px; line-height: 1; }
+.path-picker button:hover { background: #3b2c19; }
 .settings-form input[type="text"], .settings-form input[type="number"], .settings-form textarea { width: 100%; padding: 9px 10px; border: 1px solid #ffffff18; background: #0e0e0d; color: #e9e2d2; font: inherit; resize: vertical; }
 .settings-form input:focus { outline: 1px solid var(--gold); }
 .settings-form .checkbox { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 8px; }

@@ -11,62 +11,62 @@
   <body>
     <main class="shell" aria-labelledby="app-title">
       <div class="crest" aria-hidden="true"><span>DD</span></div>
-      <p class="eyebrow">LOCAL SAVE EDITOR</p>
-      <h1 id="app-title">暗黑地牢存档编辑器</h1>
-      <p class="intro">本机编辑服务正在启动。存档和游戏内容只在本机处理。</p>
+      <p class="eyebrow" data-i18n="app.eyebrow"></p>
+      <h1 id="app-title" data-i18n="app.title"></h1>
+      <p class="intro" data-i18n="app.intro"></p>
 
       <section class="connection" aria-live="polite" aria-atomic="true">
         <span id="connection-indicator" class="indicator" aria-hidden="true"></span>
         <div>
-          <h2 id="connection-title">正在连接本地服务</h2>
-          <p id="connection-message">正在检查编辑器状态…</p>
+          <h2 id="connection-title" data-i18n="connection.connecting"></h2>
+          <p id="connection-message" data-i18n="connection.checking"></p>
         </div>
       </section>
 
       <dl id="service-details" class="details" hidden>
-        <div><dt>服务状态</dt><dd id="service-state">—</dd></div>
-        <div><dt>应用版本</dt><dd id="app-version">—</dd></div>
-        <div><dt>Gateway API</dt><dd id="api-version">—</dd></div>
+        <div><dt data-i18n="details.serviceState"></dt><dd id="service-state">—</dd></div>
+        <div><dt data-i18n="details.appVersion"></dt><dd id="app-version">—</dd></div>
+        <div><dt data-i18n="details.gatewayApi"></dt><dd id="api-version">—</dd></div>
       </dl>
 
       <section id="f1-panel" class="panel" hidden>
         <div class="panel-heading">
           <div>
-            <p class="eyebrow left">F1 · 初始化与设置</p>
-            <h2>本地工作区</h2>
+            <p class="eyebrow left" data-i18n="f1.eyebrow"></p>
+            <h2 data-i18n="f1.workspace"></h2>
           </div>
-          <span id="configuration-state" class="badge">读取中</span>
+          <span id="configuration-state" class="badge"></span>
         </div>
         <form id="configuration-form" class="settings-form">
-          <label>游戏目录<input id="game-root" name="gameRoot" type="text"></label>
-          <label>存档目录（每行一个）<textarea id="save-roots" name="saveRoots" rows="2"></textarea></label>
-          <label>Workshop Mod 目录（每行一个）<textarea id="workshop-roots" name="workshopRoots" rows="2"></textarea></label>
-          <label>额外本地 Mod 目录（每行一个）<textarea id="local-mod-roots" name="localModRoots" rows="2"></textarea></label>
-          <label>备份目录<input id="backup-root" name="backupRoot" type="text" required></label>
-          <label>最大普通备份数量<input id="max-backup-count" name="maxBackupCount" type="number" min="1" max="10000" required></label>
-          <label>语言<input id="language" name="language" type="text" required></label>
-          <label class="checkbox"><input id="auto-edit-save-enabled" name="autoEditSaveEnabled" type="checkbox">启用自动编辑保存</label>
-          <label>自动保存间隔（秒）<input id="auto-edit-save-interval" name="autoEditSaveIntervalSeconds" type="number" min="1" max="86400" required></label>
-          <button type="submit">保存设置并初始化目录</button>
+          <label><span data-i18n="settings.gameRoot"></span><span class="path-picker"><input id="game-root" name="gameRoot" type="text" readonly><button type="button" data-directory-kind="game" data-i18n-aria="picker.game">…</button></span></label>
+          <label><span data-i18n="settings.saveRoot"></span><span class="path-picker"><input id="save-roots" name="saveRoots" type="text" readonly><button type="button" data-directory-kind="save" data-i18n-aria="picker.save">…</button></span></label>
+          <label><span data-i18n="settings.workshopRoot"></span><span class="path-picker"><input id="workshop-roots" name="workshopRoots" type="text" readonly><button type="button" data-directory-kind="workshop" data-i18n-aria="picker.workshop">…</button></span></label>
+          <label><span data-i18n="settings.localModRoot"></span><span class="path-picker"><input id="local-mod-roots" name="localModRoots" type="text" readonly><button type="button" data-directory-kind="localMod" data-i18n-aria="picker.localMod">…</button></span></label>
+          <label><span data-i18n="settings.backupRoot"></span><span class="path-picker"><input id="backup-root" name="backupRoot" type="text" readonly required><button type="button" data-directory-kind="backup" data-i18n-aria="picker.backup">…</button></span></label>
+          <label><span data-i18n="settings.maxBackupCount"></span><input id="max-backup-count" name="maxBackupCount" type="number" min="1" max="10000" required></label>
+          <label><span data-i18n="settings.language"></span><select id="language" name="language" required><option value="en_us"></option><option value="zh_cn"></option></select></label>
+          <label class="checkbox"><input id="auto-edit-save-enabled" name="autoEditSaveEnabled" type="checkbox"><span data-i18n="settings.autoEditSave"></span></label>
+          <label><span data-i18n="settings.autoEditSaveInterval"></span><input id="auto-edit-save-interval" name="autoEditSaveIntervalSeconds" type="number" min="1" max="86400" required></label>
+          <button type="submit" data-i18n="settings.save"></button>
           <p id="configuration-message" class="form-message" role="status"></p>
         </form>
         <div class="profile-section">
-          <div class="profile-heading"><h3>存档 Profile</h3><button id="refresh-profiles" type="button" class="secondary">刷新</button></div>
-          <p id="profiles-message" class="form-message">配置存档目录后刷新 Profile。</p>
+          <div class="profile-heading"><h3 data-i18n="profiles.title"></h3><button id="refresh-profiles" type="button" class="secondary" data-i18n="profiles.refresh"></button></div>
+          <p id="profiles-message" class="form-message" data-i18n="profiles.configureFirst"></p>
           <ul id="profile-list" class="profile-list"></ul>
         </div>
         <div id="recovery-card" class="recovery-card" hidden>
-          <h3>发现上次未完成的编辑</h3>
+          <h3 data-i18n="recovery.title"></h3>
           <p id="recovery-message"></p>
           <div class="actions">
-            <button id="restore-recovery" type="button">恢复上次编辑</button>
-            <button id="discard-recovery" type="button" class="secondary">放弃恢复</button>
+            <button id="restore-recovery" type="button" data-i18n="recovery.restore"></button>
+            <button id="discard-recovery" type="button" class="secondary" data-i18n="recovery.discard"></button>
           </div>
         </div>
       </section>
 
       <p id="connection-error" class="error" role="alert" hidden></p>
-      <p class="footnote">F1 · 初始化、设置与恢复点</p>
+      <p class="footnote" data-i18n="app.footnote"></p>
     </main>
   </body>
 </html>

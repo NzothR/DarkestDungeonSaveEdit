@@ -23,21 +23,21 @@ async function request(path, method = "GET", body = undefined) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
-    throw new GatewayError("LOCAL_SERVICE_UNAVAILABLE", "无法连接本机编辑服务。", 0);
+    throw new GatewayError("LOCAL_SERVICE_UNAVAILABLE", "Local service unavailable.", 0);
   }
 
   let payload;
   try {
     payload = await response.json();
   } catch {
-    throw new GatewayError("INVALID_GATEWAY_RESPONSE", "本机服务返回了无法识别的响应。", response.status);
+    throw new GatewayError("INVALID_GATEWAY_RESPONSE", "Invalid response from local service.", response.status);
   }
 
   if (!response.ok || payload.ok !== true) {
     const error = payload.error ?? {};
     throw new GatewayError(
       error.code ?? "GATEWAY_REQUEST_FAILED",
-      error.message ?? "本机服务请求失败。",
+      error.message ?? "Local service request failed.",
       response.status,
     );
   }
@@ -50,6 +50,7 @@ export const editorGateway = Object.freeze({
   saveConfiguration: (configuration) => request("/api/configuration", "PUT", configuration),
   getRecoveryStatus: () => request("/api/recovery"),
   listProfiles: () => request("/api/profiles"),
+  selectDirectory: (kind) => request("/api/select-directory", "POST", { kind }),
   restoreRecovery: () => request("/api/recovery/restore", "POST", {}),
   discardRecovery: () => request("/api/recovery", "POST", {}),
 });

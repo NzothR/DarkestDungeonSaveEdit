@@ -31,83 +31,105 @@ const elements = {
   profileList: document.querySelector("#profile-list"),
 };
 
-function lines(value) {
-  return (value ?? []).join("\n");
+let locale = "zh_cn";
+let strings = {};
+
+function t(key, variables = {}) {
+  let value = strings[key] ?? key;
+  for (const [name, replacement] of Object.entries(variables)) value = value.replace(`{${name}}`, replacement);
+  return value;
 }
 
-function parseLines(value) {
-  return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+function displayError(error) {
+  const key = `errors.${error?.code ?? ""}`;
+  return strings[key] ? t(key) : (error?.message ?? "");
+}
+
+async function setLocale(nextLocale) {
+  const requested = nextLocale === "en_us" ? "en_us" : "zh_cn";
+  try {
+    const response = await fetch(`/assets/locales/${requested}.json`, { cache: "no-store" });
+    if (!response.ok) throw new Error("locale unavailable");
+    strings = await response.json();
+    locale = requested;
+  } catch {
+    if (!Object.keys(strings).length) strings = { "app.title": "Darkest Dungeon Save Editor" };
+  }
+  document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-aria]").forEach((node) => { node.setAttribute("aria-label", t(node.dataset.i18nAria)); });
+  for (const option of elements.language.options) option.textContent = t(`language.${option.value}`);
 }
 
 function showConfiguration(config) {
   elements.gameRoot.value = config.gameRoot ?? "";
-  elements.saveRoots.value = lines(config.saveRoots);
-  elements.workshopRoots.value = lines(config.workshopRoots);
-  elements.localModRoots.value = lines(config.localModRoots);
+  elements.saveRoots.value = config.saveRoots?.[0] ?? "";
+  elements.workshopRoots.value = config.workshopRoots?.[0] ?? "";
+  elements.localModRoots.value = config.localModRoots?.[0] ?? "";
   elements.backupRoot.value = config.backupRoot ?? "";
   elements.maxBackupCount.value = config.maxBackupCount ?? 20;
-  elements.language.value = config.language ?? "english";
+  elements.language.value = config.language ?? "zh_cn";
   elements.autoEditSaveEnabled.checked = config.autoEditSaveEnabled ?? true;
   elements.autoEditSaveInterval.value = config.autoEditSaveIntervalSeconds ?? 30;
-  elements.configurationState.textContent = "已初始化";
+  elements.configurationState.textContent = t("configuration.ready");
   elements.panel.hidden = false;
 }
 
 async function loadProfiles() {
-  elements.profilesMessage.textContent = "正在发现 Profile…";
+  elements.profilesMessage.textContent = t("profiles.loading");
   elements.profileList.replaceChildren();
   try {
     const result = await editorGateway.listProfiles();
     if (!result.profiles.length) {
-      elements.profilesMessage.textContent = "没有发现 profile_* 目录。";
+      elements.profilesMessage.textContent = t("profiles.empty");
       return;
     }
-    elements.profilesMessage.textContent = `发现 ${result.profiles.length} 个 Profile。`;
+    elements.profilesMessage.textContent = t("profiles.found", { count: result.profiles.length });
     for (const profile of result.profiles) {
       const item = document.createElement("li");
       const title = document.createElement("strong");
       title.textContent = `${profile.id} · ${profile.status}`;
       const detail = document.createElement("span");
-      detail.textContent = `${profile.rootPath} · ${profile.documentCount} 个文档`;
+      detail.textContent = t("profiles.detail", { path: profile.rootPath, count: profile.documentCount });
       item.append(title, detail);
       elements.profileList.append(item);
     }
   } catch (error) {
-    elements.profilesMessage.textContent = error.message;
+    elements.profilesMessage.textContent = displayError(error);
   }
 }
 
 async function loadConfiguration() {
   const configuration = await editorGateway.getConfiguration();
+  await setLocale(configuration.language);
   showConfiguration(configuration);
   const recovery = await editorGateway.getRecoveryStatus();
   if (!recovery.available) return;
-  elements.recoveryMessage.textContent = `档案 ${recovery.profileId || "未知"} 在 ${recovery.savedAt || "最近一次编辑"} 留有恢复点（revision ${recovery.revision}）。`;
+  elements.recoveryMessage.textContent = `${recovery.profileId || "Profile"} · ${recovery.savedAt || ""} · revision ${recovery.revision}`;
   elements.recoveryCard.hidden = false;
   elements.restoreRecovery.onclick = async () => {
     try {
       const restored = await editorGateway.restoreRecovery();
       sessionStorage.setItem("ddse-recovery-snapshot", restored.snapshot);
-      elements.recoveryMessage.textContent = "恢复点已载入，等待打开对应存档后恢复编辑。";
+      elements.recoveryMessage.textContent = t("recovery.loaded");
       elements.restoreRecovery.disabled = true;
     } catch (error) {
-      elements.configurationMessage.textContent = error.message;
+      elements.configurationMessage.textContent = displayError(error);
     }
   };
   elements.discardRecovery.onclick = async () => {
     try {
       await editorGateway.discardRecovery();
       elements.recoveryCard.hidden = true;
-      elements.configurationMessage.textContent = "已放弃上次恢复点。";
+      elements.configurationMessage.textContent = t("recovery.discarded");
     } catch (error) {
-      elements.configurationMessage.textContent = error.message;
+      elements.configurationMessage.textContent = displayError(error);
     }
   };
 }
 
 elements.form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  elements.configurationMessage.textContent = "正在保存配置…";
+  elements.configurationMessage.textContent = t("settings.saving");
   try {
     const configuration = await editorGateway.saveConfiguration({
       backupRoot: elements.backupRoot.value.trim(),
@@ -116,19 +138,41 @@ elements.form.addEventListener("submit", async (event) => {
       autoEditSaveEnabled: elements.autoEditSaveEnabled.checked,
       autoEditSaveIntervalSeconds: Number(elements.autoEditSaveInterval.value),
       gameRoot: elements.gameRoot.value.trim(),
-      saveRoots: parseLines(elements.saveRoots.value),
-      workshopRoots: parseLines(elements.workshopRoots.value),
-      localModRoots: parseLines(elements.localModRoots.value),
+      saveRoots: elements.saveRoots.value.trim() ? [elements.saveRoots.value.trim()] : [],
+      workshopRoots: elements.workshopRoots.value.trim() ? [elements.workshopRoots.value.trim()] : [],
+      localModRoots: elements.localModRoots.value.trim() ? [elements.localModRoots.value.trim()] : [],
     });
     showConfiguration(configuration);
-    elements.configurationMessage.textContent = "配置已保存，备份目录已初始化。";
+    await setLocale(configuration.language);
+    elements.configurationMessage.textContent = t("settings.saved");
     await loadProfiles();
   } catch (error) {
-    elements.configurationMessage.textContent = error.message;
+    elements.configurationMessage.textContent = displayError(error);
   }
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
+
+for (const button of document.querySelectorAll("[data-directory-kind]")) {
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      const result = await editorGateway.selectDirectory(button.dataset.directoryKind);
+      const input = document.querySelector(`#${{
+        game: "game-root",
+        save: "save-roots",
+        workshop: "workshop-roots",
+        localMod: "local-mod-roots",
+        backup: "backup-root",
+      }[button.dataset.directoryKind]}`);
+      if (input) input.value = result.path;
+    } catch (error) {
+      if (error.code !== "DIRECTORY_PICKER_CANCELLED") elements.configurationMessage.textContent = displayError(error);
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
 
 async function connect() {
   const deadline = Date.now() + 6000;
@@ -137,8 +181,8 @@ async function connect() {
     try {
       const status = await editorGateway.getApplicationStatus();
       elements.indicator.classList.add("ready");
-      elements.title.textContent = "本地服务已连接";
-      elements.message.textContent = `${status.application.name} 正在本机运行。`;
+      elements.title.textContent = t("connection.ready");
+      elements.message.textContent = t("connection.readyMessage", { name: status.application.name });
       elements.state.textContent = status.state;
       elements.appVersion.textContent = status.application.version;
       elements.apiVersion.textContent = `v${status.apiVersion}`;
@@ -154,9 +198,9 @@ async function connect() {
   }
 
   elements.indicator.classList.add("failed");
-  elements.title.textContent = "无法连接本地服务";
-  elements.message.textContent = "请确认 DDSE 本机服务仍在运行，然后重新载入此页面。";
-  elements.error.textContent = lastError?.message ?? "本机服务没有在限定时间内响应。";
+  elements.title.textContent = t("connection.failed");
+  elements.message.textContent = t("connection.failedMessage");
+  elements.error.textContent = displayError(lastError) || t("connection.failedMessage");
   elements.error.hidden = false;
 }
 

@@ -203,7 +203,7 @@ if(DDSE_BUILD_HTTP)
         ddse_project_warnings
     )
     if(WIN32)
-        target_link_libraries(ddse_http PRIVATE shell32 ws2_32)
+        target_link_libraries(ddse_http PRIVATE shell32 ole32 ws2_32)
     endif()
     add_custom_command(TARGET ddse_http POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory

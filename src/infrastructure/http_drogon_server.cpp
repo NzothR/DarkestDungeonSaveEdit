@@ -26,9 +26,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #else
 #include <arpa/inet.h>
 #include <cerrno>
@@ -40,6 +42,10 @@ extern "C" char** environ;
 
 namespace ddse::infrastructure {
 namespace {
+
+#ifdef _WIN32
+std::optional<std::filesystem::path> choose_directory(std::string_view title);
+#endif
 
 constexpr std::string_view kSessionCookie = "ddse_session";
 constexpr std::string_view kClientHeader = "X-DDSE-Request";
@@ -380,6 +386,42 @@ void handle_profiles(const drogon::HttpRequestPtr& request,
     callback(json_ok(std::move(value)));
 }
 
+void handle_directory_picker(const drogon::HttpRequestPtr& request,
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                             const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    const auto kind = body && body->isMember("kind") && (*body)["kind"].isString()
+        ? (*body)["kind"].asString() : std::string{};
+    const bool english = context->configuration_store.current().language == "en_us";
+    const auto title = english
+        ? (kind == "game" ? "Choose game directory" :
+           kind == "workshop" ? "Choose Workshop Mod directory" :
+           kind == "localMod" ? "Choose additional local Mod directory" :
+           kind == "save" ? "Choose save directory" :
+           kind == "backup" ? "Choose backup directory" : "Choose directory")
+        : (kind == "game" ? "选择游戏安装目录" :
+           kind == "workshop" ? "选择 Workshop Mod 目录" :
+           kind == "localMod" ? "选择额外本地 Mod 目录" :
+           kind == "save" ? "选择存档目录" :
+           kind == "backup" ? "选择存档备份目录" : "选择目录");
+#ifdef _WIN32
+    const auto selected = choose_directory(title);
+    if (!selected) {
+        callback(json_error(drogon::k409Conflict, "DIRECTORY_PICKER_CANCELLED", "Directory selection was cancelled."));
+        return;
+    }
+    Json::Value value(Json::objectValue);
+    value["kind"] = kind;
+    value["path"] = selected->string();
+    callback(json_ok(std::move(value)));
+#else
+    callback(json_error(drogon::k501NotImplemented, "DIRECTORY_PICKER_UNAVAILABLE", "The native directory picker is unavailable on this platform."));
+#endif
+}
+
 bool wait_for_http_server(std::uint16_t port) {
     constexpr auto timeout = std::chrono::seconds{5};
     const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -477,6 +519,31 @@ bool open_browser(std::string_view url) {
 #endif
 }
 
+#ifdef _WIN32
+std::wstring wide_text(std::string_view text) {
+    if (text.empty()) return {};
+    const auto required = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (required <= 0) return {};
+    std::wstring result(static_cast<std::size_t>(required), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), result.data(), required);
+    return result;
+}
+
+std::optional<std::filesystem::path> choose_directory(std::string_view title) {
+    const auto title_wide = wide_text(title);
+    BROWSEINFOW browse{};
+    browse.lpszTitle = title_wide.c_str();
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE selected = SHBrowseForFolderW(&browse);
+    if (selected == nullptr) return std::nullopt;
+    wchar_t path[MAX_PATH]{};
+    const auto copied = SHGetPathFromIDListW(selected, path);
+    CoTaskMemFree(selected);
+    if (!copied) return std::nullopt;
+    return std::filesystem::path{path};
+}
+#endif
+
 } // namespace
 
 int run_drogon_http_server(
@@ -515,7 +582,7 @@ int run_drogon_http_server(
         .setThreadNum(1)
         .setLogLevel(trantor::Logger::kWarn)
         .setDocumentRoot(context->web_root.string())
-        .setFileTypes({"html", "js", "css", "svg", "png", "webp", "ico"})
+        .setFileTypes({"html", "js", "css", "json", "svg", "png", "webp", "ico"})
         .setStaticFilesCacheTime(0)
         .addListener("127.0.0.1", *selected_port);
 
@@ -554,6 +621,11 @@ int run_drogon_http_server(
                                     std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_profiles(request, std::move(callback), context);
         }, {drogon::Get});
+    server.registerHandler(
+        "/api/select-directory", [context](const drogon::HttpRequestPtr& request,
+                                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_directory_picker(request, std::move(callback), context);
+        }, {drogon::Post});
     server.setDefaultHandler(
         [](const drogon::HttpRequestPtr& request,
            std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
