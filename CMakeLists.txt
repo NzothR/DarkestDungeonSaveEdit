@@ -165,6 +165,8 @@ add_library(ddse_infrastructure STATIC
     src/infrastructure/sqlite/migration_runner.cpp
     src/infrastructure/base_content_database.cpp
     src/infrastructure/mod_environment_database.cpp
+    src/infrastructure/database_initialization.cpp
+    src/infrastructure/database_mod_query.cpp
     src/infrastructure/sqlite_content_environment.cpp
 )
 add_library(ddse::infrastructure ALIAS ddse_infrastructure)

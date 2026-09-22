@@ -98,8 +98,19 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .profile-heading button { border: 1px solid #ffffff30; padding: 6px 9px; background: #ffffff08; color: var(--muted); cursor: pointer; }
 .profile-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .profile-list li { padding: 10px; border: 1px solid #ffffff12; background: #0000001c; font-size: 12px; }
+.profile-list li { display: flex; align-items: center; gap: 10px; }
+.mod-cover { width: 48px; height: 48px; flex: 0 0 48px; object-fit: cover; border: 1px solid #ffffff22; background: #000; }
 .profile-list strong { color: #e4d9c1; }
 .profile-list span { display: block; margin-top: 3px; color: var(--muted); }
+.initialization-card { margin-top: 22px; padding-top: 17px; border-top: 1px solid #ffffff12; }
+.initialization-card h3 { margin: 0 0 8px; font-size: 15px; }
+.initialization-card p { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.progress-track { height: 8px; margin: 12px 0; overflow: hidden; background: #0008; border: 1px solid #ffffff16; }
+.progress-track span { display: block; width: 0; height: 100%; background: var(--gold); transition: width .25s ease; }
+.initialization-times { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+.initialization-times div { padding: 8px; border: 1px solid #ffffff12; }
+.initialization-times dt { color: var(--muted); font-size: 11px; }
+.initialization-times dd { margin: 4px 0 0; font-size: 12px; }
 
 @media (max-width: 480px) {
   body { padding: 12px; }

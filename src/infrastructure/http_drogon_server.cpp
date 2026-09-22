@@ -2,6 +2,8 @@
 
 #include "ddse/application/save_profile.hpp"
 #include "ddse/application/mod_environment.hpp"
+#include "ddse/infrastructure/database_initialization.hpp"
+#include "ddse/infrastructure/database_mod_query.hpp"
 
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
@@ -56,6 +58,13 @@ constexpr std::string_view kContentSecurityPolicy =
     "frame-ancestors 'none'";
 
 struct ServerContext {
+    ServerContext(std::filesystem::path root, std::string token,
+                  const application::ApplicationStatusService& status,
+                  application::AppConfigurationStore& store,
+                  application::IFileSystem& files)
+        : web_root(std::move(root)), session_token(std::move(token)),
+          status_service(status), configuration_store(store), file_system(files),
+          initialization(files) {}
     std::filesystem::path web_root;
     std::string session_token;
     std::string origin;
@@ -63,6 +72,7 @@ struct ServerContext {
     const application::ApplicationStatusService& status_service;
     application::AppConfigurationStore& configuration_store;
     application::IFileSystem& file_system;
+    DatabaseInitializationManager initialization;
 };
 
 std::string make_session_token() {
@@ -298,7 +308,42 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
         return;
     }
+    context->initialization.start(context->configuration_store.current());
     callback(json_ok(configuration_value(context->configuration_store.current())));
+}
+
+Json::Value initialization_value(const DatabaseInitializationState& state) {
+    Json::Value value(Json::objectValue);
+    value["status"] = state.status;
+    value["phase"] = state.phase;
+    value["currentWork"] = state.current_work;
+    value["progressPercent"] = state.progress_percent;
+    value["baseElapsedMs"] = Json::UInt64(state.base_elapsed_ms);
+    value["modElapsedMs"] = Json::UInt64(state.mod_elapsed_ms);
+    value["totalElapsedMs"] = Json::UInt64(state.total_elapsed_ms);
+    value["installedMods"] = static_cast<Json::UInt64>(state.installed_mods);
+    value["enabledMods"] = static_cast<Json::UInt64>(state.enabled_mods);
+    Json::Value diagnostics(Json::arrayValue);
+    for (const auto& item : state.diagnostics) diagnostics.append(item);
+    value["diagnostics"] = std::move(diagnostics);
+    return value;
+}
+
+void handle_initialization(const drogon::HttpRequestPtr& request,
+                          std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                          const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    if (request->method() == drogon::Post) {
+        const auto& config = context->configuration_store.current();
+        if (config.game_root.empty() || config.backup_root.empty() || config.data_root.empty()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", "Complete configuration is required before database initialization."));
+            return;
+        }
+        context->initialization.start(config);
+    }
+    callback(json_ok(initialization_value(context->initialization.state())));
 }
 
 void handle_recovery(const drogon::HttpRequestPtr& request,
@@ -360,68 +405,64 @@ void handle_recovery_restore(const drogon::HttpRequestPtr& request,
     callback(json_ok(std::move(value)));
 }
 
-void handle_profiles(const drogon::HttpRequestPtr& request,
+void handle_database_mods(const drogon::HttpRequestPtr& request,
                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                      const std::shared_ptr<ServerContext>& context) {
     std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
         [&](const drogon::HttpResponsePtr& response) { callback(response); };
     if (!authorized_api_request(request, *context, callback_ref)) return;
-    const auto& roots = context->configuration_store.current().save_roots;
-    if (roots.empty() || roots.front().empty()) {
-        Json::Value value(Json::objectValue);
-        value["profile"] = Json::Value(Json::nullValue);
-        value["mods"] = Json::Value(Json::arrayValue);
-        callback(json_ok(std::move(value)));
+    const auto init = context->initialization.state();
+    if (init.status != "completed") {
+        callback(json_error(drogon::k409Conflict, "DATABASE_NOT_READY", "The Mod database is not ready yet."));
         return;
     }
-    application::SaveProfileDiscovery discovery(context->file_system);
-    const auto profile = discovery.load(roots.front());
-    if (!profile) {
-        callback(json_error(drogon::k400BadRequest, "PROFILE_DISCOVERY_FAILED", profile.error().message));
+    const auto queried = read_enabled_mods(context->initialization.mod_database_path());
+    if (!queried) {
+        callback(json_error(drogon::k500InternalServerError, "MOD_DATABASE_QUERY_FAILED", queried.error().message));
         return;
     }
-    Json::Value profile_value(Json::objectValue);
-    profile_value["id"] = profile.value().descriptor.id;
-    profile_value["rootPath"] = profile.value().descriptor.root_path.string();
-    profile_value["status"] = std::string{application::to_string(profile.value().status)};
-    profile_value["baselineFingerprint"] = Json::UInt64(profile.value().baseline_fingerprint);
-    profile_value["documentCount"] = static_cast<Json::UInt>(profile.value().documents.size());
-
     Json::Value mods(Json::arrayValue);
-    const auto save_order = application::read_save_mod_order(profile.value());
-    if (!save_order) {
-        callback(json_error(drogon::k400BadRequest, "SAVE_MOD_ORDER_INVALID", save_order.error().message));
-        return;
-    }
-    application::ModEnvironmentScanResult environment;
-    application::ModEnvironmentScanConfig scan_config;
-    scan_config.save_profile_root = roots.front();
-    const auto& config = context->configuration_store.current();
-    if (!config.workshop_roots.empty()) scan_config.workshop_root = config.workshop_roots.front();
-    if (!config.local_mod_roots.empty()) scan_config.local_mod_roots.push_back(config.local_mod_roots.front());
-    const auto scanned = application::ModEnvironmentScanner{context->file_system}.scan(scan_config);
-    if (scanned) environment = scanned.value();
-    for (const auto& entry : save_order.value()) {
+    for (const auto& entry : queried.value()) {
         Json::Value item(Json::objectValue);
-        item["order"] = static_cast<Json::UInt>(entry.position);
-        item["key"] = entry.identity;
+        item["order"] = static_cast<Json::UInt>(entry.order);
+        item["key"] = entry.key;
         item["provider"] = entry.provider_id;
         item["externalId"] = entry.external_id;
-        item["name"] = entry.name;
-        item["displayName"] = entry.name;
+        item["name"] = entry.fallback_name;
+        item["displayName"] = entry.display_name;
+        item["matchedModId"] = entry.matched_mod_id;
         item["enabled"] = entry.enabled;
-        if (scanned) {
-            const auto found = std::find_if(environment.mods.begin(), environment.mods.end(), [&](const auto& mod) {
-                return mod.id == entry.matched_mod_id;
-            });
-            if (found != environment.mods.end() && !found->display_name.empty()) item["displayName"] = found->display_name;
-        }
+        if (!entry.matched_mod_id.empty())
+            item["coverUrl"] = "/api/database/mod-cover?modId=" + entry.matched_mod_id;
         mods.append(std::move(item));
     }
     Json::Value value(Json::objectValue);
-    value["profile"] = std::move(profile_value);
     value["mods"] = std::move(mods);
     callback(json_ok(std::move(value)));
+}
+
+void handle_mod_cover(const drogon::HttpRequestPtr& request,
+                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                      const std::shared_ptr<ServerContext>& context) {
+    if (!has_expected_host(request, *context) || !has_expected_origin(request, *context) ||
+        !has_session_cookie(request, *context)) {
+        callback(forbidden_response("LOCAL_SESSION_REQUIRED", "Open the editor page before calling the local API."));
+        return;
+    }
+    const auto mod_id = request->getParameter("modId");
+    const auto cover = find_mod_cover(context->initialization.mod_database_path(), mod_id);
+    if (!cover) {
+        callback(drogon::HttpResponse::newNotFoundResponse(request));
+        return;
+    }
+    std::ifstream input(cover.value(), std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    auto response = drogon::HttpResponse::newHttpResponse();
+    response->setBody(bytes);
+    const auto ext = cover.value().extension().string();
+    response->setContentTypeCode(ext == ".png" ? drogon::CT_IMAGE_PNG : drogon::CT_IMAGE_JPG);
+    response->addHeader("Cache-Control", "no-store");
+    callback(response);
 }
 
 void handle_directory_picker(const drogon::HttpRequestPtr& request,
@@ -608,15 +649,9 @@ int run_drogon_http_server(
         return 1;
     }
 
-    auto context = std::make_shared<ServerContext>(ServerContext{
-        .web_root = std::filesystem::absolute(web_root),
-        .session_token = make_session_token(),
-        .origin = {},
-        .host = {},
-        .status_service = status_service,
-        .configuration_store = configuration_store,
-        .file_system = configuration_store.file_system(),
-    });
+    auto context = std::make_shared<ServerContext>(
+        std::filesystem::absolute(web_root), make_session_token(), status_service,
+        configuration_store, configuration_store.file_system());
 
     const auto selected_port = requested_port == 0
         ? choose_ephemeral_loopback_port()
@@ -668,8 +703,23 @@ int run_drogon_http_server(
     server.registerHandler(
         "/api/profiles", [context](const drogon::HttpRequestPtr& request,
                                     std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
-            handle_profiles(request, std::move(callback), context);
+            handle_database_mods(request, std::move(callback), context);
         }, {drogon::Get});
+    server.registerHandler(
+        "/api/database/mods", [context](const drogon::HttpRequestPtr& request,
+                                          std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_database_mods(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/database/mod-cover", [context](const drogon::HttpRequestPtr& request,
+                                               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_mod_cover(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/initialization", [context](const drogon::HttpRequestPtr& request,
+                                          std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_initialization(request, std::move(callback), context);
+        }, {drogon::Get, drogon::Post});
     server.registerHandler(
         "/api/select-directory", [context](const drogon::HttpRequestPtr& request,
                                              std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
@@ -714,6 +764,12 @@ int run_drogon_http_server(
                 ready_promise.set_exception(std::current_exception());
         }
     });
+
+    const auto& initial_configuration = configuration_store.current();
+    if (!initial_configuration.game_root.empty() && !initial_configuration.backup_root.empty() &&
+        !initial_configuration.data_root.empty()) {
+        context->initialization.start(initial_configuration);
+    }
 
     std::uint16_t port{};
     try {

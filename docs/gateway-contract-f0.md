@@ -1,6 +1,6 @@
 # F0 Gateway 合约
 
-当前合约覆盖本地服务就绪检查、F1 配置初始化与自动编辑恢复点查询。存档、环境与编辑用例将在后续 F 阶段按 Application Service 逐步加入。
+当前合约覆盖本地服务就绪检查、F1 配置初始化、数据库初始化进度、数据库 Mod 查询与自动编辑恢复点查询。
 
 ## 本地服务
 
@@ -73,11 +73,24 @@
 
 放弃当前恢复点并写入作废标记。显式 Commit 成功后由 Application Service 执行同样的清理动作。
 
-### `GET /api/profiles`
+### `GET /api/initialization` / `POST /api/initialization`
 
-读取配置中的单个 Profile 目录，从存档 `persist.game.json` 提取启用 Mod 列表并按存档顺序返回。
-如果已配置 Workshop 或本地 Mod 目录，能够匹配的条目返回本地化 Mod 名称；未匹配条目保留存档中的 key/name。
-该查询只用于初始化验证，不写入内容数据库。
+读取或启动数据库初始化任务。返回 `status`、`phase`、`progressPercent`、`currentWork`、
+`baseElapsedMs`、`modElapsedMs`、`totalElapsedMs`、启用 Mod 数量和诊断列表。完整配置启动服务后会自动开始，
+保存配置也会触发任务；前端使用轮询，不需要 WebSocket。
+
+原版数据库存在且结构有效时复用，不重复扫描；Mod 环境数据库每次初始化都会按当前配置更新。
+缺失 Mod 或单个 Mod 内容错误会写入诊断，其他 Mod 仍会提交到数据库。
+
+### `GET /api/database/mods`
+
+从 `mod_environment.db` 查询存档中启用的 Mod，按存档顺序返回。名称来自数据库的 `display_name`，
+无法匹配时使用存档保存的 key/name。初始化完成前返回 `DATABASE_NOT_READY`。
+
+### `GET /api/database/mod-cover?modId=...`
+
+根据数据库记录的 Mod 根目录读取 `preview.*`、`cover.*` 或 `mod_preview.*` 封面图，仅用于列表展示，
+不存在封面时返回 404。
 
 ## 浏览器 Gateway
 

@@ -50,11 +50,23 @@
           <button type="submit" data-i18n="settings.save"></button>
           <p id="configuration-message" class="form-message" role="status"></p>
         </form>
-        <div class="profile-section">
+        <section id="initialization-card" class="initialization-card" hidden>
+          <h3 data-i18n="initialization.title"></h3>
+          <p id="initialization-work"></p>
+          <div class="progress-track"><span id="initialization-progress"></span></div>
+          <p id="initialization-message" class="form-message"></p>
+          <dl class="initialization-times">
+            <div><dt data-i18n="initialization.baseTime"></dt><dd id="initialization-base-time">—</dd></div>
+            <div><dt data-i18n="initialization.modTime"></dt><dd id="initialization-mod-time">—</dd></div>
+            <div><dt data-i18n="initialization.totalTime"></dt><dd id="initialization-total-time">—</dd></div>
+          </dl>
+          <button id="initialization-complete" type="button" hidden data-i18n="initialization.continue"></button>
+        </section>
+        <section id="database-mods-card" class="profile-section" hidden>
           <div class="profile-heading"><h3 data-i18n="profiles.title"></h3><button id="refresh-profiles" type="button" class="secondary" data-i18n="profiles.refresh"></button></div>
-          <p id="profiles-message" class="form-message" data-i18n="profiles.configureFirst"></p>
+          <p id="profiles-message" class="form-message"></p>
           <ul id="profile-list" class="profile-list"></ul>
-        </div>
+        </section>
         <div id="recovery-card" class="recovery-card" hidden>
           <h3 data-i18n="recovery.title"></h3>
           <p id="recovery-message"></p>

@@ -36,6 +36,16 @@
   "profiles.empty": "No enabled Mods were found in this save.",
   "profiles.found": "Found {count} enabled Mods in save order.",
   "profiles.detail": "{order}. {name} · {key}",
+  "initialization.title": "Database initialization",
+  "initialization.working": "Initializing databases…",
+  "initialization.progress": "Progress {percent}%",
+  "initialization.completed": "Initialization complete with {count} enabled Mods.",
+  "initialization.failed": "Database initialization failed.",
+  "initialization.baseTime": "Base database time",
+  "initialization.modTime": "Mod environment time",
+  "initialization.totalTime": "Total time",
+  "initialization.milliseconds": "{value} ms",
+  "initialization.continue": "Done, view Mod list",
   "recovery.title": "An unfinished edit was found",
   "recovery.restore": "Restore previous edit",
   "recovery.discard": "Discard recovery",
@@ -50,5 +60,6 @@
   "errors.LOCAL_SERVICE_UNAVAILABLE": "The local editor service is unavailable.",
   "errors.INVALID_GATEWAY_RESPONSE": "The local service returned an invalid response.",
   "errors.GATEWAY_REQUEST_FAILED": "The local service request failed.",
-  "errors.DIRECTORY_PICKER_CANCELLED": "Directory selection was cancelled."
+  "errors.DIRECTORY_PICKER_CANCELLED": "Directory selection was cancelled.",
+  "errors.DATABASE_NOT_READY": "The database is still initializing. Please wait."
 }

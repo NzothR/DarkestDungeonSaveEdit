@@ -36,6 +36,16 @@
   "profiles.empty": "存档中没有启用的 Mod。",
   "profiles.found": "按存档顺序发现 {count} 个启用 Mod。",
   "profiles.detail": "{order}. {name} · {key}",
+  "initialization.title": "数据库初始化",
+  "initialization.working": "正在初始化数据库…",
+  "initialization.progress": "当前进度 {percent}%",
+  "initialization.completed": "初始化完成，共有 {count} 个启用 Mod。",
+  "initialization.failed": "数据库初始化失败。",
+  "initialization.baseTime": "原版数据库耗时",
+  "initialization.modTime": "Mod 环境耗时",
+  "initialization.totalTime": "总耗时",
+  "initialization.milliseconds": "{value} ms",
+  "initialization.continue": "完成，查看 Mod 列表",
   "recovery.title": "发现上次未完成的编辑",
   "recovery.restore": "恢复上次编辑",
   "recovery.discard": "放弃恢复",
@@ -50,5 +60,6 @@
   "errors.LOCAL_SERVICE_UNAVAILABLE": "无法连接本机编辑服务。",
   "errors.INVALID_GATEWAY_RESPONSE": "本机服务返回了无法识别的响应。",
   "errors.GATEWAY_REQUEST_FAILED": "本机服务请求失败。",
-  "errors.DIRECTORY_PICKER_CANCELLED": "已取消目录选择。"
+  "errors.DIRECTORY_PICKER_CANCELLED": "已取消目录选择。",
+  "errors.DATABASE_NOT_READY": "数据库仍在初始化，请稍候。"
 }

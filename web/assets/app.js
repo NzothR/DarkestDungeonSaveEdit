@@ -29,6 +29,15 @@ const elements = {
   refreshProfiles: document.querySelector("#refresh-profiles"),
   profilesMessage: document.querySelector("#profiles-message"),
   profileList: document.querySelector("#profile-list"),
+  initializationCard: document.querySelector("#initialization-card"),
+  initializationWork: document.querySelector("#initialization-work"),
+  initializationProgress: document.querySelector("#initialization-progress"),
+  initializationMessage: document.querySelector("#initialization-message"),
+  initializationBaseTime: document.querySelector("#initialization-base-time"),
+  initializationModTime: document.querySelector("#initialization-mod-time"),
+  initializationTotalTime: document.querySelector("#initialization-total-time"),
+  initializationComplete: document.querySelector("#initialization-complete"),
+  databaseModsCard: document.querySelector("#database-mods-card"),
 };
 
 let locale = "zh_cn";
@@ -78,23 +87,61 @@ async function loadProfiles() {
   elements.profilesMessage.textContent = t("profiles.loading");
   elements.profileList.replaceChildren();
   try {
-    const result = await editorGateway.listProfiles();
-    if (!result.profile || !result.mods.length) {
+    const result = await editorGateway.listDatabaseMods();
+    if (!result.mods.length) {
       elements.profilesMessage.textContent = t("profiles.empty");
       return;
     }
     elements.profilesMessage.textContent = t("profiles.found", { count: result.mods.length });
     for (const mod of result.mods) {
       const item = document.createElement("li");
+      if (mod.coverUrl) {
+        const cover = document.createElement("img");
+        cover.className = "mod-cover";
+        cover.alt = "";
+        cover.src = mod.coverUrl;
+        item.append(cover);
+      }
+      const text = document.createElement("span");
       const title = document.createElement("strong");
       title.textContent = t("profiles.detail", { order: mod.order + 1, name: mod.displayName, key: mod.key });
       const detail = document.createElement("span");
       detail.textContent = mod.provider ? `${mod.provider}${mod.externalId ? ` · ${mod.externalId}` : ""}` : mod.key;
-      item.append(title, detail);
+      text.append(title, detail);
+      item.append(text);
       elements.profileList.append(item);
     }
   } catch (error) {
     elements.profilesMessage.textContent = displayError(error);
+  }
+}
+
+function formatMilliseconds(value) {
+  return value == null ? "—" : t("initialization.milliseconds", { value });
+}
+
+async function loadInitialization() {
+  let state = await editorGateway.getInitialization();
+  elements.initializationCard.hidden = false;
+  while (state.status === "running" || state.status === "queued") {
+    elements.initializationWork.textContent = state.currentWork || t("initialization.working");
+    elements.initializationProgress.style.width = `${state.progressPercent ?? 0}%`;
+    elements.initializationMessage.textContent = t("initialization.progress", { percent: state.progressPercent ?? 0 });
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+    state = await editorGateway.getInitialization();
+  }
+  elements.initializationWork.textContent = state.currentWork || "";
+  elements.initializationProgress.style.width = `${state.progressPercent ?? 0}%`;
+  elements.initializationBaseTime.textContent = formatMilliseconds(state.baseElapsedMs);
+  elements.initializationModTime.textContent = formatMilliseconds(state.modElapsedMs);
+  elements.initializationTotalTime.textContent = formatMilliseconds(state.totalElapsedMs);
+  if (state.status === "completed") {
+    elements.initializationMessage.textContent = t("initialization.completed", { count: state.enabledMods ?? 0 });
+    elements.initializationComplete.hidden = false;
+    elements.databaseModsCard.hidden = false;
+    await loadProfiles();
+  } else if (state.status === "failed") {
+    elements.initializationMessage.textContent = [...(state.diagnostics ?? []), t("initialization.failed")].join(" ");
   }
 }
 
@@ -103,19 +150,25 @@ async function loadConfiguration() {
   await setLocale(configuration.language);
   showConfiguration(configuration);
   const recovery = await editorGateway.getRecoveryStatus();
-  if (!recovery.available) return;
-  elements.recoveryMessage.textContent = `${recovery.profileId || "Profile"} · ${recovery.savedAt || ""} · revision ${recovery.revision}`;
-  elements.recoveryCard.hidden = false;
-  elements.restoreRecovery.onclick = async () => {
-    try {
-      const restored = await editorGateway.restoreRecovery();
-      sessionStorage.setItem("ddse-recovery-snapshot", restored.snapshot);
-      elements.recoveryMessage.textContent = t("recovery.loaded");
-      elements.restoreRecovery.disabled = true;
-    } catch (error) {
-      elements.configurationMessage.textContent = displayError(error);
-    }
-  };
+  if (recovery.available) {
+    elements.recoveryMessage.textContent = `${recovery.profileId || "Profile"} · ${recovery.savedAt || ""} · revision ${recovery.revision}`;
+    elements.recoveryCard.hidden = false;
+    elements.restoreRecovery.onclick = async () => {
+      try {
+        const restored = await editorGateway.restoreRecovery();
+        sessionStorage.setItem("ddse-recovery-snapshot", restored.snapshot);
+        elements.recoveryMessage.textContent = t("recovery.loaded");
+        elements.restoreRecovery.disabled = true;
+      } catch (error) {
+        elements.configurationMessage.textContent = displayError(error);
+      }
+    };
+  }
+  const initialization = await editorGateway.getInitialization();
+  if (initialization.status === "idle" && configuration.gameRoot && configuration.backupRoot && configuration.dataRoot) {
+    await editorGateway.startInitialization();
+  }
+  loadInitialization().catch((error) => { elements.initializationMessage.textContent = displayError(error); });
   elements.discardRecovery.onclick = async () => {
     try {
       await editorGateway.discardRecovery();
@@ -145,16 +198,20 @@ elements.form.addEventListener("submit", async (event) => {
     showConfiguration(configuration);
     await setLocale(configuration.language);
     elements.configurationMessage.textContent = t("settings.saved");
-    await loadProfiles();
+    await loadInitialization();
   } catch (error) {
     elements.configurationMessage.textContent = displayError(error);
   }
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
+elements.initializationComplete.addEventListener("click", () => {
+  elements.initializationCard.hidden = true;
+  elements.databaseModsCard.hidden = false;
+});
 elements.language.addEventListener("change", async () => {
   await setLocale(elements.language.value);
-  await loadProfiles();
+  if (!elements.databaseModsCard.hidden) await loadProfiles();
 });
 
 for (const button of document.querySelectorAll("[data-directory-kind]")) {
@@ -192,7 +249,6 @@ async function connect() {
       elements.apiVersion.textContent = `v${status.apiVersion}`;
       elements.details.hidden = false;
       await loadConfiguration();
-      await loadProfiles();
       return;
     } catch (error) {
       lastError = error;
