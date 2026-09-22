@@ -24,6 +24,7 @@ struct DatabaseInitializationState {
     std::uint64_t total_elapsed_ms{};
     std::size_t installed_mods{};
     std::size_t enabled_mods{};
+    bool reused_existing{};
     std::vector<std::string> diagnostics;
 };
 
@@ -33,7 +34,7 @@ public:
         : file_system_(file_system) {}
     ~DatabaseInitializationManager();
 
-    void start(const application::AppConfiguration& configuration);
+    void start(const application::AppConfiguration& configuration, bool force = false);
     [[nodiscard]] DatabaseInitializationState state() const;
     [[nodiscard]] std::filesystem::path mod_database_path() const;
     [[nodiscard]] std::filesystem::path base_database_path() const;

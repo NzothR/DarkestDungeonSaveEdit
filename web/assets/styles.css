@@ -115,7 +115,9 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-shell { position: fixed; inset: 0; z-index: 10; overflow: auto; padding: 18px; background: #0c0b0a; }
 .town-stage { position: relative; width: min(1920px, 100%); min-height: min(1080px, calc(100vh - 36px)); aspect-ratio: 16 / 9; margin: 0 auto; overflow: hidden; border: 1px solid #8f6c3a; background: radial-gradient(ellipse at 50% 55%, #55432d 0%, #282119 48%, #100e0c 100%); box-shadow: 0 20px 80px #000b, inset 0 0 0 5px #0005; color: #f0e6d0; }
 .town-art-layer, .town-background, .town-background-fallback { position: absolute; inset: 0; width: 100%; height: 100%; }
-.town-background { z-index: 0; object-fit: cover; opacity: 1; }
+.town-art-layer { background: #171411; }
+.town-art-layer::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(#17141166, #17141133); mix-blend-mode: multiply; }
+.town-background { z-index: 0; object-fit: cover; opacity: 1; filter: brightness(.66) saturate(.82) contrast(1.06); }
 .town-background-fallback { z-index: 0; display: grid; place-items: center; background: repeating-linear-gradient(135deg, #211b16 0 12px, #2a2119 12px 24px); }
 .town-resource-bar { position: absolute; z-index: 5; top: 0; left: 0; right: 0; height: 8.5%; display: flex; align-items: center; justify-content: flex-start; gap: 16px; padding: 0 2.2%; border-bottom: 1px solid #c59a5366; background: linear-gradient(#161310ee, #161310aa); box-shadow: 0 5px 20px #0008; }
 .town-estate { display: flex; align-items: center; gap: 10px; font: 600 clamp(14px, 1.5vw, 24px) Georgia, serif; color: #d7ae69; }
@@ -142,11 +144,10 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-panel-heading small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
 .town-roster-panel h2, .town-trinket-panel h2, .town-resource-panel h2, .town-building-panel h2 { margin: 0 0 10px; color: #e1bc7a; font: 500 clamp(14px, 1.2vw, 22px) Georgia, serif; }
 .building-list { overflow: auto; }
-.building-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; min-height: 38px; padding: 5px 0; border-bottom: 1px solid #ffffff14; }
+.building-row { display: flex; align-items: center; min-height: 38px; padding: 5px 0; border-bottom: 1px solid #ffffff14; }
 .building-row > span { overflow: hidden; color: #e4d5bc; font-size: clamp(9px, .8vw, 14px); text-overflow: ellipsis; white-space: nowrap; }
-.building-row strong { color: #c7aa76; font-size: clamp(9px, .7vw, 12px); font-weight: 500; }
-.building-row button { width: 22px; height: 22px; padding: 0; color: #d4c5ad; border: 1px solid #6b5237; background: #100e0c; line-height: 1; }
-.building-row button:disabled { opacity: .7; }
+.building-section-label { margin-top: 6px; border-top: 1px solid #c59a5366; color: #d7ae69; }
+.building-section-label > span { color: #d7ae69; font-weight: 600; }
 .roster-placeholder { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-top: 1px solid #ffffff14; }
 .roster-placeholder div { display: grid; gap: 3px; }
 .roster-placeholder b { color: #e4d5bc; font-size: clamp(10px, .85vw, 14px); }
@@ -159,6 +160,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .chest-grid { display: grid; grid-template-columns: repeat(4, minmax(34px, 1fr)); gap: 10px; margin: 18px auto; max-width: 560px; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }
+.town-settings-button { position: absolute; right: 1.8%; bottom: 1.1%; z-index: 8; padding: 6px 15px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; }
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }
 .town-save-state { margin-left: auto; color: #b89a68; }

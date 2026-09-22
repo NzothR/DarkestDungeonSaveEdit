@@ -47,6 +47,8 @@
   "initialization.milliseconds": "{value} ms",
   "initialization.continue": "完成初始化",
   "initialization.runningButton": "数据库初始化中…",
+  "initialization.reinitialize": "重新初始化 Mod 数据库",
+  "initialization.reinitializing": "正在重新初始化 Mod 数据库…",
   "recovery.title": "发现上次未完成的编辑",
   "recovery.restore": "恢复上次编辑",
   "recovery.discard": "放弃恢复",
@@ -68,6 +70,7 @@
   ,"town.preview": "F2 主界面预览"
   ,"town.previewOnly": "仅界面预览"
   ,"town.buildings": "建筑"
+  ,"town.areaBuildings": "区域建筑"
   ,"town.survivalist": "生存大师"
   ,"town.graveyard": "墓园"
   ,"town.resources": "资源"
@@ -77,6 +80,7 @@
   ,"town.deeds": "地契"
   ,"town.crests": "纹章"
   ,"town.crystalline": "星晶"
+  ,"town.settings": "设置"
   ,"town.stageCoach": "马车"
   ,"town.guild": "公会"
   ,"town.blacksmith": "铁匠铺"

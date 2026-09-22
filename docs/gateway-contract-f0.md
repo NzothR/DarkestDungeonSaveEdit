@@ -76,10 +76,11 @@
 ### `GET /api/initialization` / `POST /api/initialization`
 
 读取或启动数据库初始化任务。返回 `status`、`phase`、`progressPercent`、`currentWork`、
-`baseElapsedMs`、`modElapsedMs`、`totalElapsedMs`、启用 Mod 数量和诊断列表。完整配置启动服务后会自动开始，
-保存配置也会触发任务；前端使用轮询，不需要 WebSocket。
+`baseElapsedMs`、`modElapsedMs`、`totalElapsedMs`、`reusedExisting`、启用 Mod 数量和诊断列表。完整配置启动服务后会先检查已有数据库并在结构完整时直接复用；前端使用轮询，不需要 WebSocket。
 
-原版数据库存在且结构有效时复用，不重复扫描；Mod 环境数据库每次初始化都会按当前配置更新。
+POST 请求体传 `{ "force": true }` 时主动重新扫描 Mod 环境数据库；默认请求不会重复扫描完整数据库。
+
+原版数据库存在且结构有效时复用，不重复扫描；Mod 环境数据库只有首次初始化、结构不完整或显式 `force` 请求时才更新。
 缺失 Mod 或单个 Mod 内容错误会写入诊断，其他 Mod 仍会提交到数据库。
 
 ### `GET /api/database/mods`

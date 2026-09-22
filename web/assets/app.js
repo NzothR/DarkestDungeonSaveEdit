@@ -37,11 +37,13 @@ const elements = {
   initializationBaseTime: document.querySelector("#initialization-base-time"),
   initializationModTime: document.querySelector("#initialization-mod-time"),
   initializationTotalTime: document.querySelector("#initialization-total-time"),
+  reinitializeMods: document.querySelector("#reinitialize-mods"),
   databaseModsCard: document.querySelector("#database-mods-card"),
   townShell: document.querySelector("#town-shell"),
   townStage: document.querySelector("#town-stage"),
   townBackground: document.querySelector("#town-background"),
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
+  townSettingsButton: document.querySelector("#town-settings-button"),
 };
 
 let locale = "zh_cn";
@@ -183,8 +185,10 @@ function formatMilliseconds(value) {
 async function loadInitialization() {
   let state = await editorGateway.getInitialization();
   elements.initializationCard.hidden = false;
+  elements.reinitializeMods.hidden = true;
   while (state.status === "running" || state.status === "queued") {
     elements.configurationSubmit.disabled = true;
+    elements.reinitializeMods.disabled = true;
     elements.configurationSubmit.dataset.mode = "running";
     elements.configurationSubmit.textContent = t("initialization.runningButton");
     elements.initializationWork.textContent = state.currentWork || t("initialization.working");
@@ -203,11 +207,15 @@ async function loadInitialization() {
     elements.configurationSubmit.disabled = false;
     elements.configurationSubmit.dataset.mode = "complete";
     elements.configurationSubmit.textContent = t("initialization.continue");
+    elements.reinitializeMods.hidden = false;
+    elements.reinitializeMods.disabled = false;
+    if (state.reusedExisting) showTownShell();
   } else if (state.status === "failed") {
     elements.initializationMessage.textContent = [...(state.diagnostics ?? []), t("initialization.failed")].join(" ");
     elements.configurationSubmit.disabled = false;
     elements.configurationSubmit.dataset.mode = "save";
     elements.configurationSubmit.textContent = t("settings.save");
+    elements.reinitializeMods.hidden = true;
   }
 }
 
@@ -279,6 +287,21 @@ elements.form.addEventListener("submit", async (event) => {
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
+elements.reinitializeMods.addEventListener("click", async () => {
+  elements.reinitializeMods.disabled = true;
+  elements.configurationMessage.textContent = t("initialization.reinitializing");
+  try {
+    await editorGateway.startInitialization(true);
+    await loadInitialization();
+  } catch (error) {
+    elements.reinitializeMods.disabled = false;
+    elements.configurationMessage.textContent = displayError(error);
+  }
+});
+elements.townSettingsButton.addEventListener("click", () => {
+  elements.townShell.hidden = true;
+  elements.panel.hidden = false;
+});
 elements.language.addEventListener("change", async () => {
   await setLocale(elements.language.value);
   if (!elements.databaseModsCard.hidden) await loadProfiles();

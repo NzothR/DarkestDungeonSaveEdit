@@ -60,6 +60,7 @@
             <div><dt data-i18n="initialization.modTime"></dt><dd id="initialization-mod-time">—</dd></div>
             <div><dt data-i18n="initialization.totalTime"></dt><dd id="initialization-total-time">—</dd></div>
           </dl>
+          <button id="reinitialize-mods" type="button" class="secondary" data-i18n="initialization.reinitialize" hidden></button>
         </section>
         <section id="database-mods-card" class="profile-section" hidden>
           <div class="profile-heading"><h3 data-i18n="profiles.title"></h3><button id="refresh-profiles" type="button" class="secondary" data-i18n="profiles.refresh"></button></div>
@@ -96,15 +97,16 @@
           <aside class="town-building-panel">
             <div class="town-panel-heading"><h2 data-i18n="town.buildings">建筑</h2><small data-i18n="town.previewOnly">仅界面预览</small></div>
             <div class="building-list">
-              <div class="building-row"><span data-i18n="town.survivalist">生存大师</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.stageCoach">马车</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.tavern">酒馆</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.sanitarium">疗养院</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.abbey">教堂</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.graveyard">墓园</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.nomadWagon">游牧民货车</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.guild">工会</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
-              <div class="building-row"><span data-i18n="town.blacksmith">铁匠铺</span><strong>Lv 0</strong><div><button type="button" disabled>−</button><button type="button" disabled>＋</button></div></div>
+              <div class="building-row"><span data-i18n="town.survivalist">生存大师</span></div>
+              <div class="building-row"><span data-i18n="town.stageCoach">马车</span></div>
+              <div class="building-row"><span data-i18n="town.tavern">酒馆</span></div>
+              <div class="building-row"><span data-i18n="town.sanitarium">疗养院</span></div>
+              <div class="building-row"><span data-i18n="town.abbey">教堂</span></div>
+              <div class="building-row"><span data-i18n="town.graveyard">墓园</span></div>
+              <div class="building-row"><span data-i18n="town.nomadWagon">游牧民货车</span></div>
+              <div class="building-row"><span data-i18n="town.guild">工会</span></div>
+              <div class="building-row"><span data-i18n="town.blacksmith">铁匠铺</span></div>
+              <div class="building-row building-section-label"><span data-i18n="town.areaBuildings">区域建筑</span></div>
             </div>
           </aside>
           <aside class="town-roster-panel">
@@ -123,7 +125,7 @@
             <small data-i18n="town.notConnected">Not connected in F2</small>
           </aside>
           <aside class="town-resource-panel">
-            <h2 data-i18n="town.resources">资源</h2>
+            <div class="town-panel-heading"><h2 data-i18n="town.resources">资源</h2><small data-i18n="town.previewOnly">仅界面预览</small></div>
             <div class="resource-grid">
               <span class="resource"><b data-i18n="town.gold">金币</b><strong>12,450</strong></span>
               <span class="resource"><b data-i18n="town.heirlooms">雕像</b><strong>186</strong></span>
@@ -133,6 +135,7 @@
               <span class="resource"><b data-i18n="town.crystalline">星晶</b><strong>—</strong></span>
             </div>
           </aside>
+          <button id="town-settings-button" class="town-settings-button" type="button" data-i18n="town.settings">设置</button>
           <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span class="town-save-state" data-i18n="town.previewOnly">Preview only</span></footer>
         </div>
       </section>

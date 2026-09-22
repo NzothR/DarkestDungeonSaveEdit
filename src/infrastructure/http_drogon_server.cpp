@@ -324,6 +324,7 @@ Json::Value initialization_value(const DatabaseInitializationState& state) {
     value["totalElapsedMs"] = Json::UInt64(state.total_elapsed_ms);
     value["installedMods"] = static_cast<Json::UInt64>(state.installed_mods);
     value["enabledMods"] = static_cast<Json::UInt64>(state.enabled_mods);
+    value["reusedExisting"] = state.reused_existing;
     Json::Value diagnostics(Json::arrayValue);
     for (const auto& item : state.diagnostics) diagnostics.append(item);
     value["diagnostics"] = std::move(diagnostics);
@@ -342,7 +343,10 @@ void handle_initialization(const drogon::HttpRequestPtr& request,
             callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", "Complete configuration is required before database initialization."));
             return;
         }
-        context->initialization.start(config);
+        bool force = false;
+        if (const auto body = request->getJsonObject(); body && body->isMember("force") && (*body)["force"].isBool())
+            force = (*body)["force"].asBool();
+        context->initialization.start(config, force);
     }
     callback(json_ok(initialization_value(context->initialization.state())));
 }

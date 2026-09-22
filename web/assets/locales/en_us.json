@@ -47,6 +47,8 @@
   "initialization.milliseconds": "{value} ms",
   "initialization.continue": "Finish initialization",
   "initialization.runningButton": "Initializing database…",
+  "initialization.reinitialize": "Reinitialize Mod database",
+  "initialization.reinitializing": "Reinitializing Mod database…",
   "recovery.title": "An unfinished edit was found",
   "recovery.restore": "Restore previous edit",
   "recovery.discard": "Discard recovery",
@@ -68,6 +70,7 @@
   ,"town.preview": "F2 town shell preview"
   ,"town.previewOnly": "Visual preview only"
   ,"town.buildings": "Buildings"
+  ,"town.areaBuildings": "Area Buildings"
   ,"town.survivalist": "Survivalist"
   ,"town.graveyard": "Graveyard"
   ,"town.resources": "Resources"
@@ -77,6 +80,7 @@
   ,"town.deeds": "Deeds"
   ,"town.crests": "Crests"
   ,"town.crystalline": "Crystalline"
+  ,"town.settings": "Settings"
   ,"town.stageCoach": "Stage Coach"
   ,"town.guild": "Guild"
   ,"town.blacksmith": "Blacksmith"

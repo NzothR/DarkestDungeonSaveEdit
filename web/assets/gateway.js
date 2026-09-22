@@ -51,7 +51,7 @@ export const editorGateway = Object.freeze({
   getRecoveryStatus: () => request("/api/recovery"),
   listProfiles: () => request("/api/profiles"),
   getInitialization: () => request("/api/initialization"),
-  startInitialization: () => request("/api/initialization", "POST", {}),
+  startInitialization: (force = false) => request("/api/initialization", "POST", { force }),
   listDatabaseMods: () => request("/api/database/mods"),
   selectDirectory: (kind) => request("/api/select-directory", "POST", { kind }),
   restoreRecovery: () => request("/api/recovery/restore", "POST", {}),

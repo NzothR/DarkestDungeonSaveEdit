@@ -66,23 +66,57 @@ bool has_base_schema(const std::filesystem::path& path) {
     return row && row.value() && statement.column_int64(0) == 7;
 }
 
+bool has_mod_schema(const std::filesystem::path& path) {
+    auto opened = sqlite::ConnectionFactory{}.open(path);
+    if (!opened) return false;
+    auto query = opened.value().prepare(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
+        "('environment_info','mod_sources','mod_order_entries','source_files','assets',"
+        "'effective_vfs','effective_assets','effective_definitions')");
+    if (!query) return false;
+    auto statement = std::move(query.value());
+    auto row = statement.step();
+    return row && row.value() && statement.column_int64(0) == 8;
+}
+
 } // namespace
 
 DatabaseInitializationManager::~DatabaseInitializationManager() {
     if (worker_.joinable()) worker_.join();
 }
 
-void DatabaseInitializationManager::start(const application::AppConfiguration& configuration) {
+void DatabaseInitializationManager::start(const application::AppConfiguration& configuration, bool force) {
+    const auto database_root = database_root_for(configuration);
+    const auto base_path = database_root / "base_content.db";
+    const auto mod_path = database_root / "mod_environment.db";
     {
         std::lock_guard lock(mutex_);
         if (state_.status == "running") return;
+    }
+    if (!force && std::filesystem::is_regular_file(base_path) && has_base_schema(base_path) &&
+        std::filesystem::is_regular_file(mod_path) && has_mod_schema(mod_path)) {
+        if (worker_.joinable()) worker_.join();
+        std::lock_guard lock(mutex_);
+        state_ = {};
+        state_.status = "completed";
+        state_.phase = "complete";
+        state_.current_work = "Existing databases are ready";
+        state_.progress_percent = 100;
+        state_.reused_existing = true;
+        mod_database_path_ = mod_path;
+        base_database_path_ = base_path;
+        return;
+    }
+    {
+        std::lock_guard lock(mutex_);
         state_ = {};
         state_.status = "running";
         state_.phase = "queued";
         state_.current_work = "Preparing database initialization";
         state_.progress_percent = 0;
-        mod_database_path_ = database_root_for(configuration) / "mod_environment.db";
-        base_database_path_ = database_root_for(configuration) / "base_content.db";
+        state_.reused_existing = false;
+        mod_database_path_ = mod_path;
+        base_database_path_ = base_path;
     }
     if (worker_.joinable()) worker_.join();
     worker_ = std::thread([this, configuration] { run(configuration); });
