@@ -169,7 +169,7 @@ function assetUrl(asset) {
 
 function cleanGameText(value) {
   return String(value ?? "")
-    .replace(/\[[^\]]*\]/g, "")
+    .replace(/\[[^\]]*\]|\{[^{}]*\}/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }

@@ -342,10 +342,17 @@ std::optional<std::string> hero_roster_portrait(const domain::DefinitionReferenc
 
 std::string strip_game_markup(std::string value) {
     std::size_t start = 0;
-    while ((start = value.find('[', start)) != std::string::npos) {
-        const auto end = value.find(']', start + 1);
-        if (end == std::string::npos) break;
-        value.erase(start, end - start + 1);
+    while (start < value.size()) {
+        const auto square = value.find('[', start);
+        const auto curly = value.find('{', start);
+        if (square == std::string::npos && curly == std::string::npos) break;
+        const auto opening = square == std::string::npos ? curly
+            : curly == std::string::npos ? square : std::min(square, curly);
+        const auto closing_character = value[opening] == '[' ? ']' : '}';
+        const auto closing = value.find(closing_character, opening + 1);
+        if (closing == std::string::npos) break;
+        value.erase(opening, closing - opening + 1);
+        start = opening;
     }
     return value;
 }

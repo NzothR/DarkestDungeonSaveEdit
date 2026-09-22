@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <map>
 #include <set>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -148,6 +150,72 @@ read_definition_labels(Database& database, const DefinitionLayer& layer, bool en
     if (!row.value()) return core::Result<std::pair<std::string, std::string>, core::Error>::success({{}, {}});
     return core::Result<std::pair<std::string, std::string>, core::Error>::success(
         {std::string{statement.column_text(0)}, std::string{statement.column_text(1)}});
+}
+
+core::Result<std::optional<std::string>, core::Error>
+read_mod_display_name(Database& database, std::string_view source_id) {
+    auto prepared = database.prepare("SELECT display_name FROM mod_sources WHERE mod_id=?");
+    if (!prepared)
+        return core::Result<std::optional<std::string>, core::Error>::failure(
+            query_error(prepared.error(), "prepare_mod_display_name"));
+    auto statement = std::move(prepared.value());
+    auto bound = statement.bind(1, source_id);
+    if (!bound)
+        return core::Result<std::optional<std::string>, core::Error>::failure(
+            query_error(bound.error(), "bind_mod_display_name"));
+    auto row = statement.step();
+    if (!row)
+        return core::Result<std::optional<std::string>, core::Error>::failure(
+            query_error(row.error(), "read_mod_display_name"));
+    if (!row.value()) return core::Result<std::optional<std::string>, core::Error>::success(std::nullopt);
+    return core::Result<std::optional<std::string>, core::Error>::success(
+        std::optional<std::string>{std::string{statement.column_text(0)}});
+}
+
+bool decode_utf8(std::string_view value, std::size_t offset, std::uint32_t& codepoint,
+                 std::size_t& width) {
+    if (offset >= value.size()) return false;
+    const auto first = static_cast<unsigned char>(value[offset]);
+    if (first < 0x80) { codepoint = first; width = 1; return true; }
+    if ((first & 0xe0) == 0xc0) { width = 2; codepoint = first & 0x1f; }
+    else if ((first & 0xf0) == 0xe0) { width = 3; codepoint = first & 0x0f; }
+    else if ((first & 0xf8) == 0xf0) { width = 4; codepoint = first & 0x07; }
+    else return false;
+    if (offset + width > value.size()) return false;
+    for (std::size_t index = 1; index < width; ++index) {
+        const auto next = static_cast<unsigned char>(value[offset + index]);
+        if ((next & 0xc0) != 0x80) return false;
+        codepoint = (codepoint << 6) | (next & 0x3f);
+    }
+    return true;
+}
+
+bool is_cjk_codepoint(std::uint32_t codepoint) {
+    return (codepoint >= 0x3400 && codepoint <= 0x4dbf) ||
+           (codepoint >= 0x4e00 && codepoint <= 0x9fff) ||
+           (codepoint >= 0xf900 && codepoint <= 0xfaff);
+}
+
+std::optional<std::string> chinese_title_name(std::string_view title) {
+    std::optional<std::string> last_run;
+    std::size_t offset = 0;
+    while (offset < title.size()) {
+        std::uint32_t codepoint{};
+        std::size_t width{};
+        if (!decode_utf8(title, offset, codepoint, width)) { ++offset; continue; }
+        if (!is_cjk_codepoint(codepoint)) { offset += width; continue; }
+        const auto run_start = offset;
+        offset += width;
+        while (offset < title.size()) {
+            std::uint32_t next_codepoint{};
+            std::size_t next_width{};
+            if (!decode_utf8(title, offset, next_codepoint, next_width) ||
+                !is_cjk_codepoint(next_codepoint)) break;
+            offset += next_width;
+        }
+        last_run = std::string{title.substr(run_start, offset - run_start)};
+    }
+    return last_run;
 }
 
 core::Result<std::optional<application::ResolvedLocalization>, core::Error>
@@ -518,6 +586,7 @@ hydrate_definition(DatabasePair& databases, const ContentEnvironmentSelection& s
     result.payload_json = layer.payload;
     result.provenance = {layer.source_id, layer.layer, layer.path, true};
     result.overridden_definition_count = override_count;
+    std::string language_fallback_name;
     auto relationships = read_relationships(databases, layer,
         environment_database && databases.mods.has_value());
     if (!relationships) return core::Result<ContentDefinition, core::Error>::failure(relationships.error());
@@ -526,8 +595,27 @@ hydrate_definition(DatabasePair& databases, const ContentEnvironmentSelection& s
         auto localized = resolve_localization_in(databases, selection, result.localization_key,
                                                   selection.language, environment_database);
         if (!localized) return core::Result<ContentDefinition, core::Error>::failure(localized.error());
-        if (localized.value()) result.localized_name = localized.value()->value;
+        if (localized.value()) {
+            const bool english_fallback = selection.language == "schinese" &&
+                localized.value()->resolved_language == "english";
+            if (!english_fallback || result.type != "hero_class")
+                result.localized_name = localized.value()->value;
+            else language_fallback_name = localized.value()->value;
+        }
     }
+    // Some local hero mods ship no string table. Their Chinese class name is
+    // present in project.xml and is already stored as mod metadata.
+    if (result.localized_name.empty() && result.type == "hero_class" &&
+        environment_database && databases.mods && layer.layer == "mod") {
+        auto mod_name = read_mod_display_name(*databases.mods, layer.source_id);
+        if (!mod_name) return core::Result<ContentDefinition, core::Error>::failure(mod_name.error());
+        if (mod_name.value()) {
+            const auto localized_title = chinese_title_name(*mod_name.value());
+            if (localized_title) result.localized_name = *localized_title;
+        }
+    }
+    if (result.localized_name.empty() && !language_fallback_name.empty())
+        result.localized_name = language_fallback_name;
     if (result.localized_name.empty())
         result.localized_name = result.display_name.empty() ? result.id : result.display_name;
     auto references = read_asset_references(databases, selection, layer,
