@@ -71,6 +71,33 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .error { margin: 16px 0 0; color: #e7a297; line-height: 1.6; }
 .footnote { margin: 30px 0 0; color: #746d61; text-align: center; font-size: 11px; letter-spacing: .08em; }
 
+.panel { margin-top: 24px; padding: 22px; border: 1px solid var(--line); background: #ffffff04; }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.panel-heading h2 { margin: 4px 0 0; font: 500 22px Georgia, "Microsoft YaHei UI", serif; }
+.eyebrow.left { margin: 0; text-align: left; }
+.badge { padding: 5px 8px; border: 1px solid #83a66e66; color: #a9c38b; font-size: 11px; }
+.settings-form { display: grid; gap: 13px; margin-top: 20px; }
+.settings-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.settings-form input[type="text"], .settings-form input[type="number"], .settings-form textarea { width: 100%; padding: 9px 10px; border: 1px solid #ffffff18; background: #0e0e0d; color: #e9e2d2; font: inherit; resize: vertical; }
+.settings-form input:focus { outline: 1px solid var(--gold); }
+.settings-form .checkbox { display: flex; grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+.settings-form button, .actions button { border: 1px solid var(--gold); padding: 9px 13px; background: #3b2c19; color: #f1dfba; cursor: pointer; font: inherit; }
+.settings-form button:hover, .actions button:hover { background: #594321; }
+.form-message { min-height: 1.4em; margin: 0; color: #a9c38b; font-size: 13px; line-height: 1.5; }
+.recovery-card { margin-top: 20px; padding: 16px; border-left: 3px solid var(--gold); background: #c59a5310; }
+.recovery-card h3 { margin: 0 0 7px; font-size: 15px; }
+.recovery-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 13px; }
+.actions .secondary { border-color: #ffffff30; background: #ffffff08; color: var(--muted); }
+.profile-section { margin-top: 22px; padding-top: 17px; border-top: 1px solid #ffffff12; }
+.profile-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.profile-heading h3 { margin: 0; font-size: 15px; }
+.profile-heading button { border: 1px solid #ffffff30; padding: 6px 9px; background: #ffffff08; color: var(--muted); cursor: pointer; }
+.profile-list { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.profile-list li { padding: 10px; border: 1px solid #ffffff12; background: #0000001c; font-size: 12px; }
+.profile-list strong { color: #e4d9c1; }
+.profile-list span { display: block; margin-top: 3px; color: var(--muted); }
+
 @media (max-width: 480px) {
   body { padding: 12px; }
   .shell { padding-top: 38px; }

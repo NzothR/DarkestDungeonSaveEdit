@@ -432,10 +432,16 @@ AppConfiguration
 ├── backupRoot
 ├── dataRoot
 ├── language
+├── maxBackupCount
+├── autoEditSaveEnabled
+├── autoEditSaveIntervalSeconds
 ├── logging
 └── http
 ```
 
+首次启动在 `dataRoot/config.json` 写入配置，并初始化 `backupRoot` 与
+`backupRoot/AutoEditSave`。配置写入采用原子替换；备份目录不可创建或不可写时，启动阶段返回结构化诊断。
+`maxBackupCount` 默认 20，`autoEditSaveEnabled` 默认开启，`autoEditSaveIntervalSeconds` 默认 30。
 配置错误应在启动期一次性汇总，不能等到深层 Parser 才以“不存在文件”表现。
 
 ## 7.5 SQLite 封装
@@ -1161,6 +1167,22 @@ environmentFingerprint
 ```
 
 `changes.json` 仅用于审计与展示，不用于恢复。
+
+### 16.2.1 自动编辑保存
+
+自动编辑保存与 Commit 备份使用同一个配置中的 `backupRoot`，但存放在独立目录：
+
+```text
+backupRoot/AutoEditSave/
+└── recovery.json
+```
+
+自动编辑保存只在 Session 从 clean 变为 dirty 后启动。建议在第一次编辑后立即写入一个原子恢复点，
+然后按 `autoEditSaveIntervalSeconds` 周期性写入。恢复点记录来源 Profile、来源 fingerprint、revision、
+时间和可恢复 Session 快照；它不会修改游戏存档。显式 Commit 成功后清理当前恢复点并停止该 Session 的定时任务。
+
+进程启动时扫描恢复点。恢复前必须重新打开来源 Profile 并比较 fingerprint；不匹配时进入外部修改诊断，
+禁止静默套用快照。用户放弃恢复时写入作废标记，避免下次启动重复提示。
 
 ## 16.3 多文件写入
 

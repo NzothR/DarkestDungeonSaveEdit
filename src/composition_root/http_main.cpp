@@ -1,5 +1,7 @@
 #include "ddse/application/application_status.hpp"
+#include "ddse/application/configuration_store.hpp"
 #include "ddse/infrastructure/http_drogon_server.hpp"
+#include "ddse/infrastructure/native_file_system.hpp"
 
 #include <charconv>
 #include <cstdint>
@@ -57,7 +59,16 @@ int main(int argc, char* argv[]) {
         if (executable_path.has_parent_path()) executable_directory = executable_path.parent_path();
     }
     const auto web_root = executable_directory / "web";
-    const ddse::application::ApplicationStatusService status_service;
+    ddse::infrastructure::NativeFileSystem file_system;
+    const auto data_root = std::filesystem::current_path() / "ddse-data";
+    ddse::application::AppConfigurationStore configuration_store(
+        file_system, data_root / "config.json", data_root);
+    const auto initialized = configuration_store.initialize();
+    if (!initialized) {
+        std::cerr << "Unable to initialize DDSE configuration: " << initialized.error().message << '\n';
+        return 1;
+    }
+    const ddse::application::ApplicationStatusService status_service(&configuration_store);
     return ddse::infrastructure::run_drogon_http_server(
-        status_service, web_root, port, open_browser);
+        status_service, configuration_store, web_root, port, open_browser);
 }

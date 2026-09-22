@@ -29,8 +29,44 @@
         <div><dt>Gateway API</dt><dd id="api-version">—</dd></div>
       </dl>
 
+      <section id="f1-panel" class="panel" hidden>
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow left">F1 · 初始化与设置</p>
+            <h2>本地工作区</h2>
+          </div>
+          <span id="configuration-state" class="badge">读取中</span>
+        </div>
+        <form id="configuration-form" class="settings-form">
+          <label>游戏目录<input id="game-root" name="gameRoot" type="text"></label>
+          <label>存档目录（每行一个）<textarea id="save-roots" name="saveRoots" rows="2"></textarea></label>
+          <label>Workshop Mod 目录（每行一个）<textarea id="workshop-roots" name="workshopRoots" rows="2"></textarea></label>
+          <label>额外本地 Mod 目录（每行一个）<textarea id="local-mod-roots" name="localModRoots" rows="2"></textarea></label>
+          <label>备份目录<input id="backup-root" name="backupRoot" type="text" required></label>
+          <label>最大普通备份数量<input id="max-backup-count" name="maxBackupCount" type="number" min="1" max="10000" required></label>
+          <label>语言<input id="language" name="language" type="text" required></label>
+          <label class="checkbox"><input id="auto-edit-save-enabled" name="autoEditSaveEnabled" type="checkbox">启用自动编辑保存</label>
+          <label>自动保存间隔（秒）<input id="auto-edit-save-interval" name="autoEditSaveIntervalSeconds" type="number" min="1" max="86400" required></label>
+          <button type="submit">保存设置并初始化目录</button>
+          <p id="configuration-message" class="form-message" role="status"></p>
+        </form>
+        <div class="profile-section">
+          <div class="profile-heading"><h3>存档 Profile</h3><button id="refresh-profiles" type="button" class="secondary">刷新</button></div>
+          <p id="profiles-message" class="form-message">配置存档目录后刷新 Profile。</p>
+          <ul id="profile-list" class="profile-list"></ul>
+        </div>
+        <div id="recovery-card" class="recovery-card" hidden>
+          <h3>发现上次未完成的编辑</h3>
+          <p id="recovery-message"></p>
+          <div class="actions">
+            <button id="restore-recovery" type="button">恢复上次编辑</button>
+            <button id="discard-recovery" type="button" class="secondary">放弃恢复</button>
+          </div>
+        </div>
+      </section>
+
       <p id="connection-error" class="error" role="alert" hidden></p>
-      <p class="footnote">F0 · Gateway 与浏览器启动骨架</p>
+      <p class="footnote">F1 · 初始化、设置与恢复点</p>
     </main>
   </body>
 </html>

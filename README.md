@@ -5,7 +5,7 @@
 - Backend feature slices through Stage 12 are complete.
 - Stage 13 qualification testing is deferred until after frontend integration, as specified in the frontend guide.
 - Stage 14 starts with frontend F0: the local Drogon host, Gateway status contract, and browser bootstrap.
-- F0 exposes status only; save editing and commit endpoints are not part of this slice.
+- F1 adds persisted configuration, explicit backup-directory initialization, backup retention settings, and the AutoEditSave recovery-point contract.
 
 The C++20 backend includes DSON round-trip support, save profile discovery, Vanilla/DLC and Mod content catalogs, Campaign models, semantic operations, undo/redo, Mapping, candidate generation, backups, and safe writes to explicit profile copies. The local HTTP adapter depends on Application status DTOs and contains no save or content business logic.
 
@@ -132,6 +132,6 @@ a successful build.
 
 ## Next frontend stage
 
-F0 is complete with a status-only Gateway and browser bootstrap. Next is F1:
+F1 is in progress with configuration initialization, backup/recovery settings, and the browser setup panel. Profile discovery and full Session restoration continue in the next F1 slice:
 initialization, settings, and save profile selection. Stage 13 qualification remains
 scheduled after the frontend integration.

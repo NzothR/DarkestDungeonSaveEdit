@@ -1,5 +1,7 @@
 #include "ddse/infrastructure/http_drogon_server.hpp"
 
+#include "ddse/application/save_profile.hpp"
+
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
 
@@ -18,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -51,6 +54,8 @@ struct ServerContext {
     std::string origin;
     std::string host;
     const application::ApplicationStatusService& status_service;
+    application::AppConfigurationStore& configuration_store;
+    application::IFileSystem& file_system;
 };
 
 std::string make_session_token() {
@@ -170,6 +175,12 @@ void handle_status(const drogon::HttpRequestPtr& request,
     value["application"]["name"] = status.application_name;
     value["application"]["version"] = status.application_version;
     value["state"] = status.state;
+    value["configuration"] = Json::Value(Json::objectValue);
+    value["configuration"]["state"] = status.configuration_state;
+    value["configuration"]["backupRoot"] = status.backup_root;
+    value["configuration"]["autoEditSaveEnabled"] = status.auto_edit_save_enabled;
+    value["configuration"]["autoEditSaveIntervalSeconds"] = status.auto_edit_save_interval_seconds;
+    value["configuration"]["recoveryAvailable"] = status.recovery_available;
 
     Json::Value body(Json::objectValue);
     body["ok"] = true;
@@ -179,6 +190,194 @@ void handle_status(const drogon::HttpRequestPtr& request,
     response->addHeader("Cache-Control", "no-store");
     response->addHeader("X-Content-Type-Options", "nosniff");
     callback(response);
+}
+
+bool authorized_api_request(const drogon::HttpRequestPtr& request,
+                            const ServerContext& context,
+                            std::function<void(const drogon::HttpResponsePtr&)>& callback) {
+    if (!has_expected_host(request, context) || !has_expected_origin(request, context)) {
+        callback(forbidden_response("LOCAL_ORIGIN_REJECTED",
+                                    "The local editor only accepts its own origin."));
+        return false;
+    }
+    if (request->getHeader(std::string{kClientHeader}) != "1" ||
+        !has_session_cookie(request, context)) {
+        callback(forbidden_response("LOCAL_SESSION_REQUIRED",
+                                    "Open the editor page before calling the local API."));
+        return false;
+    }
+    return true;
+}
+
+Json::Value configuration_value(const application::AppConfiguration& config) {
+    Json::Value value(Json::objectValue);
+    value["gameRoot"] = config.game_root.string();
+    value["backupRoot"] = config.backup_root.string();
+    value["dataRoot"] = config.data_root.string();
+    value["language"] = config.language;
+    value["maxBackupCount"] = static_cast<Json::UInt>(config.max_backup_count);
+    value["autoEditSaveEnabled"] = config.auto_edit_save_enabled;
+    value["autoEditSaveIntervalSeconds"] = static_cast<Json::UInt>(config.auto_edit_save_interval_seconds);
+    Json::Value workshop(Json::arrayValue);
+    for (const auto& path : config.workshop_roots) workshop.append(path.string());
+    value["workshopRoots"] = std::move(workshop);
+    Json::Value local(Json::arrayValue);
+    for (const auto& path : config.local_mod_roots) local.append(path.string());
+    value["localModRoots"] = std::move(local);
+    Json::Value saves(Json::arrayValue);
+    for (const auto& path : config.save_roots) saves.append(path.string());
+    value["saveRoots"] = std::move(saves);
+    return value;
+}
+
+drogon::HttpResponsePtr json_ok(Json::Value value) {
+    Json::Value body(Json::objectValue);
+    body["ok"] = true;
+    body["value"] = std::move(value);
+    body["diagnostics"] = Json::Value(Json::arrayValue);
+    auto response = drogon::HttpResponse::newHttpJsonResponse(std::move(body));
+    response->addHeader("Cache-Control", "no-store");
+    response->addHeader("X-Content-Type-Options", "nosniff");
+    return response;
+}
+
+void handle_configuration(const drogon::HttpRequestPtr& request,
+                          std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                          const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    if (request->method() == drogon::Get) {
+        callback(json_ok(configuration_value(context->configuration_store.current())));
+        return;
+    }
+    const auto body = request->getJsonObject();
+    if (!body || !body->isObject()) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", "Configuration body must be a JSON object."));
+        return;
+    }
+    auto configuration = context->configuration_store.current();
+    const auto read_path = [&](const char* key, std::filesystem::path& target) {
+        if ((*body).isMember(key) && (*body)[key].isString()) target = (*body)[key].asString();
+    };
+    const auto read_paths = [&](const char* key, std::vector<std::filesystem::path>& target) {
+        if (!(*body).isMember(key) || !(*body)[key].isArray()) return;
+        target.clear();
+        for (const auto& item : (*body)[key]) if (item.isString()) target.emplace_back(item.asString());
+    };
+    read_path("gameRoot", configuration.game_root);
+    read_path("backupRoot", configuration.backup_root);
+    read_path("dataRoot", configuration.data_root);
+    read_paths("workshopRoots", configuration.workshop_roots);
+    read_paths("localModRoots", configuration.local_mod_roots);
+    read_paths("saveRoots", configuration.save_roots);
+    if ((*body).isMember("language") && (*body)["language"].isString()) configuration.language = (*body)["language"].asString();
+    if ((*body).isMember("maxBackupCount") && (*body)["maxBackupCount"].isUInt()) configuration.max_backup_count = (*body)["maxBackupCount"].asUInt();
+    if ((*body).isMember("autoEditSaveEnabled") && (*body)["autoEditSaveEnabled"].isBool()) configuration.auto_edit_save_enabled = (*body)["autoEditSaveEnabled"].asBool();
+    if ((*body).isMember("autoEditSaveIntervalSeconds") && (*body)["autoEditSaveIntervalSeconds"].isUInt()) configuration.auto_edit_save_interval_seconds = (*body)["autoEditSaveIntervalSeconds"].asUInt();
+    const auto result = context->configuration_store.save(configuration);
+    if (!result) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
+        return;
+    }
+    callback(json_ok(configuration_value(context->configuration_store.current())));
+}
+
+void handle_recovery(const drogon::HttpRequestPtr& request,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                     const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    if (request->method() == drogon::Post) {
+        const auto result = context->configuration_store.discard_recovery();
+        if (!result) {
+            callback(json_error(drogon::k500InternalServerError, "RECOVERY_DISCARD_FAILED", result.error().message));
+            return;
+        }
+    }
+    const auto result = context->configuration_store.recovery_status();
+    if (!result) {
+        callback(json_error(drogon::k500InternalServerError, "RECOVERY_STATUS_FAILED", result.error().message));
+        return;
+    }
+    Json::Value value(Json::objectValue);
+    value["available"] = result.value().available;
+    value["profileId"] = result.value().profile_id;
+    value["sourceProfile"] = result.value().source_profile.string();
+    value["sourceFingerprint"] = Json::UInt64(result.value().source_fingerprint);
+    value["revision"] = Json::UInt64(result.value().revision);
+    value["savedAt"] = result.value().saved_at;
+    value["path"] = result.value().path;
+    callback(json_ok(std::move(value)));
+}
+
+void handle_recovery_restore(const drogon::HttpRequestPtr& request,
+                             std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                             const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto status = context->configuration_store.recovery_status();
+    if (!status) {
+        callback(json_error(drogon::k500InternalServerError, "RECOVERY_STATUS_FAILED", status.error().message));
+        return;
+    }
+    if (!status.value().available) {
+        callback(json_error(drogon::k404NotFound, "RECOVERY_NOT_FOUND", "There is no active auto-edit recovery point."));
+        return;
+    }
+    const auto snapshot = context->configuration_store.recovery_snapshot();
+    if (!snapshot) {
+        callback(json_error(drogon::k500InternalServerError, "RECOVERY_READ_FAILED", snapshot.error().message));
+        return;
+    }
+    Json::Value value(Json::objectValue);
+    value["profileId"] = status.value().profile_id;
+    value["sourceProfile"] = status.value().source_profile.string();
+    value["sourceFingerprint"] = Json::UInt64(status.value().source_fingerprint);
+    value["revision"] = Json::UInt64(status.value().revision);
+    value["savedAt"] = status.value().saved_at;
+    value["snapshot"] = snapshot.value();
+    callback(json_ok(std::move(value)));
+}
+
+void handle_profiles(const drogon::HttpRequestPtr& request,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                     const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    Json::Value profiles(Json::arrayValue);
+    application::SaveProfileDiscovery discovery(context->file_system);
+    for (const auto& root : context->configuration_store.current().save_roots) {
+        const auto discovered = discovery.discover(root);
+        if (!discovered) {
+            callback(json_error(drogon::k400BadRequest, "PROFILE_DISCOVERY_FAILED", discovered.error().message));
+            return;
+        }
+        for (const auto& profile : discovered.value()) {
+            Json::Value value(Json::objectValue);
+            value["id"] = profile.descriptor.id;
+            value["rootPath"] = profile.descriptor.root_path.string();
+            value["status"] = std::string{application::to_string(profile.status)};
+            value["baselineFingerprint"] = Json::UInt64(profile.baseline_fingerprint);
+            value["documentCount"] = static_cast<Json::UInt>(profile.documents.size());
+            Json::Value diagnostics(Json::arrayValue);
+            for (const auto& diagnostic : profile.descriptor.diagnostics) {
+                Json::Value item(Json::objectValue);
+                item["documentId"] = diagnostic.document_id;
+                item["message"] = diagnostic.message;
+                item["core"] = diagnostic.core_document;
+                diagnostics.append(std::move(item));
+            }
+            value["diagnostics"] = std::move(diagnostics);
+            profiles.append(std::move(value));
+        }
+    }
+    Json::Value value(Json::objectValue);
+    value["profiles"] = std::move(profiles);
+    callback(json_ok(std::move(value)));
 }
 
 bool wait_for_http_server(std::uint16_t port) {
@@ -282,6 +481,7 @@ bool open_browser(std::string_view url) {
 
 int run_drogon_http_server(
     const application::ApplicationStatusService& status_service,
+    application::AppConfigurationStore& configuration_store,
     const std::filesystem::path& web_root,
     std::uint16_t requested_port,
     bool open_browser_on_start) {
@@ -298,6 +498,8 @@ int run_drogon_http_server(
         .origin = {},
         .host = {},
         .status_service = status_service,
+        .configuration_store = configuration_store,
+        .file_system = configuration_store.file_system(),
     });
 
     const auto selected_port = requested_port == 0
@@ -331,6 +533,26 @@ int run_drogon_http_server(
         "/api/status", [context](const drogon::HttpRequestPtr& request,
                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_status(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/configuration", [context](const drogon::HttpRequestPtr& request,
+                                          std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_configuration(request, std::move(callback), context);
+        }, {drogon::Get, drogon::Put});
+    server.registerHandler(
+        "/api/recovery", [context](const drogon::HttpRequestPtr& request,
+                                     std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_recovery(request, std::move(callback), context);
+        }, {drogon::Get, drogon::Post});
+    server.registerHandler(
+        "/api/recovery/restore", [context](const drogon::HttpRequestPtr& request,
+                                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_recovery_restore(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/profiles", [context](const drogon::HttpRequestPtr& request,
+                                    std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_profiles(request, std::move(callback), context);
         }, {drogon::Get});
     server.setDefaultHandler(
         [](const drogon::HttpRequestPtr& request,

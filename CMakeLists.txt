@@ -138,6 +138,7 @@ target_include_directories(ddse_domain INTERFACE
 # Application may depend on core contracts, but never on concrete adapters.
 add_library(ddse_application STATIC
     src/application/application_status.cpp
+    src/application/configuration_store.cpp
     src/application/application_info.cpp
     src/application/logger.cpp
     src/application/save_profile.cpp
@@ -197,6 +198,7 @@ if(DDSE_BUILD_HTTP)
     add_executable(ddse_http src/composition_root/http_main.cpp)
     target_link_libraries(ddse_http PRIVATE
         ddse_http_adapter
+        ddse_infrastructure
         ddse_project_options
         ddse_project_warnings
     )

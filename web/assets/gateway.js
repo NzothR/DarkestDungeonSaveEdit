@@ -9,14 +9,18 @@ export class GatewayError extends Error {
   }
 }
 
-async function request(path) {
+async function request(path, method = "GET", body = undefined) {
   let response;
   try {
     response = await fetch(path, {
-      method: "GET",
+      method,
       credentials: "same-origin",
       cache: "no-store",
-      headers: { [API_REQUEST_HEADER]: "1" },
+      headers: {
+        [API_REQUEST_HEADER]: "1",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
     throw new GatewayError("LOCAL_SERVICE_UNAVAILABLE", "无法连接本机编辑服务。", 0);
@@ -42,4 +46,10 @@ async function request(path) {
 
 export const editorGateway = Object.freeze({
   getApplicationStatus: () => request("/api/status"),
+  getConfiguration: () => request("/api/configuration"),
+  saveConfiguration: (configuration) => request("/api/configuration", "PUT", configuration),
+  getRecoveryStatus: () => request("/api/recovery"),
+  listProfiles: () => request("/api/profiles"),
+  restoreRecovery: () => request("/api/recovery/restore", "POST", {}),
+  discardRecovery: () => request("/api/recovery", "POST", {}),
 });

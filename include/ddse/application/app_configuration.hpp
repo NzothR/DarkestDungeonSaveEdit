@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,12 @@ struct AppConfiguration {
     std::filesystem::path backup_root;
     std::filesystem::path data_root;
     std::string language{"english"};
+    // The regular backup retention policy applies to complete profile backups
+    // created during an explicit commit.  Auto edit saves use a separate
+    // recovery slot under backup_root/AutoEditSave.
+    std::uint32_t max_backup_count{20};
+    bool auto_edit_save_enabled{true};
+    std::uint32_t auto_edit_save_interval_seconds{30};
 };
 
 } // namespace ddse::application
