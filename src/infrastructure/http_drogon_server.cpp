@@ -1137,8 +1137,9 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         for (const auto& entry : model.trinket_inventory) {
             if (entry.id.value) existing_ids.insert(*entry.id.value);
             occupied_keys.insert(entry.raw_key);
-            next_index = std::max(next_index, entry.index + 1);
         }
+        // Fill the first actual hole in the loaded inventory after preserving
+        // any keys reserved by pending deletes in this editing session.
         occupied_keys.insert(campaign.reserved_trinket_keys.begin(), campaign.reserved_trinket_keys.end());
         const auto mod_id = (*body)["modId"].isString() ? (*body)["modId"].asString() : std::string{};
         const auto hero_class = (*body)["heroClass"].isString() ? (*body)["heroClass"].asString() : std::string{};
@@ -1576,8 +1577,64 @@ nlohmann::json save_error_log_value(const core::Error& error) {
     return value;
 }
 
+nlohmann::json save_change_trace(const application::ChangeSet& changes) {
+    nlohmann::json value{{"field_changes", nlohmann::json::array()},
+                         {"structural_changes", nlohmann::json::array()},
+                         {"mutation_batches", nlohmann::json::array()}};
+    for (const auto& change : changes.changes) {
+        value["field_changes"].push_back({{"property", change.target.semantic_property},
+                                          {"document", change.raw.document_id},
+                                          {"path", change.raw.display_path}});
+    }
+    for (const auto& change : changes.structural_changes) {
+        value["structural_changes"].push_back({{"property", change.target.semantic_property},
+                                               {"document", change.raw.document_id},
+                                               {"path", change.raw.display_path},
+                                               {"action", change.action == application::CampaignStructuralAction::Erase
+                                                   ? "erase" : "restore"},
+                                               {"original_index", change.original_index},
+                                               {"expected_kind", static_cast<int>(change.expected_kind)}});
+    }
+    for (const auto& batch : changes.document_mutation_batches) {
+        nlohmann::json mutations = nlohmann::json::array();
+        for (const auto& mutation : batch.mutations) {
+            std::string kind;
+            switch (mutation.kind) {
+            case application::CampaignDocumentMutationKind::AppendClone: kind = "append_clone"; break;
+            case application::CampaignDocumentMutationKind::InsertClone: kind = "insert_clone"; break;
+            case application::CampaignDocumentMutationKind::Erase: kind = "erase"; break;
+            case application::CampaignDocumentMutationKind::Rename: kind = "rename"; break;
+            case application::CampaignDocumentMutationKind::ClearChildren: kind = "clear_children"; break;
+            case application::CampaignDocumentMutationKind::SetValue: kind = "set_value"; break;
+            }
+            mutations.push_back({{"kind", kind}, {"property", mutation.semantic_property},
+                                 {"document", mutation.document_id}, {"target_path", mutation.target_path},
+                                 {"source_path", mutation.source_path}, {"new_key", mutation.new_key},
+                                 {"insertion_index", mutation.insertion_index
+                                     ? nlohmann::json{*mutation.insertion_index} : nlohmann::json{}}});
+        }
+        value["mutation_batches"].push_back({{"operation_id", batch.operation_id},
+                                             {"transaction_id", batch.transaction_id},
+                                             {"cancel", batch.cancel}, {"mutations", std::move(mutations)}});
+    }
+    if (changes.trinket_inventory_snapshot) {
+        const auto inventory = [](const auto& entries) {
+            auto result = nlohmann::json::array();
+            for (const auto& item : entries)
+                result.push_back({{"raw_key", item.raw_key}, {"id", item.id.value.value_or("")},
+                                  {"path", item.raw.display_path}});
+            return result;
+        };
+        value["trinket_inventory_before"] = inventory(changes.trinket_inventory_snapshot->before);
+        value["trinket_inventory_after"] = inventory(changes.trinket_inventory_snapshot->after);
+    }
+    value["affected_documents"] = changes.affected_documents;
+    return value;
+}
+
 void append_save_debug_log(const std::filesystem::path& data_root, std::string_view profile_id,
-                           std::uint64_t revision, const core::Error& error) noexcept {
+                           std::uint64_t revision, const core::Error& error,
+                           const application::ChangeSet& changes) noexcept {
     try {
         const auto directory = data_root / "logs";
         std::filesystem::create_directories(directory);
@@ -1588,7 +1645,8 @@ void append_save_debug_log(const std::filesystem::path& data_root, std::string_v
         const nlohmann::json entry{{"timestamp_unix_ms", timestamp},
                                    {"profile_id", profile_id},
                                    {"revision", revision},
-                                   {"error", save_error_log_value(error)}};
+                                   {"error", save_error_log_value(error)},
+                                   {"change_set", save_change_trace(changes)}};
         output << entry.dump() << '\n';
     } catch (...) {
         // Logging must not change the save result or interrupt the HTTP handler.
@@ -1626,7 +1684,7 @@ void handle_campaign_save(const drogon::HttpRequestPtr& request,
         backup_directory, application::SaveCommitMode::DirectSource);
     if (!committed) {
         append_save_debug_log(configuration.data_root, context->campaign->profile.descriptor.id,
-                              context->campaign->edits->revision(), committed.error());
+                              context->campaign->edits->revision(), committed.error(), changes);
         const auto status = committed.error().code == core::ErrorCode::ConcurrentSaveChanged
             ? drogon::k409Conflict
             : (committed.error().code == core::ErrorCode::ValidationFailed ||

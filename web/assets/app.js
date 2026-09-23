@@ -45,6 +45,7 @@ const elements = {
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
   townSettingsButton: document.querySelector("#town-settings-button"),
   townReloadProfile: document.querySelector("#town-reload-profile"),
+  townReloadOverlay: document.querySelector("#town-reload-overlay"),
   settingsReturnTown: document.querySelector("#settings-return-town"),
   heroList: document.querySelector("#hero-list"),
   trinketGrid: document.querySelector("#trinket-grid"),
@@ -536,7 +537,7 @@ function renderCampaign(campaign) {
       possibleLinkedTrinketName(trinket, campaign.trinkets, inventoryPairs.links)));
     item.addEventListener("contextmenu", async (event) => {
       event.preventDefault();
-      if (!window.confirm(t("trinket.deleteOne", { name: cleanGameText(trinket.name || trinket.id) }))) return;
+      if (!event.shiftKey && !window.confirm(t("trinket.deleteOne", { name: cleanGameText(trinket.name || trinket.id) }))) return;
       try {
         renderCampaign(await editorGateway.editTrinkets("delete", latestCampaign.revision, { rawKey: item.dataset.rawKey }));
       } catch (error) { elements.townSaveState.textContent = displayError(error); }
@@ -566,6 +567,28 @@ function renderCampaign(campaign) {
   elements.townSave.disabled = !campaign.dirty;
   elements.townSaveState.textContent = campaign.dirty ? t("town.unsaved") : t("town.clean");
   elements.townSaveState.title = "";
+}
+
+let townReloadDisabledStates = null;
+
+function setTownReloading(reloading) {
+  elements.townReloadOverlay.hidden = !reloading;
+  elements.townStage.setAttribute("aria-busy", String(reloading));
+  if (reloading) {
+    townReloadDisabledStates = new Map();
+    elements.townStage.querySelectorAll("button, input, select").forEach((control) => {
+      townReloadDisabledStates.set(control, control.disabled);
+      control.disabled = true;
+    });
+  } else {
+    for (const [control, disabled] of townReloadDisabledStates || []) {
+      if (control.isConnected) control.disabled = disabled;
+    }
+    townReloadDisabledStates = null;
+    elements.townUndo.disabled = !latestCampaign?.canUndo;
+    elements.townRedo.disabled = !latestCampaign?.canRedo;
+    elements.townSave.disabled = !latestCampaign?.dirty;
+  }
 }
 
 function trinketSearchRank(definition, query) {
@@ -608,8 +631,6 @@ function renderTrinketSelector() {
   const candidates = trinketSelectorMode === "batchDelete"
     ? inventory.map((item) => ({ item, definition: trinketDefinitions.find((entry) => entry.id === item.id) }))
       .filter(({ item, definition }) => matchesFilters(item, definition || item))
-      .sort((a, b) => trinketSearchRank(a.item, query) - trinketSearchRank(b.item, query) ||
-        String(a.item.name || a.item.id).localeCompare(String(b.item.name || b.item.id)))
     : trinketDefinitions.filter((definition) => matchesFilters(definition, definition))
       .sort((a, b) => trinketSearchRank(a, query) - trinketSearchRank(b, query) || a.name.localeCompare(b.name));
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
@@ -1109,7 +1130,9 @@ elements.settingsReturnTown.addEventListener("click", () => {
 elements.townReloadProfile.addEventListener("click", async () => {
   if (latestCampaign?.dirty && !window.confirm(t("town.reloadDiscardDraft"))) return;
   trinketDefinitions = [];
-  elements.townReloadProfile.disabled = true;
+  if (elements.trinketSelector.open) elements.trinketSelector.close();
+  if (elements.buildingEditor.open) elements.buildingEditor.close();
+  setTownReloading(true);
   elements.townSaveState.textContent = t("town.reloadWorking");
   try {
     renderCampaign(await editorGateway.reloadCampaign());
@@ -1117,7 +1140,7 @@ elements.townReloadProfile.addEventListener("click", async () => {
   } catch (error) {
     elements.townSaveState.textContent = displayError(error);
   } finally {
-    elements.townReloadProfile.disabled = false;
+    setTownReloading(false);
   }
 });
 elements.townUndo.addEventListener("click", async () => {

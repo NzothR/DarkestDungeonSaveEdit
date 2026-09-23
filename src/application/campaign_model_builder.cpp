@@ -462,6 +462,26 @@ void read_trinket_inventory(const RawSaveProfile& profile, ContentLookupCache& c
         }
         model.trinket_inventory.push_back(std::move(entry));
     }
+    // DSON objects are not guaranteed to retain numeric-key ordering when they
+    // are materialized into the model. The game presents inventory entries by
+    // their numeric slot key (0, 1, 2, ...), not lexicographically (0, 1, 10,
+    // 2, ...). Keep the raw keys intact so empty slots remain empty on reload.
+    std::stable_sort(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+        [](const auto& left, const auto& right) {
+            std::size_t left_index{};
+            std::size_t right_index{};
+            const auto left_parse = std::from_chars(left.raw_key.data(),
+                left.raw_key.data() + left.raw_key.size(), left_index);
+            const auto right_parse = std::from_chars(right.raw_key.data(),
+                right.raw_key.data() + right.raw_key.size(), right_index);
+            const bool left_numeric = left_parse.ec == std::errc{} &&
+                left_parse.ptr == left.raw_key.data() + left.raw_key.size();
+            const bool right_numeric = right_parse.ec == std::errc{} &&
+                right_parse.ptr == right.raw_key.data() + right.raw_key.size();
+            if (left_numeric != right_numeric) return left_numeric;
+            if (left_numeric && left_index != right_index) return left_index < right_index;
+            return left.raw_key < right.raw_key;
+        });
 }
 
 void read_town(const RawSaveProfile& profile, ContentLookupCache& cache, CampaignModel& model) {
