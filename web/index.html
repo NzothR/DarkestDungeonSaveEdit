@@ -102,7 +102,14 @@
             <div id="hero-list" class="hero-list"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-trinket-panel">
-            <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
+            <div class="town-panel-heading trinket-heading">
+              <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
+              <div class="trinket-actions">
+                <button id="trinket-add" type="button" data-i18n="trinket.add">添加饰品</button>
+                <button id="trinket-batch-add" type="button" data-i18n="trinket.batchAdd">批量添加</button>
+                <button id="trinket-batch-delete" type="button" data-i18n="trinket.batchDelete">批量删除</button>
+              </div>
+            </div>
             <div id="trinket-grid" class="chest-grid"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-resource-panel">
@@ -131,6 +138,26 @@
           <div id="building-editor-actions" class="building-editor-actions"></div>
           <p id="building-editor-hint" class="building-editor-hint"></p>
           <div id="building-editor-content" class="building-editor-content"></div>
+        </div>
+      </dialog>
+
+      <dialog id="trinket-selector" class="building-editor trinket-selector">
+        <div class="building-editor-shell">
+          <header class="building-editor-heading">
+            <div><small class="eyebrow left" data-i18n="trinket.selectorKicker">内容数据库</small><h2 id="trinket-selector-title"></h2></div>
+            <button id="trinket-selector-close" class="secondary" type="button" data-i18n="town.close">关闭</button>
+          </header>
+          <div class="trinket-search-controls">
+            <input id="trinket-search" type="search" data-i18n-placeholder="trinket.searchPlaceholder" placeholder="搜索 ID、名称、描述或 Mod">
+            <select id="trinket-mod-filter" aria-label="Mod filter"><option value="" data-i18n="trinket.allMods">所有 Mod</option></select>
+            <select id="trinket-class-filter" aria-label="Class filter"><option value="" data-i18n="trinket.allClasses">所有职业</option></select>
+          </div>
+          <p id="trinket-selector-message" class="building-editor-hint"></p>
+          <div id="trinket-selector-list" class="trinket-selector-list"></div>
+          <footer id="trinket-batch-footer" class="trinket-batch-footer" hidden>
+            <label><input id="trinket-only-new" type="checkbox"><span data-i18n="trinket.onlyNew">只添加库存中尚未存在的饰品</span></label>
+            <button id="trinket-batch-confirm" type="button" data-i18n="trinket.applyBatch">执行</button>
+          </footer>
         </div>
       </dialog>
 

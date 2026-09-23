@@ -57,6 +57,8 @@ export const editorGateway = Object.freeze({
   restoreRecovery: () => request("/api/recovery/restore", "POST", {}),
   discardRecovery: () => request("/api/recovery", "POST", {}),
   getCampaign: () => request("/api/campaign"),
+  listTrinkets: (search = "", mod = "", heroClass = "") => request(`/api/campaign/trinkets?search=${encodeURIComponent(search)}&mod=${encodeURIComponent(mod)}&class=${encodeURIComponent(heroClass)}`),
+  editTrinkets: (action, revision, options = {}) => request("/api/campaign/trinket", "POST", { action, revision, ...options }),
   reloadCampaign: () => request("/api/campaign/reload", "POST", {}),
   setCampaignResource: (index, amount, revision) => request("/api/campaign/resource", "POST", { index, amount, revision }),
   setTownBuildingRank: (buildingId, treeId, rank, revision) => request("/api/campaign/building-rank", "POST", { buildingId, treeId, rank, revision }),

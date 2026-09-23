@@ -234,6 +234,11 @@ struct ChangeSet {
         std::vector<domain::DistrictState> after_districts;
     };
     std::optional<DistrictSystemSnapshot> district_system_snapshot;
+    struct TrinketInventorySnapshot {
+        std::vector<domain::TrinketInventoryEntry> before;
+        std::vector<domain::TrinketInventoryEntry> after;
+    };
+    std::optional<TrinketInventorySnapshot> trinket_inventory_snapshot;
 
     [[nodiscard]] bool empty() const noexcept {
         return changes.empty() && structural_changes.empty() && document_mutation_batches.empty();

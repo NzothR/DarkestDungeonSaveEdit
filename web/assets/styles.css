@@ -141,6 +141,11 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-building-panel { top: 17%; left: 1.5%; bottom: 10%; width: 22%; overflow: hidden; }
 .town-roster-panel { top: 12%; right: 1.5%; bottom: 10%; width: 20%; overflow: hidden; }
 .town-trinket-panel { top: 24%; right: 23%; bottom: 14%; left: 25%; display: flex; flex-direction: column; overflow: hidden; }
+.trinket-heading { align-items: center; margin-bottom: 8px; }
+.trinket-heading h2 { margin: 0; flex: 0 0 auto; }
+.trinket-actions { display: flex; justify-content: flex-end; gap: 5px; flex-wrap: wrap; }
+.trinket-actions button, .trinket-batch-footer button { border: 1px solid #9a754766; padding: 5px 8px; background: #211d18; color: #d7b476; cursor: pointer; font: inherit; font-size: clamp(8px, .65vw, 11px); }
+.trinket-actions button:hover, .trinket-batch-footer button:hover { background: #3b2c19; }
 .town-resource-panel { right: auto; bottom: 7.5%; left: 1.5%; width: 22%; min-height: 10%; }
 .town-panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border-bottom: 1px solid #ffffff14; }
 .town-panel-heading small { color: #9f9382; font-size: clamp(8px, .65vw, 11px); }
@@ -169,10 +174,23 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .portrait-fallback { width: 38px; height: 45px; flex: 0 0 38px; }
 .item-fallback { width: 34px; height: 34px; }
 .chest-grid { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-content: flex-start; gap: 13px; min-height: 0; width: 100%; margin: 8px auto 0; max-width: 720px; overflow-x: hidden; overflow-y: auto; }
-.trinket-entry { position: relative; display: grid; flex: 0 0 128px; place-items: center; width: 128px; height: 128px; }
+.trinket-entry { position: relative; display: grid; flex: 0 0 128px; place-items: center; width: 128px; height: 128px; cursor: grab; }
+.trinket-entry:active { cursor: grabbing; }
+.trinket-entry.dragging { opacity: .35; }
 .trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 128px; height: 128px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
 .trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
+.trinket-tooltip { z-index: 120; width: min(380px, 45vw); padding: 10px 12px; border: 1px solid #c59a53; background: #111012f5; box-shadow: 0 8px 24px #000d; color: #ddd8cf; text-align: left; white-space: normal; pointer-events: none; }
+.trinket-tooltip.visible { position: fixed; display: block; }
+.trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; }
+.trinket-restriction { color: #d4c9b3; }
+.trinket-rarity { color: #84e3d7; font-weight: 600; }
+.trinket-description { margin-top: 3px; line-height: 1.42; white-space: pre-line; }
+.trinket-description .game-color-r { color: #f0443d; }
+.trinket-description .game-color-g, .trinket-description .game-color-y { color: #dfc779; }
+.trinket-description .game-color-b, .trinket-description .game-color-c { color: #6de4dc; }
+.trinket-description .game-color-p, .trinket-description .game-color-m { color: #ec77da; }
+.trinket-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid #ffffff24; color: #9f9382; font-size: 11px; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }
 .resource-editor { display: grid; gap: 2px; }
@@ -216,6 +234,20 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .district-entry.built { border-color: #d2a65266; color: #f0d49a; }
 .district-entry:disabled { cursor: not-allowed; opacity: .7; }
 .district-entry:not(:disabled):hover { background: #3b2c19; }
+.trinket-selector { width: min(900px, 92vw); max-width: 92vw; }
+.trinket-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(140px, .4fr) minmax(140px, .4fr); gap: 8px; margin: 9px 0; }
+.trinket-search-controls input, .trinket-search-controls select { min-width: 0; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; font: inherit; }
+.trinket-selector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 7px; max-height: min(58vh, 620px); overflow: auto; padding: 2px; }
+.trinket-selector-item { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 66px; padding: 6px; border: 1px solid #ffffff18; background: #0c0b0aaa; color: inherit; text-align: left; cursor: pointer; }
+.trinket-selector-item:hover { border-color: #c59a53; background: #342818; }
+.trinket-selector-item > img { width: 52px; height: 52px; flex: 0 0 52px; object-fit: contain; border: 1px solid #9a754766; background: #080706; }
+.trinket-selector-info { display: grid; gap: 5px; min-width: 0; }
+.trinket-selector-info strong, .trinket-selector-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trinket-selector-info strong { color: #e4d5bc; }
+.trinket-selector-info small { color: #9f9382; }
+.trinket-batch-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff20; }
+.trinket-batch-footer label { display: flex; align-items: center; gap: 8px; color: #c6b79f; font-size: 12px; }
+.trinket-batch-footer input { accent-color: #c59a53; }
 
 @media (max-width: 480px) {
   body { padding: 12px; }
@@ -228,6 +260,9 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
   .town-building-panel { top: 22%; width: 30%; bottom: 9%; padding: 7px; }
   .town-roster-panel { width: 30%; bottom: 8%; padding: 7px; }
   .town-trinket-panel { top: 23%; right: 32%; bottom: 18%; left: 32%; padding: 7px; }
+  .trinket-actions { gap: 3px; }
+  .trinket-actions button { padding: 3px 4px; }
+  .trinket-search-controls { grid-template-columns: 1fr; }
   .town-resource-panel { width: 30%; padding: 7px; }
   .building-editor-shell { padding: 13px; }
   .upgrade-nodes { flex-wrap: wrap; }

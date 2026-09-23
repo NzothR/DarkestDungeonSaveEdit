@@ -869,7 +869,18 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         grouped_structural[change.raw.document_id].push_back(change);
     }
 
-    for (const auto& batch : changes.document_mutation_batches) {
+    auto ordered_mutation_batches = changes.document_mutation_batches;
+    const auto trinket_batch_order = [](std::string_view id) {
+        if (id == "campaign.trinket.add_inventory") return 0;
+        if (id == "campaign.trinket.destroy") return 1;
+        if (id == "campaign.trinket.reorder_inventory") return 2;
+        return 1;
+    };
+    std::stable_sort(ordered_mutation_batches.begin(), ordered_mutation_batches.end(),
+        [&](const auto& left, const auto& right) {
+            return trinket_batch_order(left.operation_id) < trinket_batch_order(right.operation_id);
+        });
+    for (const auto& batch : ordered_mutation_batches) {
         if (batch.cancel || batch.mutations.empty())
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::ValidationFailed,

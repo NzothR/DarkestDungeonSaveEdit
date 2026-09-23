@@ -508,6 +508,9 @@ Result 至少区分成功、业务校验失败、能力未实现/暂缓、revisi
 - 首轮开放基础资源数量编辑。编辑只改变后端 CampaignEditSession 的内存模型，使用 `/api/campaign/resource`，不能绕过 Operation/Validation 直接写 DSON。
 - Town Shell 顶部右侧提供后端 Undo/Redo，所有请求带 Session revision；底部中央保留 Save 按钮和 dirty 状态。安全候选生成、目标 Profile 选择、备份和显式磁盘写回归入 F4。
 - 建筑名单、原版升级树和区域建筑状态已接入 Campaign Session；升级节点经后端 Operation/Validation 修改，并进入相同的 Undo/Redo 与显式 Save 流程。
+- 饰品箱提供单件添加、按 Mod/职业筛选的批量添加与批量删除；批量添加默认允许重复饰品，可选只添加库存中尚不存在的 ID。批量操作在后端以单个映射事务进入 Undo/Redo。
+- 饰品搜索优先级为原始 ID、本地化键、当前语言名称、英文名称、描述、Mod 来源、标签；采用 Unicode NFKC 与大小写/空白归一化，不按英文空格规则切分中文。
+- 饰品条目支持左键拖动重排、右键删除；悬浮卡片展示游戏本地化名称、职业限制、稀有度、带颜色标记的说明，以及 Mod 本地化名称和来源唯一键。选择器条目共用同一详情卡片。
 
 ## F4 — Operation History 与安全保存
 

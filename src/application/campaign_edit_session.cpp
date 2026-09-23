@@ -599,6 +599,74 @@ bool apply_purchase_row_mutations(CampaignModel& model,
     return true;
 }
 
+bool apply_trinket_inventory_mutations(CampaignModel& model,
+                                      const std::vector<CampaignDocumentMutation>& mutations,
+                                      bool forward) {
+    const auto parse_index = [](std::string_view path) -> std::optional<std::size_t> {
+        const auto slash = path.find_last_of('/');
+        if (slash == std::string_view::npos) return std::nullopt;
+        const auto value = path.substr(slash + 1);
+        std::size_t index{};
+        const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), index);
+        if (value.empty() || error != std::errc{} || end != value.data() + value.size()) return std::nullopt;
+        return index;
+    };
+    if (!forward) return true; // History restores the captured model snapshot.
+    for (const auto& mutation : mutations) {
+        if (mutation.semantic_property != "TrinketInventory.Items" ||
+            mutation.document_id != "persist.estate.json") continue;
+        if (mutation.kind == CampaignDocumentMutationKind::Erase) {
+            const auto found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+                [&](const auto& item) { return item.raw.display_path == mutation.target_path; });
+            if (found == model.trinket_inventory.end()) return false;
+            model.trinket_inventory.erase(found);
+        } else if (mutation.kind == CampaignDocumentMutationKind::Rename) {
+            const auto found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+                [&](const auto& item) { return item.raw.display_path == mutation.target_path; });
+            if (found == model.trinket_inventory.end()) return false;
+            const auto slash = mutation.target_path.find_last_of('/');
+            const auto renamed_path = mutation.target_path.substr(0, slash + 1) + mutation.new_key;
+            const auto index = parse_index(renamed_path);
+            if (!index) return false;
+            found->raw.display_path = renamed_path;
+            found->raw_key = mutation.new_key;
+            found->index = *index;
+        } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+            const auto index = parse_index(mutation.target_path);
+            if (!index) return false;
+            const auto source = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+                [&](const auto& item) { return item.raw.display_path == mutation.source_path; });
+            domain::TrinketInventoryEntry entry;
+            if (source != model.trinket_inventory.end()) entry = *source;
+            entry.index = *index;
+            entry.raw_key = mutation.new_key;
+            entry.raw = RawLocator{"persist.estate.json", {}, mutation.target_path};
+            entry.id.raw = RawLocator{"persist.estate.json", {}, mutation.target_path + "/id"};
+            entry.amount.raw = RawLocator{"persist.estate.json", {}, mutation.target_path + "/amount"};
+            for (const auto& field : mutations) {
+                if (field.semantic_property != "TrinketInventory.Items" || !field.after ||
+                    !field.target_path.starts_with(mutation.target_path + "/")) continue;
+                const auto name = std::string_view{field.target_path}.substr(mutation.target_path.size() + 1);
+                if (name == "id") {
+                    if (const auto* value = std::get_if<std::string>(&*field.after)) {
+                        entry.id.value = *value;
+                        entry.definition.raw_id = *value;
+                        entry.definition.state = EntityState::Unresolved;
+                        entry.definition.display_name = *value;
+                    }
+                } else if (name == "amount") {
+                    if (const auto* value = std::get_if<std::int32_t>(&*field.after)) entry.amount.value = *value;
+                }
+            }
+            if (!entry.id.value || !entry.amount.value) return false;
+            model.trinket_inventory.push_back(std::move(entry));
+        }
+    }
+    std::stable_sort(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+        [](const auto& left, const auto& right) { return left.index < right.index; });
+    return true;
+}
+
 bool same_target(const CampaignOperationTarget& lhs, const CampaignOperationTarget& rhs) {
     return lhs.semantic_property == rhs.semantic_property && lhs.entity_id == rhs.entity_id &&
            lhs.occurrence_index == rhs.occurrence_index && lhs.member_id == rhs.member_id;
@@ -647,6 +715,10 @@ void merge_pending_changes(ChangeSet& pending, const ChangeSet& delta) {
             pending.district_system_snapshot->after_open = delta.district_system_snapshot->after_open;
             pending.district_system_snapshot->after_districts = delta.district_system_snapshot->after_districts;
         }
+    }
+    if (delta.trinket_inventory_snapshot) {
+        if (!pending.trinket_inventory_snapshot) pending.trinket_inventory_snapshot = delta.trinket_inventory_snapshot;
+        else pending.trinket_inventory_snapshot->after = delta.trinket_inventory_snapshot->after;
     }
     std::set<std::string, std::less<>> documents;
     for (const auto& change : pending.changes) documents.insert(change.raw.document_id);
@@ -778,7 +850,7 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
         {"campaign.hero.remove_quirk", "移除怪癖", CampaignOperationAvailability::Available,
          {"Hero.Quirk.Entry"}, "直接移除非疾病怪癖完整记录。"},
         {"campaign.trinket.destroy", "销毁饰品", CampaignOperationAvailability::Available,
-         {"Hero.Trinket.Entry", "TrinketInventory.Entry"}, "可分别销毁装备栏或庄园库存条目。"},
+         {"Hero.Trinket.Entry", "TrinketInventory.Entry", "TrinketInventory.Items"}, "可分别销毁装备栏或庄园库存条目。"},
         {"campaign.town.set_district_built", "设置小镇建筑状态", CampaignOperationAvailability::Available,
          {"Town.District.Built"}, "要求存档已经包含开放的小镇建筑系统状态。"},
         {"campaign.hero.add", "新增英雄", CampaignOperationAvailability::Available,
@@ -799,6 +871,8 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
          {"Hero.Quirks"}, "先校验有效定义的怪癖极性并初始化元数据；负面替换删除旧记录后克隆新增到原序位，并清除替换索引。"},
         {"campaign.trinket.add_inventory", "增加库存饰品", CampaignOperationAvailability::Available,
          {"TrinketInventory.Items"}, "按有效饰品定义追加一个库存条目，不对重复 ID 去重。"},
+        {"campaign.trinket.reorder_inventory", "重排饰品库存", CampaignOperationAvailability::Available,
+         {"TrinketInventory.Items"}, "仅重排存档饰品箱的有序条目，不更改饰品内容。"},
         {"campaign.hero.equip_trinket", "装备饰品", CampaignOperationAvailability::Available,
          {"Hero.Trinkets"}, "通过有效饰品定义检查职业限制后追加装备记录。"},
         {"campaign.town.set_upgrade_rank", "设置小镇升级进度", CampaignOperationAvailability::Available,
@@ -890,7 +964,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
                   mutation.semantic_property == "Town.DistrictSystem")) ||
-                (mutation.kind == CampaignDocumentMutationKind::Rename && mutation.semantic_property == "Hero.Quirks") ||
+                (mutation.kind == CampaignDocumentMutationKind::Rename &&
+                 (mutation.semantic_property == "Hero.Quirks" || mutation.semantic_property == "TrinketInventory.Items")) ||
                 (mutation.kind == CampaignDocumentMutationKind::ClearChildren &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Town.DistrictSystem" ||
                   mutation.semantic_property == "Town.Districts")) ||
@@ -1399,6 +1474,10 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
         change_set.district_system_snapshot = std::move(snapshot);
     }
     if (mapped_operation_id && mapped_mutations) {
+        const bool projects_trinket_inventory = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
+            [](const auto& mutation) { return mutation.semantic_property == "TrinketInventory.Items"; });
+        ChangeSet::TrinketInventorySnapshot trinket_snapshot;
+        if (projects_trinket_inventory) trinket_snapshot.before = candidate.trinket_inventory;
         const bool projects_district_state = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) {
                 return mutation.semantic_property == "Town.DistrictSystem" &&
@@ -1426,6 +1505,15 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
                 {core::ErrorCode::ValidationFailed,
                  "The mapped purchase-node append could not be projected into the campaign session: " + projection_failure,
                  "CampaignEditSession"});
+        if (projects_trinket_inventory && !apply_trinket_inventory_mutations(candidate, *mapped_mutations, true))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed,
+                 "The trinket inventory mutation could not be projected into the campaign session",
+                 "CampaignEditSession"});
+        if (projects_trinket_inventory) {
+            trinket_snapshot.after = candidate.trinket_inventory;
+            change_set.trinket_inventory_snapshot = std::move(trinket_snapshot);
+        }
         if (projects_district_state) {
             if (!project_district_state_mutations(candidate, *mapped_mutations))
                 return core::Result<CampaignEditResult, core::Error>::failure(
@@ -1489,6 +1577,12 @@ CampaignEditSession::replay(const HistoryRecord& record, bool forward, std::uint
                 {core::ErrorCode::ValidationFailed,
                  "The purchase-node edit history could not be projected into the campaign session",
                  "CampaignEditSession"});
+    }
+    if (changes.trinket_inventory_snapshot) {
+        candidate.trinket_inventory = forward ? changes.trinket_inventory_snapshot->after
+                                              : changes.trinket_inventory_snapshot->before;
+        if (!forward) std::swap(changes.trinket_inventory_snapshot->before,
+                                changes.trinket_inventory_snapshot->after);
     }
     if (!forward) {
         for (auto& change : changes.changes) std::swap(change.before, change.after);

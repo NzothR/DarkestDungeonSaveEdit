@@ -128,6 +128,14 @@ POST 请求体传 `{ "force": true }` 时主动重新扫描 Mod 环境数据库�
 请求体为 `{ "revision": 1 }`，由后端 Session 执行撤销或重做并返回新 DTO。revision 过期返回
 `STALE_SESSION_REVISION`。
 
+### `GET /api/campaign/trinkets`
+
+从当前有效内容数据库返回饰品选择器内容，支持 `search`、`mod`、`class` 查询参数。结果包括本地化/英文名称、描述、职业限制、稀有度、图标引用与来源 Mod ID/名称。
+
+### `POST /api/campaign/trinket`
+
+支持 `add`、`batch_add`、`batch_delete` 和 `reorder`。所有操作携带 `revision`；批量新增/删除按单个文档 mutation batch 进入 Session 历史，响应仍为 Campaign DTO，并附 `trinketAdded` / `trinketDeleted` 实际数量。库存排序以原始数字条目键定位，通过临时键完成无冲突重排。
+
 ### `GET /api/content-asset?path=...`
 
 从有效内容数据库解析 virtual path 后读取头像、饰品等资源；响应只允许数据库解析出的 source root
