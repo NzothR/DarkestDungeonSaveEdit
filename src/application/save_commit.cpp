@@ -477,6 +477,34 @@ bool mutation_path_matches_mapping(const CampaignMappingDescriptor& mapping, std
     return true;
 }
 
+bool district_system_clone_source_allowed(const CampaignDocumentMutation& mutation) {
+    if (mutation.semantic_property != "Town.DistrictSystem" ||
+        (mutation.kind != CampaignDocumentMutationKind::AppendClone &&
+         mutation.kind != CampaignDocumentMutationKind::InsertClone) ||
+        mutation.document_id != "persist.town.json") return false;
+    constexpr std::string_view root_prefix{"base_root/"};
+    if (!mutation.source_path.starts_with(root_prefix)) return false;
+    const auto tail = std::string_view{mutation.source_path}.substr(root_prefix.size());
+    if (tail.empty()) return false;
+    const auto separator = tail.find('/');
+    if (separator == std::string_view::npos) {
+        return std::all_of(tail.begin(), tail.end(), [](unsigned char value) {
+            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+                   (value >= '0' && value <= '9') || value == '_' || value == '-' ||
+                   value == '.' || value == ':';
+        });
+    }
+    constexpr std::string_view building_prefix{"buildings/"};
+    if (!tail.starts_with(building_prefix)) return false;
+    const auto key = tail.substr(building_prefix.size());
+    return !key.empty() && key.find('/') == std::string_view::npos &&
+        std::all_of(key.begin(), key.end(), [](unsigned char value) {
+            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+                   (value >= '0' && value <= '9') || value == '_' || value == '-' ||
+                   value == '.' || value == ':';
+        });
+}
+
 bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
     constexpr std::string_view prefix{"base_root/purchases/"};
     if (mutation.semantic_property != "Upgrade.PurchaseNode.Entry" ||
@@ -849,7 +877,8 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                                   {{"property", mutation.semantic_property}, {"path", mutation.target_path}}));
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
-                !mutation_path_matches_mapping(*mapping, mutation.source_path))
+                !mutation_path_matches_mapping(*mapping, mutation.source_path) &&
+                !district_system_clone_source_allowed(mutation))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Clone source is outside the registered mapping",

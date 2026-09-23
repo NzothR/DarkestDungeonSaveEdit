@@ -185,7 +185,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-settings-button { position: absolute; right: 1.8%; bottom: 1.1%; z-index: 8; padding: 6px 15px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; }
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }
-.town-save-state { margin-left: auto; color: #b89a68; }
+.town-save-state { max-width: 78%; color: #b89a68; overflow-wrap: anywhere; }
 .icon-action { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid #c59a5388; background: #17130f; color: #e4c17e; font-size: 17px; cursor: pointer; }
 .icon-action:hover { background: #3b2c19; }
 .icon-action:disabled { opacity: .45; cursor: not-allowed; }
