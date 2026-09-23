@@ -186,6 +186,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; text-align: center; }
 .trinket-restriction { color: #d4c9b3; text-align: center; }
 .trinket-rarity { color: #84e3d7; font-weight: 600; }
+.trinket-detail-note { margin-top: 4px; color: #9f9382; font-size: 10px; text-align: center; }
 .trinket-description { margin-top: 3px; line-height: 1.42; text-align: center; }
 .trinket-effect { min-height: 1.42em; }
 .trinket-description .game-color-r { color: #f0443d; }
@@ -252,6 +253,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-selector-info strong { color: #e4d5bc; }
 .trinket-selector-info small { color: #9f9382; }
 .trinket-batch-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff20; }
+.trinket-batch-footer[hidden], .trinket-batch-footer [hidden] { display: none !important; }
 .trinket-batch-help { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; flex: 1; }
 .trinket-batch-help p { margin: 0; color: #c6b79f; font-size: 12px; line-height: 1.45; }
 .trinket-batch-help button { justify-self: start; }

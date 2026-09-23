@@ -592,6 +592,45 @@ std::string format_trinket_effect(std::string format, double amount) {
     return format;
 }
 
+void append_trinket_detail_debug_log(const std::filesystem::path& data_root,
+                                     const application::ContentDefinition& definition,
+                                     std::size_t buff_reference_count,
+                                     const std::vector<std::string>& missing_buffs,
+                                     const std::vector<std::string>& missing_localizations,
+                                     const std::vector<std::string>& unsupported_stats,
+                                     std::size_t hidden_buff_count,
+                                     std::size_t visible_effect_count,
+                                     bool used_fallback) noexcept {
+    try {
+        const auto directory = data_root / "logs";
+        std::filesystem::create_directories(directory);
+        std::ofstream output(directory / "trinket-detail-debug.jsonl", std::ios::binary | std::ios::app);
+        if (!output) return;
+        const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const auto strings = [](const std::vector<std::string>& values) {
+            nlohmann::json result = nlohmann::json::array();
+            for (const auto& value : values) result.push_back(value);
+            return result;
+        };
+        const nlohmann::json entry{
+            {"timestamp_unix_ms", timestamp},
+            {"event", used_fallback ? "trinket_tooltip_used_stat_fallback" : "trinket_tooltip_has_no_effects"},
+            {"trinket_id", definition.id},
+            {"source_id", definition.provenance.source_id},
+            {"buff_reference_count", buff_reference_count},
+            {"missing_buff_ids", strings(missing_buffs)},
+            {"hidden_buff_count", hidden_buff_count},
+            {"untranslated_localization_keys", strings(missing_localizations)},
+            {"unsupported_stat_types", strings(unsupported_stats)},
+            {"effect_count_after_fallback", visible_effect_count},
+            {"used_stat_fallback", used_fallback}};
+        output << entry.dump() << '\n';
+    } catch (...) {
+        // Diagnostic logging must never interrupt catalog loading.
+    }
+}
+
 } // namespace
 
 void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession& campaign) {
@@ -617,16 +656,30 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                                             *campaign.cached_mod_records, &definition);
         Json::Value effects(Json::arrayValue);
         std::string joined_effects;
+        std::vector<std::string> missing_buffs;
+        std::vector<std::string> missing_localizations;
+        std::vector<std::string> unsupported_stats;
+        std::size_t hidden_buff_count = 0;
+        std::size_t buff_reference_count = 0;
+        bool used_fallback = false;
         try {
             const auto payload = nlohmann::json::parse(definition.payload_json);
             if (payload.contains("buffs") && payload["buffs"].is_array()) {
+                buff_reference_count = payload["buffs"].size();
                 for (const auto& buff_id : payload["buffs"]) {
                     if (!buff_id.is_string()) continue;
                     const auto found = buffs.find(buff_id.get<std::string>());
-                    if (found == buffs.end() || !found->second.contains("stat_type") ||
+                    if (found == buffs.end()) {
+                        missing_buffs.push_back(buff_id.get<std::string>());
+                        continue;
+                    }
+                    if (!found->second.contains("stat_type") ||
                         !found->second["stat_type"].is_string() || !found->second.contains("stat_sub_type") ||
                         !found->second["stat_sub_type"].is_string() || !found->second.contains("amount") ||
-                        !found->second["amount"].is_number()) continue;
+                        !found->second["amount"].is_number()) {
+                        unsupported_stats.push_back(buff_id.get<std::string>());
+                        continue;
+                    }
                     // Mods often attach hidden/conditional implementation buffs
                     // to an item. The game marks these has_description=false;
                     // they affect combat but are intentionally omitted from its
@@ -634,7 +687,10 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                     // lists of repeated stats.
                     if (found->second.contains("has_description") &&
                         found->second["has_description"].is_boolean() &&
-                        !found->second["has_description"].get<bool>()) continue;
+                        !found->second["has_description"].get<bool>()) {
+                        ++hidden_buff_count;
+                        continue;
+                    }
                     const auto stat_type = found->second["stat_type"].get<std::string>();
                     const auto stat_sub_type = found->second["stat_sub_type"].get<std::string>();
                     const auto key = "buff_stat_tooltip_" + stat_type +
@@ -648,8 +704,59 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                     const auto amount = found->second["amount"].get<double>();
                     // Never guess a user-facing label from internal stat IDs.
                     // Unknown mod stats have no reliable generic translation.
-                    if (format->second.empty()) continue;
+                    if (format->second.empty()) {
+                        missing_localizations.push_back(key);
+                        continue;
+                    }
                     const auto effect = format_trinket_effect(format->second, amount);
+                    effects.append(effect);
+                    if (!joined_effects.empty()) joined_effects += "\n";
+                    joined_effects += effect;
+                }
+            }
+
+            // Some mods deliberately mark every mechanical buff as hidden and
+            // use local stat tooltip strings as the only human-readable detail.
+            // If the normal game tooltip path produced nothing, recover known,
+            // localized stat lines and label their conditional triggers.
+            if (effects.empty() && payload.contains("buffs") && payload["buffs"].is_array()) {
+                std::set<std::string, std::less<>> emitted;
+                for (const auto& buff_id : payload["buffs"]) {
+                    if (!buff_id.is_string()) continue;
+                    const auto found = buffs.find(buff_id.get<std::string>());
+                    if (found == buffs.end() || !found->second.contains("stat_type") ||
+                        !found->second["stat_type"].is_string() || !found->second.contains("stat_sub_type") ||
+                        !found->second["stat_sub_type"].is_string() || !found->second.contains("amount") ||
+                        !found->second["amount"].is_number()) continue;
+                    const auto stat_type = found->second["stat_type"].get<std::string>();
+                    const auto stat_sub_type = found->second["stat_sub_type"].get<std::string>();
+                    if (stat_type == "upgrade_discount") continue;
+                    const auto key = "buff_stat_tooltip_" + stat_type +
+                                     (stat_sub_type.empty() ? std::string{} : "_" + stat_sub_type);
+                    auto format = localized_effect_formats.find(key);
+                    if (format == localized_effect_formats.end()) {
+                        const auto localized = campaign.content->resolve_localization(key);
+                        const auto value = localized && localized.value() ? localized.value()->value : std::string{};
+                        format = localized_effect_formats.emplace(key, value).first;
+                    }
+                    if (format->second.empty()) {
+                        missing_localizations.push_back(key);
+                        continue;
+                    }
+                    auto effect = format_trinket_effect(format->second, found->second["amount"].get<double>());
+                    const auto rule = found->second.value("rule_type", std::string{"always"});
+                    std::string condition_text;
+                    const bool chinese = config.language == "zh_cn" || config.language == "schinese";
+                    if (rule == "virtued") condition_text = chinese ? "（美德状态）" : "(while virtued)";
+                    else if (rule == "monster_type_count_min") condition_text = chinese ? "（满足怪物类型条件时）" : "(when the monster type condition is met)";
+                    else if (rule == "at_deaths_door") condition_text = chinese ? "（濒死时）" : "(at Death's Door)";
+                    else if (rule == "has_quirk") condition_text = chinese ? "（拥有对应怪癖时）" : "(with the required quirk)";
+                    else if (rule == "meleeonly") condition_text = chinese ? "（近战攻击时）" : "(on melee attacks)";
+                    else if (rule == "riposte") condition_text = chinese ? "（反击时）" : "(on riposte)";
+                    else if (rule != "always") continue;
+                    if (!condition_text.empty()) effect += " " + condition_text;
+                    if (!emitted.insert(effect).second) continue;
+                    used_fallback = true;
                     effects.append(effect);
                     if (!joined_effects.empty()) joined_effects += "\n";
                     joined_effects += effect;
@@ -660,6 +767,13 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
         item["effects"] = std::move(effects);
         item["effectSearchText"] = joined_effects;
         if (!joined_effects.empty()) item["description"] = joined_effects;
+        if (used_fallback) item["detailsFallback"] = true;
+        if (item["effects"].empty() || used_fallback)
+            append_trinket_detail_debug_log(config.data_root, definition,
+                buff_reference_count,
+                missing_buffs,
+                missing_localizations, unsupported_stats, hidden_buff_count,
+                item["effects"].size(), used_fallback);
         campaign.cached_trinket_details.insert_or_assign(definition.id, item);
         campaign.cached_trinket_catalog.push_back(std::move(item));
     }
@@ -783,6 +897,7 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["description"] = details["description"];
         item["effects"] = details["effects"];
         item["effectSearchText"] = details["effectSearchText"];
+        item["detailsFallback"] = details["detailsFallback"];
         item["englishName"] = details["englishName"];
         item["localizationKey"] = details["localizationKey"];
         item["sourceId"] = details["sourceId"];

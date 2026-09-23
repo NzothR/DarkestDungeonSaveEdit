@@ -269,6 +269,12 @@ function trinketTooltip(trinket) {
     ? trinket.effects
     : trinket.description ? String(trinket.description).split("\n") : [];
   if (effectLines.length) {
+    if (trinket.detailsFallback) {
+      const note = document.createElement("div");
+      note.className = "trinket-detail-note";
+      note.textContent = t("trinket.inferredEffects");
+      tooltip.append(note);
+    }
     const description = document.createElement("div");
     description.className = "trinket-description";
     for (const line of effectLines) {
@@ -575,7 +581,7 @@ async function openTrinketSelector(mode) {
   elements.trinketBatchFooter.hidden = mode !== "batchAdd" && mode !== "batchDelete";
   elements.trinketOnlyNew.parentElement.hidden = mode !== "batchAdd";
   elements.trinketClearSelection.hidden = mode !== "batchAdd" && mode !== "batchDelete";
-  elements.trinketBatchConfirm.textContent = t(mode === "batchAdd" ? "trinket.batchAdd" : "trinket.batchDelete");
+  elements.trinketBatchConfirm.textContent = t(mode === "batchDelete" ? "trinket.batchDelete" : "trinket.batchAdd");
   elements.trinketSearch.value = "";
   elements.trinketModFilter.value = "";
   elements.trinketClassFilter.value = "";
