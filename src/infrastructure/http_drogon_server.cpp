@@ -101,7 +101,9 @@ struct ServerContext {
         std::unique_ptr<SqliteContentEnvironment> content;
         std::unique_ptr<application::CampaignEditSession> edits;
         std::filesystem::path mod_database_path;
-        std::optional<domain::TrinketInventoryEntry> trinket_template;
+        std::string trinket_template_source_path;
+        std::string trinket_template_id;
+        std::int32_t trinket_template_amount{1};
         std::set<std::string, std::less<>> reserved_trinket_keys;
         mutable std::optional<std::vector<DatabaseModRecord>> cached_mod_records;
         mutable std::map<std::string, Json::Value, std::less<>> cached_trinket_details;
@@ -346,7 +348,56 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
         context.configuration_store.current().game_root);
     session->profile = std::move(profile.value());
     session->mod_database_path = context.initialization.mod_database_path();
-    if (!model.trinket_inventory.empty()) session->trinket_template = model.trinket_inventory.front();
+    const auto valid_trinket_template = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+        [](const auto& item) {
+            return !item.raw.display_path.empty() && item.id.value.has_value() && item.amount.value.has_value();
+        });
+    if (valid_trinket_template != model.trinket_inventory.end()) {
+        session->trinket_template_source_path = valid_trinket_template->raw.display_path;
+        session->trinket_template_id = *valid_trinket_template->id.value;
+        session->trinket_template_amount = *valid_trinket_template->amount.value;
+    } else {
+        // The estate keeps serialized item rows in estate_items even when the
+        // editable trinket chest is empty. Reuse one complete row as the safe
+        // DSON shape so custom and future fields survive the clone unchanged.
+        constexpr std::string_view template_prefix{"base_root/estate_items/items/"};
+        const auto estate_document = session->profile.documents.find("persist.estate.json");
+        if (estate_document != session->profile.documents.end() && estate_document->second.decoded) {
+            const auto& fields = estate_document->second.decoded->fields;
+            for (const auto& field : fields) {
+                if (field.kind != core::dson::ValueKind::Object || !field.path.starts_with(template_prefix)) continue;
+                const auto key = std::string_view{field.path}.substr(template_prefix.size());
+                if (key.empty() || key.find('/') != std::string_view::npos) continue;
+                const auto find_child = [&](std::string_view name) -> const core::dson::DsonField* {
+                    const auto child_path = field.path + "/" + std::string{name};
+                    const auto child = std::find_if(fields.begin(), fields.end(), [&](const auto& candidate) {
+                        return candidate.path == child_path;
+                    });
+                    return child == fields.end() ? nullptr : &*child;
+                };
+                const auto* id = find_child("id");
+                const auto* type = find_child("type");
+                const auto* amount = find_child("amount");
+                const auto* added_buffs = find_child("added_buffs");
+                const auto* hero_name = find_child("hero_name");
+                const auto* previous_trinket_id = find_child("previous_trinket_id");
+                const auto* did_transform = find_child("did_transform");
+                const auto* trinkets_gained_count = find_child("trinkets_gained_count");
+                const auto* id_value = id ? std::get_if<std::string>(&id->value) : nullptr;
+                const auto* amount_value = amount ? std::get_if<std::int32_t>(&amount->value) : nullptr;
+                if (!id_value || !amount_value || !type || !std::holds_alternative<std::string>(type->value) ||
+                    !added_buffs || !std::holds_alternative<std::int32_t>(added_buffs->value) ||
+                    !hero_name || !std::holds_alternative<std::string>(hero_name->value) ||
+                    !previous_trinket_id || !std::holds_alternative<std::string>(previous_trinket_id->value) ||
+                    !did_transform || !std::holds_alternative<bool>(did_transform->value) ||
+                    !trinkets_gained_count || !std::holds_alternative<std::int32_t>(trinkets_gained_count->value)) continue;
+                session->trinket_template_source_path = field.path;
+                session->trinket_template_id = *id_value;
+                session->trinket_template_amount = *amount_value;
+                break;
+            }
+        }
+    }
     for (const auto& item : model.trinket_inventory) session->reserved_trinket_keys.insert(item.raw_key);
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
@@ -1120,17 +1171,21 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
 
     if (action == "add" || action == "batch_add") {
         operation_id = "campaign.trinket.add_inventory";
+        auto template_path = campaign.trinket_template_source_path;
+        auto template_id = campaign.trinket_template_id;
+        auto template_amount = campaign.trinket_template_amount;
         const auto template_found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
-            [](const auto& entry) { return entry.raw.display_path.size() != 0 && entry.id.value && entry.amount.value; });
-        const domain::TrinketInventoryEntry* template_entry = template_found == model.trinket_inventory.end()
-            ? (campaign.trinket_template ? &*campaign.trinket_template : nullptr) : &*template_found;
-        if (template_entry == nullptr || !template_entry->id.value || !template_entry->amount.value) {
+            [](const auto& entry) { return !entry.raw.display_path.empty() && entry.id.value && entry.amount.value; });
+        if (template_found != model.trinket_inventory.end()) {
+            template_path = template_found->raw.display_path;
+            template_id = *template_found->id.value;
+            template_amount = *template_found->amount.value;
+        }
+        if (template_path.empty() || template_id.empty()) {
             callback(json_error(drogon::k409Conflict, "TRINKET_TEMPLATE_UNAVAILABLE",
-                                "The save has no valid trinket inventory entry to use as a safe DSON template."));
+                                "No valid serialized trinket row is available as a DSON template."));
             return;
         }
-        const auto template_id = *template_entry->id.value;
-        const auto template_amount = *template_entry->amount.value;
         std::set<std::string, std::less<>> existing_ids;
         std::set<std::string, std::less<>> occupied_keys;
         std::size_t next_index = 0;
@@ -1179,7 +1234,7 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
             campaign.reserved_trinket_keys.insert(key);
             const auto target = "base_root/trinkets/items/" + key;
             mutations.emplace_back(Kind::AppendClone, "TrinketInventory.Items", "persist.estate.json",
-                target, template_entry->raw.display_path, key, core::dson::ValueKind::Object);
+                target, template_path, key, core::dson::ValueKind::Object);
             mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
                 target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
                 template_id, definition.id);

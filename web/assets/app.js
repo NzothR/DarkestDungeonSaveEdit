@@ -649,6 +649,13 @@ function renderTrinketSelector() {
       ? "trinket.batchAddHint" : "trinket.batchDeleteHint");
     const selectedCount = trinketSelectorMode === "batchAdd" ? selectedTrinketIds.size : selectedTrinketRawKeys.size;
     elements.trinketSelectionCount.textContent = t("trinket.selectedCount", { count: selectedCount });
+    const hasSelection = selectedCount > 0;
+    const hasScopeFilters = Boolean(mod || heroClass || rarity);
+    const actionLabel = trinketSelectorMode === "batchAdd"
+      ? hasSelection ? "trinket.batchAddSelected" : "trinket.batchAddVisible"
+      : hasSelection ? "trinket.batchDeleteSelected"
+        : hasScopeFilters ? "trinket.batchDeleteVisible" : "trinket.batchDeleteAll";
+    elements.trinketBatchConfirm.textContent = t(actionLabel);
   }
   const inventoryPairs = pairTrinketInstances(inventory);
   for (const candidate of candidates) {
