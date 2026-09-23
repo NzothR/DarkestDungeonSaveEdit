@@ -261,10 +261,18 @@ function trinketTooltip(trinket) {
     rarity.textContent = cleanGameText(trinket.rarityName || t("trinket.rarity", { rarity: trinket.rarity }));
     tooltip.append(rarity);
   }
-  if (trinket.description) {
+  const effectLines = Array.isArray(trinket.effects) && trinket.effects.length
+    ? trinket.effects
+    : trinket.description ? String(trinket.description).split("\n") : [];
+  if (effectLines.length) {
     const description = document.createElement("div");
     description.className = "trinket-description";
-    description.append(gameMarkup(trinket.description));
+    for (const line of effectLines) {
+      const effect = document.createElement("div");
+      effect.className = "trinket-effect";
+      effect.append(gameMarkup(line));
+      description.append(effect);
+    }
     tooltip.append(description);
   }
   const source = document.createElement("div");
@@ -277,12 +285,20 @@ function trinketTooltip(trinket) {
 function attachTrinketTooltip(owner, tooltip) {
   tooltip.classList.add("trinket-tooltip-portal");
   tooltip.dataset.scope = owner.closest("#trinket-selector") ? "selector" : "inventory";
-  tooltip.hidden = true;
-  // A dialog is rendered in the browser's top layer. Keep its tooltip in that
-  // same layer; a body portal is painted underneath the open dialog.
-  (owner.closest("dialog") || document.body).append(tooltip);
+  const usePopover = typeof tooltip.showPopover === "function";
+  if (usePopover) {
+    // Native popovers enter the browser top layer above dialogs and scrolling
+    // containers, so the selector can never paint over its own detail card.
+    tooltip.setAttribute("popover", "manual");
+    document.body.append(tooltip);
+  } else {
+    tooltip.hidden = true;
+    (owner.closest("dialog") || document.body).append(tooltip);
+  }
   const show = () => {
-    tooltip.hidden = false;
+    if (usePopover) {
+      if (!tooltip.matches(":popover-open")) tooltip.showPopover();
+    } else tooltip.hidden = false;
     tooltip.classList.add("visible");
     const rect = owner.getBoundingClientRect();
     const width = Math.min(380, window.innerWidth * .45);
@@ -295,11 +311,21 @@ function attachTrinketTooltip(owner, tooltip) {
         tooltip.style.top = `${Math.max(8, window.innerHeight - tooltip.getBoundingClientRect().height - 8)}px`;
     });
   };
-  const hide = () => { tooltip.classList.remove("visible"); tooltip.hidden = true; };
+  const hide = () => {
+    tooltip.classList.remove("visible");
+    if (usePopover) {
+      if (tooltip.matches(":popover-open")) tooltip.hidePopover();
+    } else tooltip.hidden = true;
+  };
   owner.addEventListener("pointerenter", show);
   owner.addEventListener("pointerleave", hide);
   owner.addEventListener("focus", show);
   owner.addEventListener("blur", hide);
+  owner.addEventListener("wheel", (event) => {
+    if (!event.shiftKey || !tooltip.classList.contains("visible")) return;
+    event.preventDefault();
+    tooltip.scrollTop += event.deltaY || event.deltaX;
+  }, { passive: false });
   owner._hideTrinketTooltip = hide;
 }
 
@@ -983,6 +1009,9 @@ elements.trinketAdd.addEventListener("click", () => openTrinketSelector("add"));
 elements.trinketBatchAdd.addEventListener("click", () => openTrinketSelector("batchAdd"));
 elements.trinketBatchDelete.addEventListener("click", () => openTrinketSelector("batchDelete"));
 elements.trinketSelectorClose.addEventListener("click", () => elements.trinketSelector.close());
+elements.trinketSelector.addEventListener("close", () => {
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
+});
 for (const control of [elements.trinketSearch, elements.trinketModFilter, elements.trinketClassFilter]) {
   control.addEventListener(control === elements.trinketSearch ? "input" : "change", renderTrinketSelector);
 }

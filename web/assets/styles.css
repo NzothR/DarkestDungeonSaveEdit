@@ -180,12 +180,14 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 128px; height: 128px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
 .trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
-.trinket-tooltip { z-index: 2147483647; width: min(380px, 45vw); max-height: min(70vh, 560px); overflow: auto; padding: 10px 12px; border: 1px solid #c59a53; background: #111012f5; box-shadow: 0 8px 24px #000d; color: #ddd8cf; text-align: left; white-space: normal; pointer-events: none; }
+.trinket-tooltip { z-index: 2147483647; width: min(380px, 45vw); max-height: min(70vh, 560px); overflow: auto; padding: 10px 12px; border: 1px solid #c59a53; background: #111012; box-shadow: 0 8px 24px #000e; color: #ddd8cf; text-align: left; white-space: normal; pointer-events: none; }
 .trinket-tooltip.visible { position: fixed; display: block; }
+.trinket-tooltip[popover] { position: fixed; inset: auto; margin: 0; }
 .trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; }
 .trinket-restriction { color: #d4c9b3; }
 .trinket-rarity { color: #84e3d7; font-weight: 600; }
-.trinket-description { margin-top: 3px; line-height: 1.42; white-space: pre-line; }
+.trinket-description { margin-top: 3px; line-height: 1.42; text-align: center; }
+.trinket-effect { min-height: 1.42em; }
 .trinket-description .game-color-r { color: #f0443d; }
 .trinket-description .game-color-g, .trinket-description .game-color-y { color: #dfc779; }
 .trinket-description .game-color-b, .trinket-description .game-color-c { color: #6de4dc; }

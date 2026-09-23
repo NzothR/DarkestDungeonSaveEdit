@@ -627,6 +627,14 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                         !found->second["stat_type"].is_string() || !found->second.contains("stat_sub_type") ||
                         !found->second["stat_sub_type"].is_string() || !found->second.contains("amount") ||
                         !found->second["amount"].is_number()) continue;
+                    // Mods often attach hidden/conditional implementation buffs
+                    // to an item. The game marks these has_description=false;
+                    // they affect combat but are intentionally omitted from its
+                    // item tooltip, so showing them here creates long, misleading
+                    // lists of repeated stats.
+                    if (found->second.contains("has_description") &&
+                        found->second["has_description"].is_boolean() &&
+                        !found->second["has_description"].get<bool>()) continue;
                     const auto stat_type = found->second["stat_type"].get<std::string>();
                     const auto stat_sub_type = found->second["stat_sub_type"].get<std::string>();
                     const auto key = "buff_stat_tooltip_" + stat_type +
@@ -638,15 +646,10 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                         format = localized_effect_formats.emplace(key, value).first;
                     }
                     const auto amount = found->second["amount"].get<double>();
-                    std::string effect;
-                    if (format->second.empty()) {
-                        const auto raw_label = stat_sub_type.empty() ? stat_type : stat_sub_type;
-                        effect = format_trinket_effect(std::abs(amount) < 1.0 ? "%+d%% " + raw_label
-                                                                              : "%+d " + raw_label,
-                                                       amount);
-                    } else {
-                        effect = format_trinket_effect(format->second, amount);
-                    }
+                    // Never guess a user-facing label from internal stat IDs.
+                    // Unknown mod stats have no reliable generic translation.
+                    if (format->second.empty()) continue;
+                    const auto effect = format_trinket_effect(format->second, amount);
                     effects.append(effect);
                     if (!joined_effects.empty()) joined_effects += "\n";
                     joined_effects += effect;
