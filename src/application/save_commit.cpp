@@ -486,23 +486,41 @@ bool district_system_clone_source_allowed(const CampaignDocumentMutation& mutati
     if (!mutation.source_path.starts_with(root_prefix)) return false;
     const auto tail = std::string_view{mutation.source_path}.substr(root_prefix.size());
     if (tail.empty()) return false;
-    const auto separator = tail.find('/');
-    if (separator == std::string_view::npos) {
-        return std::all_of(tail.begin(), tail.end(), [](unsigned char value) {
-            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-                   (value >= '0' && value <= '9') || value == '_' || value == '-' ||
-                   value == '.' || value == ':';
-        });
-    }
+    const auto safe_path = [](std::string_view path) {
+        std::size_t start = 0;
+        while (start < path.size()) {
+            const auto end = path.find('/', start);
+            const auto segment = path.substr(start, end == std::string_view::npos
+                ? path.size() - start : end - start);
+            if (segment.empty() || !std::all_of(segment.begin(), segment.end(), [](unsigned char value) {
+                    return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+                           (value >= '0' && value <= '9') || value == '_' || value == '-' ||
+                           value == '.' || value == ':';
+                })) return false;
+            if (end == std::string_view::npos) break;
+            start = end + 1;
+        }
+        return true;
+    };
+    if (!safe_path(tail)) return false;
+    if (tail == "districts") return true;
+
     constexpr std::string_view building_prefix{"buildings/"};
-    if (!tail.starts_with(building_prefix)) return false;
-    const auto key = tail.substr(building_prefix.size());
-    return !key.empty() && key.find('/') == std::string_view::npos &&
-        std::all_of(key.begin(), key.end(), [](unsigned char value) {
-            return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-                   (value >= '0' && value <= '9') || value == '_' || value == '-' ||
-                   value == '.' || value == ':';
-        });
+    if (tail.starts_with(building_prefix)) {
+        const auto key = tail.substr(building_prefix.size());
+        if (!key.empty() && key.find('/') == std::string_view::npos) return true;
+    }
+
+    constexpr std::string_view built_suffix{"/built"};
+    constexpr std::string_view district_prefix{"base_root/districts/buildings/"};
+    if (mutation.expected_kind == ValueKind::Boolean &&
+        mutation.target_path.starts_with(district_prefix) &&
+        mutation.target_path.ends_with(built_suffix)) {
+        const auto district_id = std::string_view{mutation.target_path}.substr(
+            district_prefix.size(), mutation.target_path.size() - district_prefix.size() - built_suffix.size());
+        return !district_id.empty() && district_id.find('/') == std::string_view::npos;
+    }
+    return false;
 }
 
 bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
