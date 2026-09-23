@@ -91,6 +91,7 @@ struct ServerContext {
         std::string building_id;
         std::string id;
         std::vector<char> codes;
+        std::vector<std::string> descriptions;
     };
     struct CampaignSession {
         application::RawSaveProfile profile;
@@ -361,7 +362,22 @@ std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
                     if (code.size() != 1 || code.front() != expected++) { valid = false; break; }
                     item.codes.push_back(code.front());
                 }
-                if (valid && !item.codes.empty()) result.push_back(std::move(item));
+                if (valid && !item.codes.empty()) {
+                    for (const auto code : item.codes) {
+                        const auto localization_key = "str_" + item.id + "_upgrade_lvl_" +
+                            std::to_string(static_cast<int>(code - 'a') + 1);
+                        const auto description = content.resolve_localization(localization_key);
+                        auto text = description && description.value() ? description.value()->value : std::string{};
+                        std::size_t placeholder = 0;
+                        const auto level = std::to_string(static_cast<int>(code - 'a') + 1);
+                        while ((placeholder = text.find("%d", placeholder)) != std::string::npos) {
+                            text.replace(placeholder, 2, level);
+                            placeholder += level.size();
+                        }
+                        item.descriptions.push_back(std::move(text));
+                    }
+                    result.push_back(std::move(item));
+                }
             }
         } catch (const nlohmann::json::exception&) {
         }
@@ -540,7 +556,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             item["id"] = tree.id;
             std::uint32_t rank = 0;
             Json::Value nodes(Json::arrayValue);
-            for (const auto code : tree.codes) {
+            for (std::size_t node_index = 0; node_index < tree.codes.size(); ++node_index) {
+                const auto code = tree.codes[node_index];
                 const auto node = std::find_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
                     [&](const auto& purchase) {
                         return purchase.instance_number == 0 && purchase.tree_id == hash &&
@@ -552,6 +569,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                 Json::Value node_json(Json::objectValue);
                 node_json["code"] = std::string(1, code);
                 node_json["purchased"] = purchased;
+                if (node_index < tree.descriptions.size())
+                    node_json["description"] = strip_game_markup(tree.descriptions[node_index]);
                 nodes.append(std::move(node_json));
             }
             item["rank"] = rank;

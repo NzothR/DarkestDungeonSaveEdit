@@ -350,6 +350,10 @@ function presentBuildingEditor(title, kicker, actions, hint, content) {
   if (!elements.buildingEditor.open) elements.buildingEditor.showModal();
 }
 
+function campaignBuilding(buildingId) {
+  return latestCampaign?.buildings?.find((item) => item.id === buildingId);
+}
+
 function openBuildingEditor(buildingId) {
   const building = latestCampaign?.buildings?.find((item) => item.id === buildingId);
   if (!building) return;
@@ -371,12 +375,13 @@ function openBuildingEditor(buildingId) {
       button.type = "button";
       button.className = `upgrade-node${node.purchased ? " purchased" : ""}`;
       button.textContent = node.code.toUpperCase();
-      button.title = t("town.upgradeNodeTip", { code: node.code.toUpperCase() });
-      button.addEventListener("click", (event) => changeBuildingRank(buildingId, tree.id,
-        event.shiftKey ? tree.maxRank : Math.min(tree.maxRank, tree.rank + 1), false));
+      const nodeInstructions = t("town.nodeControlsTip");
+      button.title = [cleanGameText(node.description || ""), nodeInstructions].filter(Boolean).join("\n");
+      button.setAttribute("aria-label", `${heading.textContent} ${node.code.toUpperCase()}`);
+      button.addEventListener("click", () => changeBuildingRank(buildingId, tree.id, index + 1, false));
       button.addEventListener("contextmenu", (event) => {
         event.preventDefault();
-        changeBuildingRank(buildingId, tree.id, event.shiftKey ? 0 : Math.max(0, tree.rank - 1), false);
+        changeBuildingRank(buildingId, tree.id, index, false);
       });
       nodes.append(button);
     }
@@ -399,7 +404,11 @@ async function changeBuildingRank(buildingId, treeId, rank, maximize) {
       : await editorGateway.setTownBuildingRank(buildingId, treeId, rank, latestCampaign.revision);
     renderCampaign(updated);
     openBuildingEditor(buildingId);
-  } catch (error) { elements.townSaveState.textContent = displayError(error); }
+  } catch (error) {
+    const message = displayError(error);
+    elements.townSaveState.textContent = message;
+    elements.buildingEditorHint.textContent = message;
+  }
 }
 
 function openDistrictEditor() {
