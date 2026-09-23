@@ -180,7 +180,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-entry img, .trinket-entry .item-fallback { box-sizing: border-box; width: 128px; height: 128px; object-fit: contain; border: 1px solid #c59a5388; background: transparent; }
 .trinket-entry img { image-rendering: auto; }
 .trinket-entry small { position: absolute; right: 2px; bottom: 1px; color: #f0d49a; font-size: 10px; text-shadow: 0 1px 2px #000; }
-.trinket-tooltip { z-index: 120; width: min(380px, 45vw); padding: 10px 12px; border: 1px solid #c59a53; background: #111012f5; box-shadow: 0 8px 24px #000d; color: #ddd8cf; text-align: left; white-space: normal; pointer-events: none; }
+.trinket-tooltip { z-index: 2147483647; width: min(380px, 45vw); max-height: min(70vh, 560px); overflow: auto; padding: 10px 12px; border: 1px solid #c59a53; background: #111012f5; box-shadow: 0 8px 24px #000d; color: #ddd8cf; text-align: left; white-space: normal; pointer-events: none; }
 .trinket-tooltip.visible { position: fixed; display: block; }
 .trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; }
 .trinket-restriction { color: #d4c9b3; }
@@ -190,6 +190,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-description .game-color-g, .trinket-description .game-color-y { color: #dfc779; }
 .trinket-description .game-color-b, .trinket-description .game-color-c { color: #6de4dc; }
 .trinket-description .game-color-p, .trinket-description .game-color-m { color: #ec77da; }
+.trinket-description .game-color-bleed, .trinket-description .game-color-blight, .trinket-description .game-color-debuff { color: #f0443d; }
+.trinket-description .game-color-buff, .trinket-description .game-color-notable, .trinket-description .game-color-positive_result { color: #dfc779; }
 .trinket-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid #ffffff24; color: #9f9382; font-size: 11px; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }
@@ -234,7 +236,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .district-entry.built { border-color: #d2a65266; color: #f0d49a; }
 .district-entry:disabled { cursor: not-allowed; opacity: .7; }
 .district-entry:not(:disabled):hover { background: #3b2c19; }
-.trinket-selector { width: min(900px, 92vw); max-width: 92vw; }
+.trinket-selector { width: min(900px, 92vw); max-width: 92vw; overflow: visible; }
 .trinket-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(140px, .4fr) minmax(140px, .4fr); gap: 8px; margin: 9px 0; }
 .trinket-search-controls input, .trinket-search-controls select { min-width: 0; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; font: inherit; }
 .trinket-selector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 7px; max-height: min(58vh, 620px); overflow: auto; padding: 2px; }

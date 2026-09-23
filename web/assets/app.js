@@ -218,18 +218,24 @@ function cleanGameText(value) {
 function gameMarkup(value) {
   const text = String(value ?? "");
   const fragment = document.createDocumentFragment();
-  const token = /<c>([\s\S]*?)<\/c>/gi;
+  const token = /<c>([\s\S]*?)<\/c>|\{colour_start\|([^}]+)\}([\s\S]*?)\{colour_end\}/gi;
   let offset = 0;
   for (const match of text.matchAll(token)) {
     fragment.append(document.createTextNode(cleanGameText(text.slice(offset, match.index))));
     const span = document.createElement("span");
-    const content = match[1];
-    let prefix = 0;
-    while (prefix < content.length && prefix < 6 && content.charCodeAt(prefix) < 0x80) prefix += 1;
-    const code = content.slice(0, prefix).toLowerCase();
-    span.className = `game-color game-color-${code[0] || "default"}`;
-    if (prefix === 6 && /^[0-9a-f]{6}$/i.test(code)) span.style.color = `#${code}`;
-    span.textContent = cleanGameText(content.slice(prefix));
+    if (match[2]) {
+      const color = match[2].toLowerCase();
+      span.className = `game-color game-color-${color}`;
+      span.textContent = cleanGameText(match[3]);
+    } else {
+      const content = match[1];
+      let prefix = 0;
+      while (prefix < content.length && prefix < 6 && content.charCodeAt(prefix) < 0x80) prefix += 1;
+      const code = content.slice(0, prefix).toLowerCase();
+      span.className = `game-color game-color-${code[0] || "default"}`;
+      if (prefix === 6 && /^[0-9a-f]{6}$/i.test(code)) span.style.color = `#${code}`;
+      span.textContent = cleanGameText(content.slice(prefix));
+    }
     fragment.append(span);
     offset = match.index + match[0].length;
   }
@@ -272,6 +278,8 @@ function attachTrinketTooltip(owner, tooltip) {
   tooltip.classList.add("trinket-tooltip-portal");
   tooltip.dataset.scope = owner.closest("#trinket-selector") ? "selector" : "inventory";
   tooltip.hidden = true;
+  // A dialog is rendered in the browser's top layer. Keep its tooltip in that
+  // same layer; a body portal is painted underneath the open dialog.
   (owner.closest("dialog") || document.body).append(tooltip);
   const show = () => {
     tooltip.hidden = false;
@@ -421,13 +429,23 @@ function renderCampaign(campaign) {
 function trinketSearchRank(definition, query) {
   if (!query) return 0;
   const normalize = (value) => String(value ?? "").normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
-  const needle = normalize(query);
+  const input = query.trim();
+  let matcher = null;
+  const regexSyntax = input.match(/^\/(.*)\/([imsu]*)$/s);
+  if (regexSyntax) {
+    try { matcher = new RegExp(regexSyntax[1], regexSyntax[2]); }
+    catch { return Number.MAX_SAFE_INTEGER; }
+  }
+  const needle = normalize(input);
   const fields = [definition.id, definition.localizationKey, definition.localizedName,
     definition.englishName, `${definition.description || ""} ${definition.englishDescription || ""}`,
+    definition.effectSearchText || "",
     `${definition.modName || ""} ${definition.sourceId || ""}`,
     `${(definition.tags || []).join(" ")} ${(definition.heroClasses || []).join(" ")} ${Object.values(definition.heroClassNames || {}).join(" ")}`];
-  const weights = [0, 1, 2, 3, 4, 5, 6];
-  const index = fields.findIndex((field) => normalize(field).includes(needle));
+  const weights = [0, 1, 2, 3, 4, 4, 5, 6];
+  const index = fields.findIndex((field) => matcher
+    ? matcher.test(String(field ?? ""))
+    : normalize(field).includes(needle));
   return index < 0 ? Number.MAX_SAFE_INTEGER : weights[index];
 }
 
@@ -444,6 +462,14 @@ function renderTrinketSelector() {
   }).sort((a, b) => trinketSearchRank(a, query) - trinketSearchRank(b, query) || a.name.localeCompare(b.name));
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
   elements.trinketSelectorList.replaceChildren();
+  const regexSyntax = query.trim().match(/^\/(.*)\/([imsu]*)$/s);
+  if (regexSyntax) {
+    try { new RegExp(regexSyntax[1], regexSyntax[2]); }
+    catch {
+      elements.trinketSelectorMessage.textContent = t("trinket.invalidRegex");
+      return;
+    }
+  }
   elements.trinketSelectorMessage.textContent = t("trinket.results", { count: candidates.length });
   for (const definition of candidates) {
     const row = document.createElement("button");
@@ -491,11 +517,13 @@ async function openTrinketSelector(mode) {
   elements.trinketSearch.value = "";
   elements.trinketModFilter.value = "";
   elements.trinketClassFilter.value = "";
-  elements.trinketSelectorMessage.textContent = t("trinket.loading");
   elements.trinketSelectorList.replaceChildren();
   if (!elements.trinketSelector.open) elements.trinketSelector.showModal();
   try {
-    trinketDefinitions = await editorGateway.listTrinkets();
+    if (!trinketDefinitions.length) {
+      elements.trinketSelectorMessage.textContent = t("trinket.loading");
+      trinketDefinitions = await editorGateway.listTrinkets();
+    }
     const mods = new Map();
     const classes = new Map();
     for (const item of trinketDefinitions) {
@@ -833,6 +861,7 @@ elements.form.addEventListener("submit", async (event) => {
       workshopRoots: elements.workshopRoots.value.trim() ? [elements.workshopRoots.value.trim()] : [],
       localModRoots: elements.localModRoots.value.trim() ? [elements.localModRoots.value.trim()] : [],
     });
+    trinketDefinitions = [];
     showConfiguration(configuration);
     await setLocale(configuration.language);
     elements.configurationMessage.textContent = t("settings.saved");
@@ -860,6 +889,7 @@ elements.buildingMaximizeAll.addEventListener("click", async () => {
 });
 elements.reinitializeMods.addEventListener("click", async () => {
   elements.reinitializeMods.disabled = true;
+  trinketDefinitions = [];
   elements.configurationMessage.textContent = t("initialization.reinitializing");
   try {
     await editorGateway.startInitialization(true);
@@ -885,6 +915,7 @@ elements.settingsReturnTown.addEventListener("click", () => {
 });
 elements.townReloadProfile.addEventListener("click", async () => {
   if (latestCampaign?.dirty && !window.confirm(t("town.reloadDiscardDraft"))) return;
+  trinketDefinitions = [];
   elements.townReloadProfile.disabled = true;
   elements.townSaveState.textContent = t("town.reloadWorking");
   try {

@@ -19,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -104,6 +105,8 @@ struct ServerContext {
         std::set<std::string, std::less<>> reserved_trinket_keys;
         mutable std::optional<std::vector<DatabaseModRecord>> cached_mod_records;
         mutable std::map<std::string, Json::Value, std::less<>> cached_trinket_details;
+        std::vector<Json::Value> cached_trinket_catalog;
+        std::vector<application::ContentDefinition> trinket_definitions;
         std::vector<BuildingUpgradeTree> building_upgrade_trees;
         std::vector<std::string> official_district_ids;
     };
@@ -298,6 +301,7 @@ std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
     application::IContentEnvironment& content, application::IFileSystem& file_system);
 std::vector<std::string> load_official_district_ids(application::IFileSystem& file_system,
                                                     const std::filesystem::path& game_root);
+void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession& campaign);
 
 std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     const auto& configuration = context.configuration_store.current();
@@ -346,6 +350,7 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     for (const auto& item : model.trinket_inventory) session->reserved_trinket_keys.insert(item.raw_key);
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
+    warm_trinket_catalog(context, *session);
     context.campaign = std::move(session);
     return std::nullopt;
 }
@@ -486,14 +491,11 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
             break;
         }
     }
-    const auto description_key = "str_inventory_desc_trinket" + definition.id;
-    item["descriptionKey"] = description_key;
-    const auto localized_description = content.resolve_localization(description_key);
-    item["description"] = localized_description && localized_description.value()
-        ? localized_description.value()->value : "";
-    const auto english_description = content.resolve_localization(description_key, "english");
-    item["englishDescription"] = english_description && english_description.value()
-        ? english_description.value()->value : "";
+    // Trinkets have no standalone description localization entry. Their
+    // visible effects are built from the referenced buff definitions below.
+    item["descriptionKey"] = "";
+    item["description"] = "";
+    item["englishDescription"] = "";
     Json::Value hero_classes(Json::arrayValue);
     Json::Value hero_class_names(Json::objectValue);
     std::string restriction;
@@ -534,6 +536,130 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
     } catch (const nlohmann::json::exception&) {
     }
     return item;
+}
+
+namespace {
+
+using TrinketBuffMap = std::map<std::string, nlohmann::json, std::less<>>;
+
+void collect_trinket_buff_files(application::IFileSystem& file_system,
+                                const std::filesystem::path& directory,
+                                TrinketBuffMap& buffs,
+                                unsigned int depth = 0) {
+    if (depth > 16) return;
+    const auto files = file_system.list_files(directory);
+    if (files) {
+        for (const auto& path : files.value()) {
+            const auto filename = path.filename().string();
+            if (!filename.ends_with(".buffs.json") && !filename.ends_with(".networkbuffs.json")) continue;
+            const auto bytes = file_system.read_file(path);
+            if (!bytes) continue;
+            try {
+                const auto document = nlohmann::json::parse(bytes.value());
+                if (!document.is_object() || !document.contains("buffs") || !document["buffs"].is_array()) continue;
+                for (const auto& buff : document["buffs"]) {
+                    if (!buff.is_object() || !buff.contains("id") || !buff["id"].is_string()) continue;
+                    buffs.insert_or_assign(buff["id"].get<std::string>(), buff);
+                }
+            } catch (const nlohmann::json::exception&) {
+            }
+        }
+    }
+    const auto directories = file_system.list_directories(directory);
+    if (directories)
+        for (const auto& child : directories.value())
+            collect_trinket_buff_files(file_system, child, buffs, depth + 1);
+}
+
+std::string format_trinket_effect(std::string format, double amount) {
+    const auto marker = format.find("%+d");
+    const auto plain_marker = marker == std::string::npos ? format.find("%d") : marker;
+    if (plain_marker == std::string::npos) return format;
+    const bool signed_value = format.compare(plain_marker, 3, "%+d") == 0;
+    const auto token_size = signed_value ? 3U : 2U;
+    const bool percent = plain_marker + token_size < format.size() && format[plain_marker + token_size] == '%';
+    const double shown = percent && std::abs(amount) < 1.0 ? amount * 100.0 : amount;
+    const auto rounded = static_cast<long long>(std::llround(shown));
+    std::string value = std::to_string(rounded);
+    if (signed_value && rounded > 0) value.insert(value.begin(), '+');
+    format.replace(plain_marker, token_size, value);
+    // Loc strings use %% to mean a literal percent in printf formatting.
+    std::size_t escaped = 0;
+    while ((escaped = format.find("%%", escaped)) != std::string::npos) {
+        format.replace(escaped, 2, "%");
+        ++escaped;
+    }
+    return format;
+}
+
+} // namespace
+
+void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession& campaign) {
+    if (!campaign.cached_mod_records) {
+        const auto queried = read_enabled_mods(campaign.mod_database_path);
+        campaign.cached_mod_records = queried ? queried.value() : std::vector<DatabaseModRecord>{};
+    }
+
+    const auto definitions = campaign.content->list_content("trinket");
+    if (!definitions) return;
+    campaign.trinket_definitions = definitions.value();
+
+    TrinketBuffMap buffs;
+    const auto& config = context.configuration_store.current();
+    std::vector<std::filesystem::path> roots{config.game_root};
+    roots.insert(roots.end(), config.workshop_roots.begin(), config.workshop_roots.end());
+    roots.insert(roots.end(), config.local_mod_roots.begin(), config.local_mod_roots.end());
+    for (const auto& root : roots) collect_trinket_buff_files(context.file_system, root, buffs);
+
+    std::map<std::string, std::string, std::less<>> localized_effect_formats;
+    for (const auto& definition : definitions.value()) {
+        auto item = trinket_definition_json(*campaign.content, definition.id,
+                                            *campaign.cached_mod_records, &definition);
+        Json::Value effects(Json::arrayValue);
+        std::string joined_effects;
+        try {
+            const auto payload = nlohmann::json::parse(definition.payload_json);
+            if (payload.contains("buffs") && payload["buffs"].is_array()) {
+                for (const auto& buff_id : payload["buffs"]) {
+                    if (!buff_id.is_string()) continue;
+                    const auto found = buffs.find(buff_id.get<std::string>());
+                    if (found == buffs.end() || !found->second.contains("stat_type") ||
+                        !found->second["stat_type"].is_string() || !found->second.contains("stat_sub_type") ||
+                        !found->second["stat_sub_type"].is_string() || !found->second.contains("amount") ||
+                        !found->second["amount"].is_number()) continue;
+                    const auto stat_type = found->second["stat_type"].get<std::string>();
+                    const auto stat_sub_type = found->second["stat_sub_type"].get<std::string>();
+                    const auto key = "buff_stat_tooltip_" + stat_type +
+                                     (stat_sub_type.empty() ? std::string{} : "_" + stat_sub_type);
+                    auto format = localized_effect_formats.find(key);
+                    if (format == localized_effect_formats.end()) {
+                        const auto localized = campaign.content->resolve_localization(key);
+                        const auto value = localized && localized.value() ? localized.value()->value : std::string{};
+                        format = localized_effect_formats.emplace(key, value).first;
+                    }
+                    const auto amount = found->second["amount"].get<double>();
+                    std::string effect;
+                    if (format->second.empty()) {
+                        const auto raw_label = stat_sub_type.empty() ? stat_type : stat_sub_type;
+                        effect = format_trinket_effect(std::abs(amount) < 1.0 ? "%+d%% " + raw_label
+                                                                              : "%+d " + raw_label,
+                                                       amount);
+                    } else {
+                        effect = format_trinket_effect(format->second, amount);
+                    }
+                    effects.append(effect);
+                    if (!joined_effects.empty()) joined_effects += "\n";
+                    joined_effects += effect;
+                }
+            }
+        } catch (const nlohmann::json::exception&) {
+        }
+        item["effects"] = std::move(effects);
+        item["effectSearchText"] = joined_effects;
+        if (!joined_effects.empty()) item["description"] = joined_effects;
+        campaign.cached_trinket_details.insert_or_assign(definition.id, item);
+        campaign.cached_trinket_catalog.push_back(std::move(item));
+    }
 }
 
 std::optional<std::string> hero_roster_portrait(const domain::DefinitionReference& definition) {
@@ -814,29 +940,12 @@ void handle_campaign_trinket_catalog(const drogon::HttpRequestPtr& request,
         return;
     }
     auto& campaign = *context->campaign;
-    if (!campaign.cached_mod_records) {
-        const auto queried = read_enabled_mods(campaign.mod_database_path);
-        campaign.cached_mod_records = queried ? queried.value() : std::vector<DatabaseModRecord>{};
-    }
-    const auto& mods = *campaign.cached_mod_records;
-    const auto definitions = context->campaign->content->list_content("trinket");
-    if (!definitions) {
-        callback(json_error(drogon::k500InternalServerError, std::string{core::to_string(definitions.error().code)},
-                            definitions.error().message));
-        return;
-    }
     const auto search = request->getParameter("search");
     const auto mod_filter = request->getParameter("mod");
     const auto class_filter = request->getParameter("class");
     Json::Value result(Json::arrayValue);
-    for (const auto& definition : definitions.value()) {
-        auto details_found = campaign.cached_trinket_details.find(definition.id);
-        if (details_found == campaign.cached_trinket_details.end()) {
-            auto details = trinket_definition_json(*campaign.content, definition.id, mods, &definition);
-            details_found = campaign.cached_trinket_details.emplace(definition.id, std::move(details)).first;
-        }
-        Json::Value item = details_found->second;
-        const auto payload_text = definition.payload_json;
+    for (const auto& cached_item : campaign.cached_trinket_catalog) {
+        Json::Value item = cached_item;
         const auto search_lower = [](std::string value) {
             std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
                 return static_cast<char>(std::tolower(c));
@@ -848,7 +957,7 @@ void handle_campaign_trinket_catalog(const drogon::HttpRequestPtr& request,
             std::string haystack = item["id"].asString() + " " + item["localizationKey"].asString() + " " +
                 item["name"].asString() + " " + item["englishName"].asString() + " " +
                 item["description"].asString() + " " + item["englishDescription"].asString() + " " +
-                item["modName"].asString() + " " + payload_text;
+                item["modName"].asString() + " " + item["effectSearchText"].asString();
             if (search_lower(std::move(haystack)).find(needle) == std::string::npos) continue;
         }
         if (!mod_filter.empty() && item["sourceId"].asString() != mod_filter) continue;
@@ -894,12 +1003,6 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
 
     if (action == "add" || action == "batch_add") {
         operation_id = "campaign.trinket.add_inventory";
-        const auto definitions = campaign.content->list_content("trinket");
-        if (!definitions) {
-            callback(json_error(drogon::k500InternalServerError, std::string{core::to_string(definitions.error().code)},
-                                definitions.error().message));
-            return;
-        }
         const auto template_found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
             [](const auto& entry) { return entry.raw.display_path.size() != 0 && entry.id.value && entry.amount.value; });
         const domain::TrinketInventoryEntry* template_entry = template_found == model.trinket_inventory.end()
@@ -924,7 +1027,7 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         const auto hero_class = (*body)["heroClass"].isString() ? (*body)["heroClass"].asString() : std::string{};
         const bool only_new = (*body)["onlyNew"].isBool() ? (*body)["onlyNew"].asBool() : false;
         const auto requested_id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
-        for (const auto& definition : definitions.value()) {
+        for (const auto& definition : campaign.trinket_definitions) {
             if (action == "add" && definition.id != requested_id) continue;
             if (!mod_id.empty() && definition.provenance.source_id != mod_id) continue;
             if (!hero_class.empty() && std::none_of(definition.relationships.begin(), definition.relationships.end(),
@@ -956,16 +1059,13 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         }
     } else if (action == "delete" || action == "batch_delete") {
         operation_id = "campaign.trinket.destroy";
-        const auto definitions = campaign.content->list_content("trinket");
         std::map<std::string, std::pair<std::string, std::vector<std::string>>, std::less<>> metadata;
-        if (definitions) {
-            for (const auto& definition : definitions.value()) {
-                std::vector<std::string> classes;
-                for (const auto& relation : definition.relationships)
-                    if (relation.relationship_type == "restricted_to" && relation.type == "hero_class")
-                        classes.push_back(relation.id);
-                metadata.emplace(definition.id, std::pair{definition.provenance.source_id, std::move(classes)});
-            }
+        for (const auto& definition : campaign.trinket_definitions) {
+            std::vector<std::string> classes;
+            for (const auto& relation : definition.relationships)
+                if (relation.relationship_type == "restricted_to" && relation.type == "hero_class")
+                    classes.push_back(relation.id);
+            metadata.emplace(definition.id, std::pair{definition.provenance.source_id, std::move(classes)});
         }
         const auto requested_key = (*body)["rawKey"].isString() ? (*body)["rawKey"].asString() : std::string{};
         const auto requested_id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
@@ -2140,6 +2240,19 @@ int run_drogon_http_server(
         !initial_configuration.data_root.empty()) {
         context->initialization.start(initial_configuration);
     }
+    std::thread campaign_preload_thread;
+    if (!initial_configuration.save_roots.empty() && !initial_configuration.save_roots.front().empty()) {
+        campaign_preload_thread = std::thread([context] {
+            while (context->initialization.state().status == "running")
+                std::this_thread::sleep_for(std::chrono::milliseconds{150});
+            if (context->initialization.state().status != "completed") return;
+            std::lock_guard lock(context->campaign_mutex);
+            (void)ensure_campaign_locked(*context);
+        });
+    }
+    const auto join_campaign_preload = [&campaign_preload_thread] {
+        if (campaign_preload_thread.joinable()) campaign_preload_thread.join();
+    };
 
     std::uint16_t port{};
     try {
@@ -2147,6 +2260,7 @@ int run_drogon_http_server(
             std::cerr << "Timed out while starting the local HTTP service.\n";
             server.quit();
             server_thread.join();
+            join_campaign_preload();
             return 1;
         }
         port = ready_future.get();
@@ -2154,6 +2268,7 @@ int run_drogon_http_server(
         std::cerr << "Unable to start the local HTTP service: " << error.what() << '\n';
         server.quit();
         server_thread.join();
+        join_campaign_preload();
         return 1;
     }
 
@@ -2161,6 +2276,7 @@ int run_drogon_http_server(
         std::cerr << "The local HTTP service did not become ready in time.\n";
         server.quit();
         server_thread.join();
+        join_campaign_preload();
         return 1;
     }
 
@@ -2170,6 +2286,7 @@ int run_drogon_http_server(
         std::cerr << "Could not open the default browser. Open " << url << " manually.\n";
     std::cout << "Press Ctrl+C to stop the local service." << std::endl;
     server_thread.join();
+    join_campaign_preload();
     return 0;
 }
 

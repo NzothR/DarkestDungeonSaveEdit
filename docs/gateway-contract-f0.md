@@ -130,7 +130,7 @@ POST 请求体传 `{ "force": true }` 时主动重新扫描 Mod 环境数据库�
 
 ### `GET /api/campaign/trinkets`
 
-从当前有效内容数据库返回饰品选择器内容，支持 `search`、`mod`、`class` 查询参数。结果包括本地化/英文名称、描述、职业限制、稀有度、图标引用与来源 Mod ID/名称。
+从当前有效内容环境返回饰品选择器内容，支持 `search`、`mod`、`class` 查询参数。会在 CampaignSession 初始化时一次性构建并缓存饰品目录、职业/来源信息和 buff 效果；后续打开选择器只读取内存目录。结果包括本地化/英文名称、游戏效果、职业限制、稀有度、图标引用与来源 Mod ID/名称。
 
 ### `POST /api/campaign/trinket`
 
