@@ -151,12 +151,14 @@
             <input id="trinket-search" type="search" data-i18n-placeholder="trinket.searchPlaceholder" placeholder="搜索 ID、名称、描述或 Mod">
             <select id="trinket-mod-filter" aria-label="Mod filter"><option value="" data-i18n="trinket.allMods">所有 Mod</option></select>
             <select id="trinket-class-filter" aria-label="Class filter"><option value="" data-i18n="trinket.allClasses">所有职业</option></select>
+            <select id="trinket-rarity-filter" aria-label="Rarity filter"><option value="" data-i18n="trinket.allRarities">所有稀有度</option></select>
           </div>
           <p id="trinket-selector-message" class="building-editor-hint"></p>
           <div id="trinket-selector-list" class="trinket-selector-list"></div>
           <footer id="trinket-batch-footer" class="trinket-batch-footer" hidden>
             <div class="trinket-batch-help">
               <p id="trinket-batch-hint"></p>
+              <small id="trinket-selection-count"></small>
               <button id="trinket-clear-selection" class="secondary" type="button" data-i18n="trinket.clearSelection">清空所有选中</button>
             </div>
             <label><input id="trinket-only-new" type="checkbox"><span data-i18n="trinket.onlyNew">只添加库存中尚未存在的饰品</span></label>

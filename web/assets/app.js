@@ -57,12 +57,14 @@ const elements = {
   trinketSearch: document.querySelector("#trinket-search"),
   trinketModFilter: document.querySelector("#trinket-mod-filter"),
   trinketClassFilter: document.querySelector("#trinket-class-filter"),
+  trinketRarityFilter: document.querySelector("#trinket-rarity-filter"),
   trinketSelectorMessage: document.querySelector("#trinket-selector-message"),
   trinketSelectorList: document.querySelector("#trinket-selector-list"),
   trinketBatchFooter: document.querySelector("#trinket-batch-footer"),
   trinketBatchConfirm: document.querySelector("#trinket-batch-confirm"),
   trinketBatchHint: document.querySelector("#trinket-batch-hint"),
   trinketClearSelection: document.querySelector("#trinket-clear-selection"),
+  trinketSelectionCount: document.querySelector("#trinket-selection-count"),
   trinketOnlyNew: document.querySelector("#trinket-only-new"),
   resourceGrid: document.querySelector("#resource-grid"),
   townUndo: document.querySelector("#town-undo"),
@@ -268,13 +270,13 @@ function trinketTooltip(trinket) {
   const effectLines = Array.isArray(trinket.effects) && trinket.effects.length
     ? trinket.effects
     : trinket.description ? String(trinket.description).split("\n") : [];
+  if (!effectLines.length) {
+    const empty = document.createElement("div");
+    empty.className = "trinket-empty-description";
+    empty.textContent = t("trinket.hiddenEffects");
+    tooltip.append(empty);
+  }
   if (effectLines.length) {
-    if (trinket.detailsFallback) {
-      const note = document.createElement("div");
-      note.className = "trinket-detail-note";
-      note.textContent = t("trinket.inferredEffects");
-      tooltip.append(note);
-    }
     const description = document.createElement("div");
     description.className = "trinket-description";
     for (const line of effectLines) {
@@ -290,6 +292,18 @@ function trinketTooltip(trinket) {
   source.textContent = `${t("trinket.source")}: ${trinket.modName || trinket.sourceId || t("trinket.vanilla")} · ${trinket.sourceId || "vanilla"}`;
   tooltip.append(source);
   return tooltip;
+}
+
+function trinketRarityId(trinket) {
+  return trinket?.rarity == null ? "" : String(trinket.rarity);
+}
+
+function trinketRarityLabel(trinket) {
+  const id = trinketRarityId(trinket);
+  if (!id) return "";
+  const localizationKey = `trinket.rarity.${id}`;
+  const name = trinket.rarityName || (strings[localizationKey] ? t(localizationKey) : cleanGameText(id.replaceAll("_", " ")));
+  return t("trinket.rarity", { rarity: cleanGameText(name) });
 }
 
 function attachTrinketTooltip(owner, tooltip) {
@@ -489,11 +503,13 @@ function renderTrinketSelector() {
   const query = elements.trinketSearch.value;
   const mod = elements.trinketModFilter.value;
   const heroClass = elements.trinketClassFilter.value;
+  const rarity = elements.trinketRarityFilter.value;
   const inventory = latestCampaign?.trinkets || [];
   const isBatch = trinketSelectorMode === "batchAdd" || trinketSelectorMode === "batchDelete";
   const matchesFilters = (item, definition = item) => {
     if (mod && definition.sourceId !== mod) return false;
     if (heroClass && !(definition.heroClasses || []).includes(heroClass)) return false;
+    if (rarity && trinketRarityId(definition) !== rarity) return false;
     return trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER ||
       (definition !== item && trinketSearchRank(definition, query) !== Number.MAX_SAFE_INTEGER);
   };
@@ -518,6 +534,8 @@ function renderTrinketSelector() {
   if (isBatch) {
     elements.trinketBatchHint.textContent = t(trinketSelectorMode === "batchAdd"
       ? "trinket.batchAddHint" : "trinket.batchDeleteHint");
+    const selectedCount = trinketSelectorMode === "batchAdd" ? selectedTrinketIds.size : selectedTrinketRawKeys.size;
+    elements.trinketSelectionCount.textContent = t("trinket.selectedCount", { count: selectedCount });
   }
   for (const candidate of candidates) {
     const item = trinketSelectorMode === "batchDelete" ? candidate.item : candidate;
@@ -545,9 +563,16 @@ function renderTrinketSelector() {
     info.className = "trinket-selector-info";
     const name = document.createElement("strong");
     name.textContent = item.name || item.id;
+    const rarityLabel = trinketRarityLabel(item);
+    if (rarityLabel) {
+      const rarity = document.createElement("small");
+      rarity.className = "trinket-selector-rarity";
+      rarity.textContent = rarityLabel;
+      info.append(name, rarity);
+    } else info.append(name);
     const source = document.createElement("small");
     source.textContent = `${item.modName || definition.modName || t("trinket.vanilla")} · ${item.sourceId || definition.sourceId || "vanilla"}`;
-    info.append(name, source);
+    info.append(source);
     row.append(info);
     attachTrinketTooltip(row, trinketTooltip(item));
     row.addEventListener("click", async () => {
@@ -585,6 +610,7 @@ async function openTrinketSelector(mode) {
   elements.trinketSearch.value = "";
   elements.trinketModFilter.value = "";
   elements.trinketClassFilter.value = "";
+  elements.trinketRarityFilter.value = "";
   elements.trinketSelectorList.replaceChildren();
   if (!elements.trinketSelector.open) elements.trinketSelector.showModal();
   try {
@@ -594,14 +620,19 @@ async function openTrinketSelector(mode) {
     }
     const mods = new Map();
     const classes = new Map();
+    const rarities = new Map();
     for (const item of trinketDefinitions) {
       if (item.sourceId) mods.set(item.sourceId, item.modName || item.sourceId);
       for (const id of item.heroClasses || []) classes.set(id, item.heroClassNames?.[id] || id);
+      const rarityId = trinketRarityId(item);
+      if (rarityId) rarities.set(rarityId, trinketRarityLabel(item));
     }
     elements.trinketModFilter.replaceChildren(new Option(t("trinket.allMods"), ""));
     for (const [id, name] of mods) elements.trinketModFilter.add(new Option(name, id));
     elements.trinketClassFilter.replaceChildren(new Option(t("trinket.allClasses"), ""));
     for (const [id, name] of classes) elements.trinketClassFilter.add(new Option(name, id));
+    elements.trinketRarityFilter.replaceChildren(new Option(t("trinket.allRarities"), ""));
+    for (const [id, name] of rarities) elements.trinketRarityFilter.add(new Option(name, id));
     renderTrinketSelector();
   } catch (error) { elements.trinketSelectorMessage.textContent = displayError(error); }
 }
@@ -1055,7 +1086,7 @@ elements.trinketSelector.addEventListener("close", () => {
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
 });
 elements.trinketSearch.addEventListener("input", renderTrinketSelector);
-for (const control of [elements.trinketModFilter, elements.trinketClassFilter]) {
+for (const control of [elements.trinketModFilter, elements.trinketClassFilter, elements.trinketRarityFilter]) {
   control.addEventListener("change", () => {
     selectedTrinketIds.clear();
     selectedTrinketRawKeys.clear();
@@ -1073,18 +1104,21 @@ elements.trinketBatchConfirm.addEventListener("click", async () => {
   const query = elements.trinketSearch.value;
   const modId = elements.trinketModFilter.value;
   const heroClass = elements.trinketClassFilter.value;
+  const rarityId = elements.trinketRarityFilter.value;
   const visibleDefinitions = trinketDefinitions.filter((item) =>
     (!modId || item.sourceId === modId) && (!heroClass || item.heroClasses?.includes(heroClass)) &&
+    (!rarityId || trinketRarityId(item) === rarityId) &&
     trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER);
   const visibleInventory = (latestCampaign?.trinkets || []).filter((entry) => {
     const def = trinketDefinitions.find((item) => item.id === entry.id) || entry;
     return (!modId || def.sourceId === modId) && (!heroClass || def.heroClasses?.includes(heroClass)) &&
+      (!rarityId || trinketRarityId(def) === rarityId) &&
       (trinketSearchRank(entry, query) !== Number.MAX_SAFE_INTEGER ||
         (def !== entry && trinketSearchRank(def, query) !== Number.MAX_SAFE_INTEGER));
   });
   const trinketIds = trinketSelectorMode === "batchAdd"
     ? (selectedTrinketIds.size ? [...selectedTrinketIds] : visibleDefinitions.map((item) => item.id)) : null;
-  const filteredInventoryMode = Boolean(modId || heroClass);
+  const filteredInventoryMode = Boolean(modId || heroClass || rarityId);
   const rawKeys = trinketSelectorMode === "batchDelete"
     ? (selectedTrinketRawKeys.size ? [...selectedTrinketRawKeys]
       : filteredInventoryMode ? visibleInventory.map((item) => item.rawKey) : null) : null;

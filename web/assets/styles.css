@@ -186,7 +186,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; text-align: center; }
 .trinket-restriction { color: #d4c9b3; text-align: center; }
 .trinket-rarity { color: #84e3d7; font-weight: 600; }
-.trinket-detail-note { margin-top: 4px; color: #9f9382; font-size: 10px; text-align: center; }
+.trinket-empty-description { margin-top: 5px; color: #b9aa91; font-size: 12px; line-height: 1.45; text-align: center; }
 .trinket-description { margin-top: 3px; line-height: 1.42; text-align: center; }
 .trinket-effect { min-height: 1.42em; }
 .trinket-description .game-color-r { color: #f0443d; }
@@ -240,7 +240,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .district-entry:disabled { cursor: not-allowed; opacity: .7; }
 .district-entry:not(:disabled):hover { background: #3b2c19; }
 .trinket-selector { width: min(900px, 92vw); max-width: 92vw; overflow: visible; }
-.trinket-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(140px, .4fr) minmax(140px, .4fr); gap: 8px; margin: 9px 0; }
+.trinket-search-controls { display: grid; grid-template-columns: minmax(200px, 1fr) repeat(3, minmax(125px, .4fr)); gap: 8px; margin: 9px 0; }
 .trinket-search-controls input, .trinket-search-controls select { min-width: 0; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; font: inherit; }
 .trinket-selector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 7px; max-height: min(58vh, 620px); overflow: auto; padding: 2px; }
 .trinket-selector-item { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 66px; padding: 6px; border: 1px solid #ffffff18; background: #0c0b0aaa; color: inherit; text-align: left; cursor: pointer; }
@@ -252,10 +252,12 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-selector-info strong, .trinket-selector-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trinket-selector-info strong { color: #e4d5bc; }
 .trinket-selector-info small { color: #9f9382; }
+.trinket-selector-info .trinket-selector-rarity { color: #84e3d7; }
 .trinket-batch-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ffffff20; }
 .trinket-batch-footer[hidden], .trinket-batch-footer [hidden] { display: none !important; }
-.trinket-batch-help { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; flex: 1; }
+.trinket-batch-help { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px 12px; flex: 1; }
 .trinket-batch-help p { margin: 0; color: #c6b79f; font-size: 12px; line-height: 1.45; }
+.trinket-batch-help small { color: #e2bb70; font-size: 12px; white-space: nowrap; }
 .trinket-batch-help button { justify-self: start; }
 .trinket-batch-footer label { display: flex; align-items: center; gap: 8px; color: #c6b79f; font-size: 12px; }
 .trinket-batch-footer input { accent-color: #c59a53; }
