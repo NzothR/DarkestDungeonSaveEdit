@@ -514,6 +514,7 @@ bool district_system_clone_source_allowed(const CampaignDocumentMutation& mutati
     constexpr std::string_view built_suffix{"/built"};
     constexpr std::string_view district_prefix{"base_root/districts/buildings/"};
     if (mutation.expected_kind == ValueKind::Boolean &&
+        !mutation.source_path.starts_with("base_root/districts/") &&
         mutation.target_path.starts_with(district_prefix) &&
         mutation.target_path.ends_with(built_suffix)) {
         const auto district_id = std::string_view{mutation.target_path}.substr(

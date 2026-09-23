@@ -778,7 +778,8 @@ std::vector<application::CampaignDocumentMutation> open_district_mutations(
             return !building.raw.display_path.empty();
         });
     const auto boolean_template = std::find_if(document.fields.begin(), document.fields.end(), [](const auto& field) {
-        return field.kind == core::dson::ValueKind::Boolean;
+        return field.kind == core::dson::ValueKind::Boolean &&
+               !field.path.starts_with("base_root/districts/");
     });
     if (template_building == campaign.edits->model().town_buildings.end() ||
         boolean_template == document.fields.end() || campaign.official_district_ids.empty()) return {};
