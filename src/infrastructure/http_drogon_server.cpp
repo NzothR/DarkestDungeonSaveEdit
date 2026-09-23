@@ -525,6 +525,8 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
     item["assets"] = std::move(assets);
     try {
         const auto payload = nlohmann::json::parse(definition.payload_json);
+        if (payload.contains("set_id") && payload["set_id"].is_string())
+            item["setId"] = payload["set_id"].get<std::string>();
         if (payload.contains("rarity") && (payload["rarity"].is_string() || payload["rarity"].is_number_integer())) {
             const auto rarity_id = payload["rarity"].is_string()
                 ? payload["rarity"].get<std::string>()
@@ -549,6 +551,7 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
 namespace {
 
 using TrinketBuffMap = std::map<std::string, nlohmann::json, std::less<>>;
+using TrinketSetMap = std::map<std::string, bool, std::less<>>;
 
 void collect_trinket_buff_files(application::IFileSystem& file_system,
                                 const std::filesystem::path& directory,
@@ -577,6 +580,35 @@ void collect_trinket_buff_files(application::IFileSystem& file_system,
     if (directories)
         for (const auto& child : directories.value())
             collect_trinket_buff_files(file_system, child, buffs, depth + 1);
+}
+
+void collect_trinket_set_files(application::IFileSystem& file_system,
+                               const std::filesystem::path& directory,
+                               TrinketSetMap& sets,
+                               unsigned int depth = 0) {
+    if (depth > 16) return;
+    const auto files = file_system.list_files(directory);
+    if (files) {
+        for (const auto& path : files.value()) {
+            if (!path.filename().string().ends_with(".sets.trinkets.json")) continue;
+            const auto bytes = file_system.read_file(path);
+            if (!bytes) continue;
+            try {
+                const auto document = nlohmann::json::parse(bytes.value());
+                if (!document.is_object() || !document.contains("sets") || !document["sets"].is_array()) continue;
+                for (const auto& set : document["sets"]) {
+                    if (!set.is_object() || !set.contains("id") || !set["id"].is_string()) continue;
+                    const bool has_bonus = set.contains("buffs") && set["buffs"].is_array() && !set["buffs"].empty();
+                    sets.insert_or_assign(set["id"].get<std::string>(), has_bonus);
+                }
+            } catch (const nlohmann::json::exception&) {
+            }
+        }
+    }
+    const auto directories = file_system.list_directories(directory);
+    if (directories)
+        for (const auto& child : directories.value())
+            collect_trinket_set_files(file_system, child, sets, depth + 1);
 }
 
 std::string format_trinket_effect(std::string format, double amount) {
@@ -648,16 +680,24 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
     campaign.trinket_definitions = definitions.value();
 
     TrinketBuffMap buffs;
+    TrinketSetMap sets;
     const auto& config = context.configuration_store.current();
     std::vector<std::filesystem::path> roots{config.game_root};
     roots.insert(roots.end(), config.workshop_roots.begin(), config.workshop_roots.end());
     roots.insert(roots.end(), config.local_mod_roots.begin(), config.local_mod_roots.end());
-    for (const auto& root : roots) collect_trinket_buff_files(context.file_system, root, buffs);
+    for (const auto& root : roots) {
+        collect_trinket_buff_files(context.file_system, root, buffs);
+        collect_trinket_set_files(context.file_system, root, sets);
+    }
 
     std::map<std::string, std::string, std::less<>> localized_effect_formats;
     for (const auto& definition : definitions.value()) {
         auto item = trinket_definition_json(*campaign.content, definition.id,
                                             *campaign.cached_mod_records, &definition);
+        if (item["setId"].isString()) {
+            const auto set = sets.find(item["setId"].asString());
+            item["hasSetBonus"] = set != sets.end() && set->second;
+        }
         Json::Value effects(Json::arrayValue);
         std::string joined_effects;
         std::vector<std::string> missing_buffs;
@@ -855,6 +895,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["localizationKey"] = details["localizationKey"];
         item["sourceId"] = details["sourceId"];
         item["modName"] = details["modName"];
+        item["setId"] = details["setId"];
+        item["hasSetBonus"] = details["hasSetBonus"];
         item["amount"] = trinket.amount.value ? Json::Value(*trinket.amount.value) : Json::Value(Json::nullValue);
         item["assets"] = details["assets"];
         trinkets.append(std::move(item));

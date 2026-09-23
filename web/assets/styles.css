@@ -185,7 +185,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-tooltip[popover] { position: fixed; inset: auto; margin: 0; }
 .trinket-tooltip > strong { display: block; margin-bottom: 3px; color: #edce84; font: 600 18px Georgia, "Microsoft YaHei UI", serif; text-align: center; }
 .trinket-restriction { color: #d4c9b3; text-align: center; }
-.trinket-rarity { color: #84e3d7; font-weight: 600; }
+.trinket-rarity { color: #84e3d7; font-weight: 600; text-align: center; }
 .trinket-empty-description { margin-top: 5px; color: #b9aa91; font-size: 12px; line-height: 1.45; text-align: center; }
 .trinket-description { margin-top: 3px; line-height: 1.42; text-align: center; }
 .trinket-effect { min-height: 1.42em; }
@@ -196,6 +196,9 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .trinket-description .game-color-bleed, .trinket-description .game-color-blight, .trinket-description .game-color-debuff { color: #f0443d; }
 .trinket-description .game-color-buff, .trinket-description .game-color-notable, .trinket-description .game-color-positive_result { color: #dfc779; }
 .trinket-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid #ffffff24; color: #9f9382; font-size: 11px; }
+.trinket-linked { margin-top: 6px; padding-top: 5px; border-top: 1px solid #ffffff24; text-align: center; }
+.trinket-linked-label { color: #b9aa91; }
+.trinket-linked-name { display: block; margin-top: 2px; color: #82d69b; font-weight: 600; }
 .resource-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; }
 .resource-grid .resource { min-width: 0; text-align: left; }
 .resource-editor { display: grid; gap: 2px; }

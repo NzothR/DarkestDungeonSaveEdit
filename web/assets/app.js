@@ -48,6 +48,7 @@ const elements = {
   settingsReturnTown: document.querySelector("#settings-return-town"),
   heroList: document.querySelector("#hero-list"),
   trinketGrid: document.querySelector("#trinket-grid"),
+  trinketSort: document.querySelector("#trinket-sort"),
   trinketAdd: document.querySelector("#trinket-add"),
   trinketBatchAdd: document.querySelector("#trinket-batch-add"),
   trinketBatchDelete: document.querySelector("#trinket-batch-delete"),
@@ -249,7 +250,7 @@ function gameMarkup(value) {
   return fragment;
 }
 
-function trinketTooltip(trinket) {
+function trinketTooltip(trinket, linkedTrinketName = "") {
   const tooltip = document.createElement("div");
   tooltip.className = "trinket-tooltip";
   const title = document.createElement("strong");
@@ -291,6 +292,18 @@ function trinketTooltip(trinket) {
   source.className = "trinket-source";
   source.textContent = `${t("trinket.source")}: ${trinket.modName || trinket.sourceId || t("trinket.vanilla")} · ${trinket.sourceId || "vanilla"}`;
   tooltip.append(source);
+  if (linkedTrinketName) {
+    const linked = document.createElement("div");
+    linked.className = "trinket-linked";
+    const label = document.createElement("span");
+    label.className = "trinket-linked-label";
+    label.textContent = t("trinket.linkedHeader");
+    const name = document.createElement("strong");
+    name.className = "trinket-linked-name";
+    name.textContent = cleanGameText(linkedTrinketName);
+    linked.append(label, name);
+    tooltip.append(linked);
+  }
   return tooltip;
 }
 
@@ -304,6 +317,83 @@ function trinketRarityLabel(trinket) {
   const localizationKey = `trinket.rarity.${id}`;
   const name = trinket.rarityName || (strings[localizationKey] ? t(localizationKey) : cleanGameText(id.replaceAll("_", " ")));
   return t("trinket.rarity", { rarity: cleanGameText(name) });
+}
+
+const TRINKET_RARITY_ORDER = Object.freeze([
+  "darkest_dungeon", "trophy", "ancestral_shambler", "ancestral", "crimson_court",
+  "comet", "mildred", "thing", "crow", "courtier", "collector", "madman",
+  "very_rare", "rare", "uncommon", "common", "very_common", "kickstarter",
+]);
+
+function compareTrinkets(a, b) {
+  const rank = (item) => {
+    const id = trinketRarityId(item).toLowerCase();
+    const name = String(item.rarityName || "").toLocaleLowerCase();
+    let value = TRINKET_RARITY_ORDER.indexOf(id);
+    if (value < 0) value = TRINKET_RARITY_ORDER.findIndex((key) =>
+      String(strings[`trinket.rarity.${key}`] || "").toLocaleLowerCase() === name);
+    return value < 0 ? TRINKET_RARITY_ORDER.length : value;
+  };
+  const rarityDifference = rank(a) - rank(b);
+  if (rarityDifference) return rarityDifference;
+  const collator = new Intl.Collator(locale === "zh_cn" ? "zh-CN" : "en-US", { sensitivity: "base" });
+  const nameDifference = collator.compare(String(a.name || a.id || ""), String(b.name || b.id || ""));
+  if (nameDifference) return nameDifference;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
+function pairTrinketInstances(inventory) {
+  const groups = new Map();
+  for (const trinket of inventory || []) {
+    if (!trinket.hasSetBonus || !trinket.setId) continue;
+    const set = groups.get(trinket.setId) || new Map();
+    const idGroup = set.get(trinket.id) || [];
+    idGroup.push(trinket);
+    set.set(trinket.id, idGroup);
+    groups.set(trinket.setId, set);
+  }
+  const pairs = [];
+  const pairedKeys = new Set();
+  for (const idGroups of groups.values()) {
+    const buckets = [...idGroups.values()].map((items) => items.sort(compareTrinkets));
+    while (buckets.filter((items) => items.length).length >= 2) {
+      const available = buckets.filter((items) => items.length).sort((a, b) => compareTrinkets(a[0], b[0]));
+      const first = available[0];
+      const second = available[1];
+      const count = Math.min(first.length, second.length);
+      for (let index = 0; index < count; index += 1) {
+        const pair = [first.shift(), second.shift()].sort(compareTrinkets);
+        pairs.push(pair);
+        for (const item of pair) pairedKeys.add(item.rawKey || String(item.index));
+      }
+    }
+  }
+  pairs.sort((a, b) => compareTrinkets(a[0], b[0]) || compareTrinkets(a[1], b[1]));
+  const links = new Map();
+  for (const [first, second] of pairs) {
+    links.set(first.rawKey || String(first.index), second);
+    links.set(second.rawKey || String(second.index), first);
+  }
+  return { pairs, links, pairedKeys };
+}
+
+function sortedTrinketInventory(inventory) {
+  const { pairs, pairedKeys } = pairTrinketInstances(inventory);
+  const paired = pairs.flat();
+  const remaining = (inventory || []).filter((item) => !pairedKeys.has(item.rawKey || String(item.index))).sort(compareTrinkets);
+  return [...paired, ...remaining];
+}
+
+function possibleLinkedTrinketName(trinket, inventory, links) {
+  if (trinket.rawKey != null) {
+    const linked = links.get(trinket.rawKey);
+    return linked?.name || linked?.id || "";
+  }
+  if (!trinket.hasSetBonus || !trinket.setId) return "";
+  const candidates = [...(inventory || []), ...trinketDefinitions]
+    .filter((item) => item.hasSetBonus && item.setId === trinket.setId && item.id !== trinket.id)
+    .sort(compareTrinkets);
+  return candidates[0]?.name || candidates[0]?.id || "";
 }
 
 function attachTrinketTooltip(owner, tooltip) {
@@ -419,6 +509,7 @@ function renderCampaign(campaign) {
 
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="inventory"]').forEach((tooltip) => tooltip.remove());
   elements.trinketGrid.replaceChildren();
+  const inventoryPairs = pairTrinketInstances(campaign.trinkets || []);
   if (!campaign.trinkets?.length) {
     elements.trinketGrid.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noTrinkets") }));
   }
@@ -441,7 +532,8 @@ function renderCampaign(campaign) {
       count.textContent = `×${trinket.amount}`;
       item.append(count);
     }
-    attachTrinketTooltip(item, trinketTooltip(trinket));
+    attachTrinketTooltip(item, trinketTooltip(trinket,
+      possibleLinkedTrinketName(trinket, campaign.trinkets, inventoryPairs.links)));
     item.addEventListener("contextmenu", async (event) => {
       event.preventDefault();
       if (!window.confirm(t("trinket.deleteOne", { name: cleanGameText(trinket.name || trinket.id) }))) return;
@@ -537,6 +629,7 @@ function renderTrinketSelector() {
     const selectedCount = trinketSelectorMode === "batchAdd" ? selectedTrinketIds.size : selectedTrinketRawKeys.size;
     elements.trinketSelectionCount.textContent = t("trinket.selectedCount", { count: selectedCount });
   }
+  const inventoryPairs = pairTrinketInstances(inventory);
   for (const candidate of candidates) {
     const item = trinketSelectorMode === "batchDelete" ? candidate.item : candidate;
     const definition = trinketSelectorMode === "batchDelete" ? candidate.definition || item : candidate;
@@ -574,7 +667,8 @@ function renderTrinketSelector() {
     source.textContent = `${item.modName || definition.modName || t("trinket.vanilla")} · ${item.sourceId || definition.sourceId || "vanilla"}`;
     info.append(source);
     row.append(info);
-    attachTrinketTooltip(row, trinketTooltip(item));
+    attachTrinketTooltip(row, trinketTooltip(item,
+      possibleLinkedTrinketName(item, inventory, inventoryPairs.links)));
     row.addEventListener("click", async () => {
       if (isBatch) {
         const selectedSet = trinketSelectorMode === "batchDelete" ? selectedTrinketRawKeys : selectedTrinketIds;
@@ -1079,6 +1173,24 @@ elements.language.addEventListener("change", async () => {
 }
 
 elements.trinketAdd.addEventListener("click", () => openTrinketSelector("add"));
+elements.trinketSort.addEventListener("click", async () => {
+  if (!latestCampaign?.trinkets?.length) return;
+  const desired = sortedTrinketInventory(latestCampaign.trinkets);
+  const rawKeys = desired.map((item) => item.rawKey || String(item.index));
+  const current = latestCampaign.trinkets.map((item) => item.rawKey || String(item.index));
+  if (rawKeys.every((key, index) => key === current[index])) {
+    elements.townSaveState.textContent = t("trinket.alreadySorted");
+    return;
+  }
+  elements.trinketSort.disabled = true;
+  try {
+    renderCampaign(await editorGateway.editTrinkets("reorder", latestCampaign.revision, { rawKeys }));
+  } catch (error) {
+    elements.townSaveState.textContent = displayError(error);
+  } finally {
+    elements.trinketSort.disabled = false;
+  }
+});
 elements.trinketBatchAdd.addEventListener("click", () => openTrinketSelector("batchAdd"));
 elements.trinketBatchDelete.addEventListener("click", () => openTrinketSelector("batchDelete"));
 elements.trinketSelectorClose.addEventListener("click", () => elements.trinketSelector.close());
