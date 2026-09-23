@@ -781,6 +781,10 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["rarity"] = details["rarity"];
         item["rarityName"] = details["rarityName"];
         item["description"] = details["description"];
+        item["effects"] = details["effects"];
+        item["effectSearchText"] = details["effectSearchText"];
+        item["englishName"] = details["englishName"];
+        item["localizationKey"] = details["localizationKey"];
         item["sourceId"] = details["sourceId"];
         item["modName"] = details["modName"];
         item["amount"] = trinket.amount.value ? Json::Value(*trinket.amount.value) : Json::Value(Json::nullValue);
@@ -1030,10 +1034,29 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         const auto hero_class = (*body)["heroClass"].isString() ? (*body)["heroClass"].asString() : std::string{};
         const bool only_new = (*body)["onlyNew"].isBool() ? (*body)["onlyNew"].asBool() : false;
         const auto requested_id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
+        const bool has_requested_ids = action == "batch_add" && (*body).isMember("trinketIds");
+        std::set<std::string, std::less<>> requested_ids;
+        if (has_requested_ids) {
+            const auto& ids = (*body)["trinketIds"];
+            if (!ids.isArray()) {
+                callback(json_error(drogon::k400BadRequest, "INVALID_TRINKET_SELECTION",
+                                    "The selected trinket IDs must be an array."));
+                return;
+            }
+            for (const auto& id : ids) {
+                if (!id.isString() || id.asString().empty()) {
+                    callback(json_error(drogon::k400BadRequest, "INVALID_TRINKET_SELECTION",
+                                        "The selected trinket IDs contain an invalid value."));
+                    return;
+                }
+                requested_ids.insert(id.asString());
+            }
+        }
         for (const auto& definition : campaign.trinket_definitions) {
             if (action == "add" && definition.id != requested_id) continue;
-            if (!mod_id.empty() && definition.provenance.source_id != mod_id) continue;
-            if (!hero_class.empty() && std::none_of(definition.relationships.begin(), definition.relationships.end(),
+            if (has_requested_ids && !requested_ids.contains(definition.id)) continue;
+            if (!has_requested_ids && !mod_id.empty() && definition.provenance.source_id != mod_id) continue;
+            if (!has_requested_ids && !hero_class.empty() && std::none_of(definition.relationships.begin(), definition.relationships.end(),
                 [&](const auto& relation) {
                     return relation.relationship_type == "restricted_to" && relation.type == "hero_class" &&
                            relation.id == hero_class;
@@ -1074,14 +1097,33 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         const auto requested_id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
         const auto mod_id = (*body)["modId"].isString() ? (*body)["modId"].asString() : std::string{};
         const auto hero_class = (*body)["heroClass"].isString() ? (*body)["heroClass"].asString() : std::string{};
+        const bool has_requested_keys = action == "batch_delete" && (*body).isMember("rawKeys");
+        std::set<std::string, std::less<>> requested_keys;
+        if (has_requested_keys) {
+            const auto& keys = (*body)["rawKeys"];
+            if (!keys.isArray()) {
+                callback(json_error(drogon::k400BadRequest, "INVALID_TRINKET_SELECTION",
+                                    "The selected inventory keys must be an array."));
+                return;
+            }
+            for (const auto& key : keys) {
+                if (!key.isString() || key.asString().empty()) {
+                    callback(json_error(drogon::k400BadRequest, "INVALID_TRINKET_SELECTION",
+                                        "The selected inventory keys contain an invalid value."));
+                    return;
+                }
+                requested_keys.insert(key.asString());
+            }
+        }
         for (const auto& entry : model.trinket_inventory) {
             if (action == "delete" && entry.raw_key != requested_key) continue;
             if (action == "batch_delete") {
+                if (has_requested_keys && !requested_keys.contains(entry.raw_key)) continue;
                 const auto id = entry.id.value.value_or(entry.definition.raw_id);
                 const auto found = metadata.find(id);
-                if (found == metadata.end()) {
+                if (!has_requested_keys && found == metadata.end()) {
                     if (!mod_id.empty() || !hero_class.empty()) continue;
-                } else {
+                } else if (!has_requested_keys) {
                     if (!mod_id.empty() && found->second.first != mod_id) continue;
                     if (!hero_class.empty() && std::find(found->second.second.begin(), found->second.second.end(), hero_class) == found->second.second.end()) continue;
                 }
