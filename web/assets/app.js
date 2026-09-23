@@ -430,11 +430,7 @@ function openDistrictEditor() {
     row.disabled = !district.editable;
     row.textContent = `${district.name} · ${district.built ? t("town.districtUnlocked") : t("town.districtLocked")}`;
     row.title = t("town.districtClickTip");
-    row.addEventListener("click", () => changeDistrict("set", district.id, true));
-    row.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      changeDistrict("set", district.id, false);
-    });
+    row.addEventListener("click", () => changeDistrict("set", district.id, !district.built));
     content.push(row);
   }
   if (!content.length) content.push(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noDistricts") }));

@@ -319,6 +319,13 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     environment_config.selection.language = context.configuration_store.current().language == "zh_cn"
         ? "schinese" : "english";
     environment_config.selection.fallback_language = "english";
+    const auto dlc_directories = context.file_system.list_directories(
+        context.configuration_store.current().game_root / "dlc");
+    if (dlc_directories) {
+        for (const auto& directory : dlc_directories.value())
+            environment_config.selection.enabled_dlc_sources.push_back(
+                "dlc:" + directory.filename().string());
+    }
     auto content = std::make_unique<SqliteContentEnvironment>(std::move(environment_config));
     auto model = application::CampaignModelBuilder{}.build(profile.value(), *content);
 
@@ -397,7 +404,8 @@ std::vector<std::string> load_official_district_ids(application::IFileSystem& fi
         auto files = file_system.list_files(directory);
         if (!files) continue;
         for (const auto& file : files.value()) {
-            if (!file.filename().string().ends_with(".districts.json")) continue;
+            const auto filename = file.filename().string();
+            if (!filename.ends_with(".json") || filename.find("district") == std::string::npos) continue;
             auto bytes = file_system.read_file(file);
             if (!bytes) continue;
             try {
