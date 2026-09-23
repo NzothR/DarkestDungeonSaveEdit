@@ -145,6 +145,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-roster-panel h2, .town-trinket-panel h2, .town-resource-panel h2, .town-building-panel h2 { margin: 0 0 10px; color: #e1bc7a; font: 500 clamp(14px, 1.2vw, 22px) Georgia, serif; }
 .building-list { overflow: auto; }
 .building-row { display: flex; align-items: center; min-height: 38px; padding: 5px 0; border-bottom: 1px solid #ffffff14; }
+.building-row-button { width: 100%; border-left: 0; border-right: 0; border-top: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+.building-row-button:hover { background: #c59a5310; }
 .building-row > span { overflow: hidden; color: #e4d5bc; font-size: clamp(9px, .8vw, 14px); text-overflow: ellipsis; white-space: nowrap; }
 .building-section-label { margin-top: 6px; border-top: 1px solid #c59a5366; color: #d7ae69; }
 .building-section-label > span { color: #d7ae69; font-weight: 600; }
@@ -184,6 +186,31 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }
 .town-save-state { margin-left: auto; color: #b89a68; }
+.icon-action { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid #c59a5388; background: #17130f; color: #e4c17e; font-size: 17px; cursor: pointer; }
+.icon-action:hover { background: #3b2c19; }
+.icon-action:disabled { opacity: .45; cursor: not-allowed; }
+.building-editor { width: min(780px, calc(100vw - 32px)); max-width: none; max-height: min(82vh, 900px); padding: 0; overflow: hidden; border: 1px solid #c59a5388; background: #171513; color: #e9dfca; box-shadow: 0 22px 80px #000c; }
+.building-editor::backdrop { background: #050403bb; backdrop-filter: blur(2px); }
+.building-editor-shell { display: flex; max-height: min(82vh, 900px); flex-direction: column; padding: 20px; }
+.building-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 12px; border-bottom: 1px solid #ffffff18; }
+.building-editor-heading h2 { margin: 3px 0 0; color: #e1bc7a; font: 500 22px Georgia, "Microsoft YaHei UI", serif; }
+.building-editor-heading button, .building-editor-actions button { border: 1px solid #9a754766; padding: 7px 11px; background: #211d18; color: #d7b476; cursor: pointer; font: inherit; }
+.building-editor-heading button:hover, .building-editor-actions button:hover { background: #3b2c19; }
+.building-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 2px; }
+.building-editor-actions .secondary { border-color: #ffffff30; background: #ffffff08; color: #c6b79f; }
+.building-editor-hint { margin: 9px 0; color: #a99b85; font-size: 12px; line-height: 1.5; }
+.building-editor-content { display: grid; gap: 10px; min-height: 80px; overflow: auto; padding: 2px 4px 4px 0; }
+.upgrade-tree { padding: 12px; border: 1px solid #ffffff16; background: #0c0b0aaa; }
+.upgrade-tree h3 { margin: 0 0 10px; color: #dfc48e; font-size: 14px; font-weight: 600; }
+.upgrade-nodes { display: flex; align-items: center; gap: 10px; }
+.upgrade-node { position: relative; display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #8c7754; background: #26221d; color: #9b907d; font-weight: 700; cursor: pointer; }
+.upgrade-node:not(:last-child)::after { position: absolute; left: 100%; width: 10px; height: 1px; background: #8c7754; content: ""; }
+.upgrade-node.purchased { border-color: #d2a652; background: #49361c; color: #f2d38e; box-shadow: inset 0 0 12px #d2a65224; }
+.upgrade-node:hover { outline: 1px solid #f0d49a; }
+.district-entry { padding: 10px 12px; border: 1px solid #ffffff18; background: #0c0b0aaa; color: #9b907d; text-align: left; cursor: pointer; font: inherit; }
+.district-entry.built { border-color: #d2a65266; color: #f0d49a; }
+.district-entry:disabled { cursor: not-allowed; opacity: .7; }
+.district-entry:not(:disabled):hover { background: #3b2c19; }
 
 @media (max-width: 480px) {
   body { padding: 12px; }
@@ -197,4 +224,6 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
   .town-roster-panel { width: 30%; bottom: 8%; padding: 7px; }
   .town-trinket-panel { top: 23%; right: 32%; bottom: 18%; left: 32%; padding: 7px; }
   .town-resource-panel { width: 30%; padding: 7px; }
+  .building-editor-shell { padding: 13px; }
+  .upgrade-nodes { flex-wrap: wrap; }
 }

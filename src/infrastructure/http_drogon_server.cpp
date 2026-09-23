@@ -4,6 +4,7 @@
 #include "ddse/application/save_commit.hpp"
 #include "ddse/application/campaign_model_builder.hpp"
 #include "ddse/application/campaign_edit_session.hpp"
+#include "ddse/core/dson/dson_document.hpp"
 #include "ddse/application/mod_environment.hpp"
 #include "ddse/infrastructure/database_initialization.hpp"
 #include "ddse/infrastructure/database_mod_query.hpp"
@@ -11,6 +12,7 @@
 
 #include <drogon/drogon.h>
 #include <trantor/utils/Logger.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -85,10 +87,17 @@ struct ServerContext {
     application::AppConfigurationStore& configuration_store;
     application::IFileSystem& file_system;
     DatabaseInitializationManager initialization;
+    struct BuildingUpgradeTree {
+        std::string building_id;
+        std::string id;
+        std::vector<char> codes;
+    };
     struct CampaignSession {
         application::RawSaveProfile profile;
         std::unique_ptr<SqliteContentEnvironment> content;
         std::unique_ptr<application::CampaignEditSession> edits;
+        std::vector<BuildingUpgradeTree> building_upgrade_trees;
+        std::vector<std::string> official_district_ids;
     };
     std::mutex campaign_mutex;
     std::unique_ptr<CampaignSession> campaign;
@@ -277,6 +286,11 @@ drogon::HttpResponsePtr json_ok(Json::Value value) {
     return response;
 }
 
+std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
+    application::IContentEnvironment& content, application::IFileSystem& file_system);
+std::vector<std::string> load_official_district_ids(application::IFileSystem& file_system,
+                                                    const std::filesystem::path& game_root);
+
 std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     const auto& configuration = context.configuration_store.current();
     if (configuration.save_roots.empty() || configuration.save_roots.front().empty())
@@ -308,11 +322,81 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     auto model = application::CampaignModelBuilder{}.build(profile.value(), *content);
 
     auto session = std::make_unique<ServerContext::CampaignSession>();
+    session->building_upgrade_trees = load_building_upgrade_trees(*content, context.file_system);
+    session->official_district_ids = load_official_district_ids(context.file_system,
+        context.configuration_store.current().game_root);
     session->profile = std::move(profile.value());
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
     context.campaign = std::move(session);
     return std::nullopt;
+}
+
+std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
+    application::IContentEnvironment& content, application::IFileSystem& file_system) {
+    constexpr std::array<std::string_view, 8> buildings{
+        "abbey", "blacksmith", "camping_trainer", "guild", "nomad_wagon", "sanitarium", "stage_coach", "tavern"};
+    std::vector<ServerContext::BuildingUpgradeTree> result;
+    for (const auto building : buildings) {
+        const auto path = "upgrades/building/" + std::string{building} + ".upgrades.json";
+        auto asset = content.resolve_asset(path);
+        if (!asset || !asset.value() || asset.value()->source_id != "vanilla") continue;
+        auto bytes = file_system.read_file(asset.value()->physical_path);
+        if (!bytes) continue;
+        try {
+            const auto document = nlohmann::json::parse(bytes.value());
+            if (!document.is_object() || !document.contains("trees") || !document["trees"].is_array()) continue;
+            for (const auto& tree : document["trees"]) {
+                if (!tree.is_object() || !tree.contains("id") || !tree["id"].is_string() ||
+                    !tree.contains("requirements") || !tree["requirements"].is_array()) continue;
+                ServerContext::BuildingUpgradeTree item;
+                item.building_id = building;
+                item.id = tree["id"].get<std::string>();
+                bool valid = !tree["requirements"].empty();
+                char expected = 'a';
+                for (const auto& requirement : tree["requirements"]) {
+                    if (!requirement.is_object() || !requirement.contains("code") ||
+                        !requirement["code"].is_string()) { valid = false; break; }
+                    const auto code = requirement["code"].get<std::string>();
+                    if (code.size() != 1 || code.front() != expected++) { valid = false; break; }
+                    item.codes.push_back(code.front());
+                }
+                if (valid && !item.codes.empty()) result.push_back(std::move(item));
+            }
+        } catch (const nlohmann::json::exception&) {
+        }
+    }
+    return result;
+}
+
+std::vector<std::string> load_official_district_ids(application::IFileSystem& file_system,
+                                                    const std::filesystem::path& game_root) {
+    std::vector<std::string> pending{(game_root / "dlc").string()};
+    std::vector<std::string> ids;
+    while (!pending.empty()) {
+        auto directory = std::filesystem::path{std::move(pending.back())};
+        pending.pop_back();
+        auto children = file_system.list_directories(directory);
+        if (children) for (const auto& child : children.value()) pending.push_back(child.string());
+        auto files = file_system.list_files(directory);
+        if (!files) continue;
+        for (const auto& file : files.value()) {
+            if (!file.filename().string().ends_with(".districts.json")) continue;
+            auto bytes = file_system.read_file(file);
+            if (!bytes) continue;
+            try {
+                const auto document = nlohmann::json::parse(bytes.value());
+                if (!document.is_object() || !document.contains("buildings") || !document["buildings"].is_array()) continue;
+                for (const auto& building : document["buildings"])
+                    if (building.is_object() && building.contains("name") && building["name"].is_string())
+                        ids.push_back(building["name"].get<std::string>());
+            } catch (const nlohmann::json::exception&) {
+            }
+        }
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
 }
 
 Json::Value definition_assets(const domain::DefinitionReference& definition) {
@@ -435,6 +519,70 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         trinkets.append(std::move(item));
     }
     value["trinkets"] = std::move(trinkets);
+
+    constexpr std::array<std::string_view, 9> building_order{
+        "camping_trainer", "stage_coach", "tavern", "sanitarium", "abbey", "graveyard",
+        "nomad_wagon", "guild", "blacksmith"};
+    Json::Value buildings(Json::arrayValue);
+    for (const auto building_id : building_order) {
+        Json::Value building(Json::objectValue);
+        building["id"] = std::string{building_id};
+        const auto found = std::find_if(model.town_buildings.begin(), model.town_buildings.end(), [&](const auto& item) {
+            return item.id == building_id;
+        });
+        building["name"] = found == model.town_buildings.end() || found->definition.display_name.empty()
+            ? std::string{building_id} : strip_game_markup(found->definition.display_name);
+        Json::Value trees(Json::arrayValue);
+        for (const auto& tree : campaign.building_upgrade_trees) {
+            if (tree.building_id != building_id) continue;
+            const auto hash = static_cast<std::int32_t>(core::dson::string_hash(tree.id));
+            Json::Value item(Json::objectValue);
+            item["id"] = tree.id;
+            std::uint32_t rank = 0;
+            Json::Value nodes(Json::arrayValue);
+            for (const auto code : tree.codes) {
+                const auto node = std::find_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
+                    [&](const auto& purchase) {
+                        return purchase.instance_number == 0 && purchase.tree_id == hash &&
+                               purchase.requirement_code == code;
+                    });
+                const bool purchased = node != model.upgrade_purchase_nodes.end() &&
+                    node->is_purchased.value.value_or(false);
+                if (purchased) ++rank;
+                Json::Value node_json(Json::objectValue);
+                node_json["code"] = std::string(1, code);
+                node_json["purchased"] = purchased;
+                nodes.append(std::move(node_json));
+            }
+            item["rank"] = rank;
+            item["maxRank"] = static_cast<Json::UInt>(tree.codes.size());
+            item["nodes"] = std::move(nodes);
+            trees.append(std::move(item));
+        }
+        building["upgradeTrees"] = std::move(trees);
+        buildings.append(std::move(building));
+    }
+    value["buildings"] = std::move(buildings);
+
+    value["districtSystemOpen"] = model.district_system_open;
+    Json::Value districts(Json::arrayValue);
+    for (const auto& district_id : campaign.official_district_ids) {
+        Json::Value item(Json::objectValue);
+        item["id"] = district_id;
+        const auto key = "str_" + district_id + "_title";
+        const auto localized = campaign.content->resolve_localization(key);
+        const auto localized_name = localized && localized.value()
+            ? localized.value()->value : district_id;
+        item["name"] = strip_game_markup(localized_name);
+        const auto state = std::find_if(model.districts.begin(), model.districts.end(), [&](const auto& entry) {
+            return entry.id == district_id;
+        });
+        item["built"] = state != model.districts.end() && state->built.value.value_or(false);
+        item["editable"] = model.district_system_open && state != model.districts.end() &&
+                            state->built.value.has_value();
+        districts.append(std::move(item));
+    }
+    value["districts"] = std::move(districts);
     return value;
 }
 
@@ -492,6 +640,234 @@ void handle_campaign_resource(const drogon::HttpRequestPtr& request,
         return;
     }
     callback(json_ok(campaign_value(*context->campaign)));
+}
+
+bool request_nonnegative_integer(const Json::Value& value) {
+    return (value.isInt() || value.isUInt() || value.isInt64() || value.isUInt64()) && value.asInt64() >= 0;
+}
+
+void handle_campaign_building_rank(const drogon::HttpRequestPtr& request,
+                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                   const std::shared_ptr<ServerContext>& context, bool maximize_all) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !body->isObject() || !request_nonnegative_integer((*body)["revision"]) ||
+        (!maximize_all && (!(*body)["buildingId"].isString() || !(*body)["treeId"].isString() ||
+                           !request_nonnegative_integer((*body)["rank"]))) ||
+        (maximize_all && !(*body)["buildingId"].isNull() && !(*body)["buildingId"].isString())) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION",
+                            "Building upgrade requires an operation target and revision."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    const auto& model = context->campaign->edits->model();
+    application::CampaignOperation operation;
+    if (!maximize_all) {
+        const std::string building_id = (*body)["buildingId"].asString();
+        const std::string tree_id = (*body)["treeId"].asString();
+        const auto selected = std::find_if(context->campaign->building_upgrade_trees.begin(),
+            context->campaign->building_upgrade_trees.end(), [&](const auto& tree) {
+                return tree.building_id == building_id && tree.id == tree_id;
+            });
+        if (selected == context->campaign->building_upgrade_trees.end() ||
+            (*body)["rank"].asUInt64() > selected->codes.size()) {
+            callback(json_error(drogon::k400BadRequest, "BUILDING_UPGRADE_NOT_FOUND",
+                                "The requested building upgrade is not in the original game upgrade catalog."));
+            return;
+        }
+        auto built = application::make_set_town_upgrade_rank_operation(model, tree_id,
+            static_cast<std::int32_t>((*body)["rank"].asUInt64()),
+            static_cast<std::int32_t>(selected->codes.size()));
+        if (!built) {
+            callback(json_error(drogon::k400BadRequest, std::string{core::to_string(built.error().code)},
+                                built.error().message));
+            return;
+        }
+        operation = std::move(built.value());
+    } else {
+        const auto selected_building = (*body)["buildingId"].isString()
+            ? (*body)["buildingId"].asString() : std::string{};
+        if (!selected_building.empty() && std::none_of(context->campaign->building_upgrade_trees.begin(),
+            context->campaign->building_upgrade_trees.end(), [&](const auto& tree) {
+                return tree.building_id == selected_building;
+            })) {
+            callback(json_error(drogon::k400BadRequest, "BUILDING_UPGRADE_NOT_FOUND",
+                                "The requested building has no original upgrade tree."));
+            return;
+        }
+        application::CompositeCampaignOperation maximum{selected_building.empty()
+                ? "Max all town buildings" : "Max one town building", {},
+            "campaign.town.set_upgrade_rank", {}};
+        for (const auto& tree : context->campaign->building_upgrade_trees) {
+            if (!selected_building.empty() && tree.building_id != selected_building) continue;
+            const auto hash = static_cast<std::int32_t>(core::dson::string_hash(tree.id));
+            const auto purchased = std::count_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
+                [&](const auto& node) {
+                    return node.instance_number == 0 && node.tree_id == hash &&
+                           std::find(tree.codes.begin(), tree.codes.end(), node.requirement_code) != tree.codes.end() &&
+                           node.is_purchased.value.value_or(false);
+                });
+            if (purchased == static_cast<std::ptrdiff_t>(tree.codes.size())) continue;
+            auto built = application::make_set_town_upgrade_rank_operation(model, tree.id,
+                static_cast<std::int32_t>(tree.codes.size()), static_cast<std::int32_t>(tree.codes.size()));
+            if (!built) continue;
+            const auto* composite = std::get_if<application::CompositeCampaignOperation>(&built.value());
+            if (!composite) continue;
+            maximum.operations.insert(maximum.operations.end(), composite->operations.begin(), composite->operations.end());
+            maximum.document_mutations.insert(maximum.document_mutations.end(),
+                composite->document_mutations.begin(), composite->document_mutations.end());
+        }
+        if (maximum.operations.empty() && maximum.document_mutations.empty()) {
+            callback(json_ok(campaign_value(*context->campaign)));
+            return;
+        }
+        operation = std::move(maximum);
+    }
+    auto applied = context->campaign->edits->apply(operation, (*body)["revision"].asUInt64());
+    if (!applied) {
+        const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision
+            ? drogon::k409Conflict : drogon::k400BadRequest;
+        callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+        return;
+    }
+    callback(json_ok(campaign_value(*context->campaign)));
+}
+
+std::vector<application::CampaignDocumentMutation> open_district_mutations(
+    const ServerContext::CampaignSession& campaign) {
+    using Kind = application::CampaignDocumentMutationKind;
+    using Mutation = application::CampaignDocumentMutation;
+    const auto town_document = campaign.profile.documents.find("persist.town.json");
+    if (town_document == campaign.profile.documents.end() || !town_document->second.decoded) return {};
+    const auto& document = *town_document->second.decoded;
+    const auto template_building = std::find_if(campaign.edits->model().town_buildings.begin(),
+        campaign.edits->model().town_buildings.end(), [](const auto& building) {
+            return !building.raw.display_path.empty();
+        });
+    const auto boolean_template = std::find_if(document.fields.begin(), document.fields.end(), [](const auto& field) {
+        return field.kind == core::dson::ValueKind::Boolean;
+    });
+    if (template_building == campaign.edits->model().town_buildings.end() ||
+        boolean_template == document.fields.end() || campaign.official_district_ids.empty()) return {};
+    const auto append = [](std::string target, std::string source, std::string key,
+                           core::dson::ValueKind kind) {
+        return Mutation{Kind::AppendClone, "Town.DistrictSystem", "persist.town.json",
+            std::move(target), std::move(source), std::move(key), kind};
+    };
+    const auto clear = [](std::string target) {
+        return Mutation{Kind::ClearChildren, "Town.DistrictSystem", "persist.town.json",
+            std::move(target), {}, {}, core::dson::ValueKind::Object};
+    };
+    const auto template_path = template_building->raw.display_path;
+    const auto bool_path = boolean_template->path;
+    const bool bool_value = std::get<bool>(boolean_template->value);
+    std::vector<Mutation> mutations;
+    mutations.push_back(append("base_root/districts", template_path, "districts", core::dson::ValueKind::Object));
+    mutations.push_back(clear("base_root/districts"));
+    mutations.push_back(append("base_root/districts/buildings", "base_root/districts", "buildings",
+                               core::dson::ValueKind::Object));
+    for (const auto& id : campaign.official_district_ids) {
+        const auto district_path = "base_root/districts/buildings/" + id;
+        mutations.push_back(append(district_path, template_path, id, core::dson::ValueKind::Object));
+        mutations.push_back(clear(district_path));
+        const auto built_path = district_path + "/built";
+        mutations.push_back(append(built_path, bool_path, "built", core::dson::ValueKind::Boolean));
+        mutations.push_back({Kind::SetValue, "Town.DistrictSystem", "persist.town.json", built_path,
+            {}, {}, core::dson::ValueKind::Boolean, bool_value, false});
+    }
+    return mutations;
+}
+
+void handle_campaign_district(const drogon::HttpRequestPtr& request,
+                              std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                              const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !body->isObject() || !(*body)["action"].isString() ||
+        !request_nonnegative_integer((*body)["revision"])) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION",
+                            "District operation requires action and revision."));
+        return;
+    }
+    const auto action = (*body)["action"].asString();
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    auto& campaign = *context->campaign;
+    const auto& model = campaign.edits->model();
+    application::CampaignOperation operation;
+    if (action == "system_open") {
+        auto mutations = open_district_mutations(campaign);
+        if (mutations.empty()) {
+            callback(json_error(drogon::k400BadRequest, "DISTRICT_DEFINITIONS_UNAVAILABLE",
+                                "District definitions or safe DSON templates are unavailable."));
+            return;
+        }
+        operation = application::SetDistrictSystemOperation{true, campaign.official_district_ids,
+                                                             std::move(mutations)};
+    } else if (action == "system_lock") {
+        operation = application::SetDistrictSystemOperation{false, {}, {
+            {application::CampaignDocumentMutationKind::Erase, "Town.DistrictSystem", "persist.town.json",
+             "base_root/districts", {}, {}, core::dson::ValueKind::Object}}};
+    } else {
+        if (!model.district_system_open) {
+            callback(json_error(drogon::k409Conflict, "DISTRICT_SYSTEM_LOCKED",
+                                "Unlock the district system before editing its buildings."));
+            return;
+        }
+        std::vector<std::pair<std::string, bool>> desired;
+        if (action == "set") {
+            if (!(*body)["districtId"].isString() || !(*body)["built"].isBool()) {
+                callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION",
+                                    "A district ID and built state are required."));
+                return;
+            }
+            desired.emplace_back((*body)["districtId"].asString(), (*body)["built"].asBool());
+        } else if (action == "unlock_all" || action == "lock_all") {
+            for (const auto& district : model.districts)
+                desired.emplace_back(district.id, action == "unlock_all");
+        } else {
+            callback(json_error(drogon::k400BadRequest, "INVALID_CAMPAIGN_OPERATION", "Unknown district operation."));
+            return;
+        }
+        std::vector<application::CampaignDocumentMutation> mutations;
+        for (const auto& [id, built] : desired) {
+            if (std::find(campaign.official_district_ids.begin(), campaign.official_district_ids.end(), id) ==
+                campaign.official_district_ids.end()) continue;
+            const auto found = std::find_if(model.districts.begin(), model.districts.end(), [&](const auto& item) {
+                return item.id == id && item.built.value.has_value();
+            });
+            if (found == model.districts.end() || *found->built.value == built) continue;
+            const auto path = "base_root/districts/buildings/" + id + "/built";
+            mutations.push_back({application::CampaignDocumentMutationKind::SetValue, "Town.DistrictSystem",
+                "persist.town.json", path, {}, {}, core::dson::ValueKind::Boolean,
+                *found->built.value, built});
+        }
+        if (mutations.empty()) {
+            callback(json_ok(campaign_value(campaign)));
+            return;
+        }
+        operation = application::ApplyCampaignDocumentMutationsOperation{
+            "campaign.town.set_district_system_open", std::move(mutations)};
+    }
+    auto applied = campaign.edits->apply(operation, (*body)["revision"].asUInt64());
+    if (!applied) {
+        const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision
+            ? drogon::k409Conflict : drogon::k400BadRequest;
+        callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+        return;
+    }
+    callback(json_ok(campaign_value(campaign)));
 }
 
 std::string save_path_component(std::string value) {
@@ -1207,6 +1583,21 @@ int run_drogon_http_server(
         "/api/campaign/resource", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign_resource(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/building-rank", [context](const drogon::HttpRequestPtr& request,
+                                                    std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_building_rank(request, std::move(callback), context, false);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/building-max", [context](const drogon::HttpRequestPtr& request,
+                                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_building_rank(request, std::move(callback), context, true);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/district", [context](const drogon::HttpRequestPtr& request,
+                                               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_district(request, std::move(callback), context);
         }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/save", [context](const drogon::HttpRequestPtr& request,

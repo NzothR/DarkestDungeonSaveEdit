@@ -111,6 +111,13 @@ struct CampaignDocumentMutationBatch {
     bool cancel{};
 };
 
+struct SetDistrictSystemOperation {
+    bool open{};
+    std::vector<std::string> district_ids;
+    std::vector<CampaignDocumentMutation> mutations;
+};
+
+
 struct ApplyCampaignDocumentMutationsOperation {
     std::string operation_id;
     std::vector<CampaignDocumentMutation> mutations;
@@ -139,7 +146,7 @@ struct CampaignOperationCapabilityDescriptor {
 
 using CampaignOperation = std::variant<SetCampaignValueOperation, CompositeCampaignOperation,
                                        SetHeroQuirkLockedOperation, SetHeroAfflictionStateOperation,
-                                       SetDistrictBuiltOperation,
+                                       SetDistrictBuiltOperation, SetDistrictSystemOperation,
                                        RemoveHeroQuirkOperation, UnequipHeroCampingSkillOperation,
                                        DestroyTrinketOperation, ApplyCampaignDocumentMutationsOperation>;
 
@@ -220,6 +227,13 @@ struct ChangeSet {
     std::vector<CampaignStructuralChange> structural_changes;
     std::vector<CampaignDocumentMutationBatch> document_mutation_batches;
     std::vector<std::string> affected_documents;
+    struct DistrictSystemSnapshot {
+        bool before_open{};
+        std::vector<domain::DistrictState> before_districts;
+        bool after_open{};
+        std::vector<domain::DistrictState> after_districts;
+    };
+    std::optional<DistrictSystemSnapshot> district_system_snapshot;
 
     [[nodiscard]] bool empty() const noexcept {
         return changes.empty() && structural_changes.empty() && document_mutation_batches.empty();

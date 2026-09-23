@@ -72,6 +72,8 @@ std::string operation_label(const CampaignOperation& operation) {
     if (std::holds_alternative<SetHeroQuirkLockedOperation>(operation)) return "Set hero quirk lock";
     if (std::holds_alternative<SetHeroAfflictionStateOperation>(operation)) return "Set hero affliction state";
     if (std::holds_alternative<SetDistrictBuiltOperation>(operation)) return "Set district built state";
+    if (const auto* district = std::get_if<SetDistrictSystemOperation>(&operation))
+        return district->open ? "Unlock district system" : "Lock district system";
     if (std::holds_alternative<RemoveHeroQuirkOperation>(operation)) return "Remove hero quirk";
     if (std::holds_alternative<UnequipHeroCampingSkillOperation>(operation)) return "Unequip camping skill";
     if (std::holds_alternative<ApplyCampaignDocumentMutationsOperation>(operation))
@@ -499,6 +501,40 @@ bool replay_structural_entry(CampaignModel& model, const CampaignStructuralChang
     return false;
 }
 
+bool project_district_state_mutations(CampaignModel& model,
+                                     const std::vector<CampaignDocumentMutation>& mutations) {
+    constexpr std::string_view prefix{"base_root/districts/buildings/"};
+    for (const auto& mutation : mutations) {
+        if (mutation.semantic_property != "Town.DistrictSystem" ||
+            mutation.document_id != "persist.town.json" ||
+            mutation.kind != CampaignDocumentMutationKind::SetValue || !mutation.after ||
+            !mutation.target_path.starts_with(prefix) || !mutation.target_path.ends_with("/built")) continue;
+        const auto id = std::string_view{mutation.target_path}.substr(
+            prefix.size(), mutation.target_path.size() - prefix.size() - 6);
+        if (id.empty() || id.find('/') != std::string_view::npos) return false;
+        const auto* desired = std::get_if<bool>(&*mutation.after);
+        if (!desired) return false;
+        const auto found = std::find_if(model.districts.begin(), model.districts.end(), [&](const auto& item) {
+            return item.id == id;
+        });
+        if (found == model.districts.end()) {
+            domain::DistrictState district;
+            district.id = std::string{id};
+            district.read_only = false;
+            district.raw = {"persist.town.json", {}, "base_root/districts/buildings/" + std::string{id}};
+            district.built = {*desired, domain::RawLocator{"persist.town.json", {}, mutation.target_path}};
+            district.definition.raw_id = std::string{id};
+            model.districts.push_back(std::move(district));
+        } else {
+            found->read_only = false;
+            found->built.value = *desired;
+            found->built.raw = domain::RawLocator{"persist.town.json", {}, mutation.target_path};
+        }
+    }
+    model.district_system_open = model.district_system_open || !model.districts.empty();
+    return true;
+}
+
 bool apply_purchase_row_mutations(CampaignModel& model,
                                  const std::vector<CampaignDocumentMutation>& mutations,
                                  bool forward, std::string* failure_reason = nullptr) {
@@ -603,6 +639,13 @@ void merge_pending_changes(ChangeSet& pending, const ChangeSet& delta) {
             pending.document_mutation_batches.push_back(batch);
         } else {
             *found = batch;
+        }
+    }
+    if (delta.district_system_snapshot) {
+        if (!pending.district_system_snapshot) pending.district_system_snapshot = delta.district_system_snapshot;
+        else {
+            pending.district_system_snapshot->after_open = delta.district_system_snapshot->after_open;
+            pending.district_system_snapshot->after_districts = delta.district_system_snapshot->after_districts;
         }
     }
     std::set<std::string, std::less<>> documents;
@@ -769,6 +812,21 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
 ValidationReport CampaignOperationValidator::validate(const CampaignModel& model,
                                                        const CampaignOperation& operation) const {
     ValidationReport report;
+    if (const auto* district_system = std::get_if<SetDistrictSystemOperation>(&operation)) {
+        if (district_system->open == model.district_system_open) {
+            add_issue(report, ValidationSeverity::Error, "district.system_unchanged",
+                      "The district system already has the requested state", {}, true);
+            return report;
+        }
+        if (district_system->open && district_system->district_ids.empty()) {
+            add_issue(report, ValidationSeverity::Error, "district.definitions_missing",
+                      "No official district definitions are available", {}, true);
+            return report;
+        }
+        ApplyCampaignDocumentMutationsOperation mapped{
+            "campaign.town.set_district_system_open", district_system->mutations};
+        return validate(model, CampaignOperation{std::move(mapped)});
+    }
     if (const auto* composite = std::get_if<CompositeCampaignOperation>(&operation);
         composite && !composite->document_mutations.empty()) {
         if (composite->mapped_operation_id.empty()) {
@@ -809,9 +867,13 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                           "A DSON mutation is outside its game-verified mapping", target, true);
                 continue;
             }
+            const bool district_template_source = mutation.semantic_property == "Town.DistrictSystem" &&
+                mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                (mutation.source_path.starts_with("base_root/buildings/") ||
+                 mutation.source_path.starts_with("base_root/"));
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
-                !path_is_within_mapping(*mapping, mutation.source_path)) {
+                !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source) {
                 add_issue(report, ValidationSeverity::Error, "mutation.source_mapping_mismatch",
                           "A cloned DSON template must come from the same registered mapping", target, true);
                 continue;
@@ -1297,8 +1359,58 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
                composite && !composite->document_mutations.empty()) {
         mapped_operation_id = &composite->mapped_operation_id;
         mapped_mutations = &composite->document_mutations;
+    } else if (const auto* district_system = std::get_if<SetDistrictSystemOperation>(&operation)) {
+        mapped_operation_id = nullptr;
+        mapped_mutations = &district_system->mutations;
+    }
+    const auto* district_system_operation = std::get_if<SetDistrictSystemOperation>(&operation);
+    if (district_system_operation) {
+        const auto open_id = std::string{"campaign.town.set_district_system_open"};
+        CampaignDocumentMutationBatch batch;
+        batch.operation_id = open_id;
+        batch.transaction_id = open_id + "#" + std::to_string(revision_ + 1);
+        batch.mutations = district_system_operation->mutations;
+        change_set.document_mutation_batches.push_back(std::move(batch));
+        std::set<std::string, std::less<>> documents(change_set.affected_documents.begin(),
+                                                      change_set.affected_documents.end());
+        documents.insert("persist.town.json");
+        change_set.affected_documents.assign(documents.begin(), documents.end());
+        ChangeSet::DistrictSystemSnapshot snapshot;
+        snapshot.before_open = candidate.district_system_open;
+        snapshot.before_districts = candidate.districts;
+        snapshot.after_open = district_system_operation->open;
+        if (district_system_operation->open) {
+            for (const auto& id : district_system_operation->district_ids) {
+                domain::DistrictState district;
+                district.id = id;
+                district.read_only = false;
+                district.raw = {"persist.town.json", {}, "base_root/districts/buildings/" + id};
+                district.built = {false, domain::RawLocator{"persist.town.json", {},
+                    "base_root/districts/buildings/" + id + "/built"}};
+                district.definition.raw_id = id;
+                candidate.districts.push_back(std::move(district));
+            }
+            candidate.district_system_open = true;
+        } else {
+            candidate.districts.clear();
+            candidate.district_system_open = false;
+        }
+        snapshot.after_districts = candidate.districts;
+        change_set.district_system_snapshot = std::move(snapshot);
     }
     if (mapped_operation_id && mapped_mutations) {
+        const bool projects_district_state = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
+            [](const auto& mutation) {
+                return mutation.semantic_property == "Town.DistrictSystem" &&
+                       mutation.kind == CampaignDocumentMutationKind::SetValue &&
+                       mutation.target_path.starts_with("base_root/districts/buildings/") &&
+                       mutation.target_path.ends_with("/built");
+            });
+        ChangeSet::DistrictSystemSnapshot district_snapshot;
+        if (projects_district_state) {
+            district_snapshot.before_open = candidate.district_system_open;
+            district_snapshot.before_districts = candidate.districts;
+        }
         CampaignDocumentMutationBatch batch;
         batch.operation_id = *mapped_operation_id;
         batch.transaction_id = *mapped_operation_id + "#" + std::to_string(revision_ + 1);
@@ -1314,6 +1426,16 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
                 {core::ErrorCode::ValidationFailed,
                  "The mapped purchase-node append could not be projected into the campaign session: " + projection_failure,
                  "CampaignEditSession"});
+        if (projects_district_state) {
+            if (!project_district_state_mutations(candidate, *mapped_mutations))
+                return core::Result<CampaignEditResult, core::Error>::failure(
+                    {core::ErrorCode::ValidationFailed,
+                     "The district state mutation could not be projected into the campaign session",
+                     "CampaignEditSession"});
+            district_snapshot.after_open = candidate.district_system_open;
+            district_snapshot.after_districts = candidate.districts;
+            change_set.district_system_snapshot = std::move(district_snapshot);
+        }
     }
     if (!change_set.empty()) {
         working_model_ = std::move(candidate);
@@ -1371,6 +1493,17 @@ CampaignEditSession::replay(const HistoryRecord& record, bool forward, std::uint
     if (!forward) {
         for (auto& change : changes.changes) std::swap(change.before, change.after);
         std::reverse(changes.changes.begin(), changes.changes.end());
+    }
+    if (changes.district_system_snapshot) {
+        candidate.district_system_open = forward ? changes.district_system_snapshot->after_open
+                                                  : changes.district_system_snapshot->before_open;
+        candidate.districts = forward ? changes.district_system_snapshot->after_districts
+                                      : changes.district_system_snapshot->before_districts;
+        if (!forward) {
+            std::swap(changes.district_system_snapshot->before_open, changes.district_system_snapshot->after_open);
+            std::swap(changes.district_system_snapshot->before_districts,
+                      changes.district_system_snapshot->after_districts);
+        }
     }
     working_model_ = std::move(candidate);
     ++revision_;

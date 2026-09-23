@@ -479,6 +479,7 @@ void read_town(const RawSaveProfile& profile, ContentLookupCache& cache, Campaig
         }
     }
     auto districts = child_named(*town, "districts");
+    model.district_system_open = districts.has_value();
     auto buildings = districts ? child_named(*districts, "buildings") : std::nullopt;
     if (buildings) {
         for (const auto& district : child_fields(*buildings)) {

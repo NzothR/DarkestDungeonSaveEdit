@@ -88,19 +88,11 @@
           </header>
           <div class="town-title"><span data-i18n="town.title">Hamlet</span><small data-i18n="town.preview">F2 visual preview</small></div>
           <aside class="town-building-panel">
-            <div class="town-panel-heading"><h2 data-i18n="town.buildings">建筑</h2><small data-i18n="town.previewOnly">仅界面预览</small></div>
-            <div class="building-list">
-              <div class="building-row"><span data-i18n="town.survivalist">生存大师</span></div>
-              <div class="building-row"><span data-i18n="town.stageCoach">马车</span></div>
-              <div class="building-row"><span data-i18n="town.tavern">酒馆</span></div>
-              <div class="building-row"><span data-i18n="town.sanitarium">疗养院</span></div>
-              <div class="building-row"><span data-i18n="town.abbey">教堂</span></div>
-              <div class="building-row"><span data-i18n="town.graveyard">墓园</span></div>
-              <div class="building-row"><span data-i18n="town.nomadWagon">游牧民货车</span></div>
-              <div class="building-row"><span data-i18n="town.guild">工会</span></div>
-              <div class="building-row"><span data-i18n="town.blacksmith">铁匠铺</span></div>
-              <div class="building-row building-section-label"><span data-i18n="town.areaBuildings">区域建筑</span></div>
+            <div class="town-panel-heading town-building-heading">
+              <h2 data-i18n="town.buildings">建筑</h2>
+              <button id="building-maximize-all" class="icon-action" type="button" data-i18n-title="town.maximizeAllBuildingsTip" data-i18n-aria="town.maximizeAllBuildingsTip">⬆</button>
             </div>
+            <div id="building-list" class="building-list"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-roster-panel">
             <h2 data-i18n="town.roster">Roster</h2>
@@ -123,6 +115,18 @@
           <footer class="town-status-bar"><span class="status-dot"></span><span data-i18n="town.statusReady">Initialization complete · Town shell ready</span><span id="town-save-state" class="town-save-state" data-i18n="town.clean">未修改</span></footer>
         </div>
       </section>
+
+      <dialog id="building-editor" class="building-editor">
+        <div class="building-editor-shell">
+          <header class="building-editor-heading">
+            <div><small id="building-editor-kicker" class="eyebrow left"></small><h2 id="building-editor-title"></h2></div>
+            <button id="building-editor-close" class="secondary" type="button" data-i18n="town.close">关闭</button>
+          </header>
+          <div id="building-editor-actions" class="building-editor-actions"></div>
+          <p id="building-editor-hint" class="building-editor-hint"></p>
+          <div id="building-editor-content" class="building-editor-content"></div>
+        </div>
+      </dialog>
 
       <p id="connection-error" class="error" role="alert" hidden></p>
       <p class="footnote" data-i18n="app.footnote"></p>

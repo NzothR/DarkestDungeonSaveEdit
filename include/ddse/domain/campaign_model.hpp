@@ -199,6 +199,7 @@ struct CampaignModel {
     std::vector<Hero> heroes;
     std::vector<TrinketInventoryEntry> trinket_inventory;
     std::vector<TownBuilding> town_buildings;
+    bool district_system_open{};
     std::vector<DistrictState> districts;
     std::vector<UpgradePurchaseNode> upgrade_purchase_nodes;
     std::vector<SemanticDiagnostic> diagnostics;

@@ -51,6 +51,15 @@ const elements = {
   townRedo: document.querySelector("#town-redo"),
   townSave: document.querySelector("#town-save"),
   townSaveState: document.querySelector("#town-save-state"),
+  buildingList: document.querySelector("#building-list"),
+  buildingMaximizeAll: document.querySelector("#building-maximize-all"),
+  buildingEditor: document.querySelector("#building-editor"),
+  buildingEditorTitle: document.querySelector("#building-editor-title"),
+  buildingEditorKicker: document.querySelector("#building-editor-kicker"),
+  buildingEditorActions: document.querySelector("#building-editor-actions"),
+  buildingEditorHint: document.querySelector("#building-editor-hint"),
+  buildingEditorContent: document.querySelector("#building-editor-content"),
+  buildingEditorClose: document.querySelector("#building-editor-close"),
 };
 
 let locale = "zh_cn";
@@ -82,6 +91,7 @@ async function setLocale(nextLocale) {
   }
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-aria]").forEach((node) => { node.setAttribute("aria-label", t(node.dataset.i18nAria)); });
+  document.querySelectorAll("[data-i18n-title]").forEach((node) => { node.setAttribute("title", t(node.dataset.i18nTitle)); });
   for (const option of elements.language.options) option.textContent = t(`language.${option.value}`);
 }
 
@@ -219,6 +229,8 @@ function renderCampaign(campaign) {
     elements.resourceGrid.append(item);
   }
 
+  renderBuildings(campaign);
+
   elements.heroList.replaceChildren();
   if (!campaign.heroes?.length) {
     elements.heroList.append(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noHeroes") }));
@@ -275,6 +287,158 @@ function renderCampaign(campaign) {
   elements.townSave.disabled = !campaign.dirty;
   elements.townSaveState.textContent = campaign.dirty ? t("town.unsaved") : t("town.clean");
   elements.townSaveState.title = "";
+}
+
+const BUILDING_LOCALE_KEYS = Object.freeze({
+  camping_trainer: "town.survivalist", stage_coach: "town.stageCoach", tavern: "town.tavern",
+  sanitarium: "town.sanitarium", abbey: "town.abbey", graveyard: "town.graveyard",
+  nomad_wagon: "town.nomadWagon", guild: "town.guild", blacksmith: "town.blacksmith",
+});
+
+const UPGRADE_TITLE_KEYS = Object.freeze({
+  "abbey.meditation": "town.upgrade.abbey.meditation", "abbey.prayer": "town.upgrade.abbey.prayer",
+  "abbey.flagellation": "town.upgrade.abbey.flagellation", "blacksmith.weapon": "town.upgrade.blacksmith.weapon",
+  "blacksmith.armour": "town.upgrade.blacksmith.armour", "blacksmith.cost": "town.upgrade.blacksmith.cost",
+  "camping_trainer.cost": "town.upgrade.camping_trainer.cost", "guild.skill_levels": "town.upgrade.guild.skill_levels",
+  "guild.cost": "town.upgrade.guild.cost", "nomad_wagon.numitems": "town.upgrade.nomad_wagon.numitems",
+  "nomad_wagon.cost": "town.upgrade.nomad_wagon.cost", "sanitarium.cost": "town.upgrade.sanitarium.cost",
+  "sanitarium.disease_quirk_cost": "town.upgrade.sanitarium.disease_quirk_cost",
+  "sanitarium.slots": "town.upgrade.sanitarium.slots", "stage_coach.numrecruits": "town.upgrade.stage_coach.numrecruits",
+  "stage_coach.rostersize": "town.upgrade.stage_coach.rostersize",
+  "stage_coach.upgraded_recruits": "town.upgrade.stage_coach.upgraded_recruits",
+  "tavern.bar": "town.upgrade.tavern.bar", "tavern.gambling": "town.upgrade.tavern.gambling",
+  "tavern.brothel": "town.upgrade.tavern.brothel",
+});
+
+function renderBuildings(campaign) {
+  elements.buildingList.replaceChildren();
+  for (const building of campaign.buildings || []) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "building-row building-row-button";
+    const label = document.createElement("span");
+    label.textContent = t(BUILDING_LOCALE_KEYS[building.id] || "town.building");
+    row.append(label);
+    row.addEventListener("click", () => openBuildingEditor(building.id));
+    elements.buildingList.append(row);
+  }
+  const districts = document.createElement("button");
+  districts.type = "button";
+  districts.className = "building-row building-row-button building-section-label";
+  districts.append(Object.assign(document.createElement("span"), { textContent: t("town.areaBuildings") }));
+  districts.addEventListener("click", openDistrictEditor);
+  elements.buildingList.append(districts);
+  elements.buildingMaximizeAll.disabled = !(campaign.buildings || []).some((building) =>
+    (building.upgradeTrees || []).some((tree) => tree.rank < tree.maxRank));
+}
+
+function createTownAction(key, handler, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.textContent = t(key);
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function presentBuildingEditor(title, kicker, actions, hint, content) {
+  elements.buildingEditorTitle.textContent = title;
+  elements.buildingEditorKicker.textContent = kicker;
+  elements.buildingEditorActions.replaceChildren(...actions);
+  elements.buildingEditorHint.textContent = hint;
+  elements.buildingEditorContent.replaceChildren(...content);
+  if (!elements.buildingEditor.open) elements.buildingEditor.showModal();
+}
+
+function openBuildingEditor(buildingId) {
+  const building = latestCampaign?.buildings?.find((item) => item.id === buildingId);
+  if (!building) return;
+  const title = t(BUILDING_LOCALE_KEYS[building.id] || "town.building");
+  const actions = (building.upgradeTrees || []).length
+    ? [createTownAction("town.maximizeThisBuilding", () => changeBuildingRank(buildingId, null, null, true))]
+    : [];
+  const content = [];
+  for (const tree of building.upgradeTrees || []) {
+    const card = document.createElement("section");
+    card.className = "upgrade-tree";
+    const heading = document.createElement("h3");
+    heading.textContent = t(UPGRADE_TITLE_KEYS[tree.id] || "town.upgradeTree");
+    const nodes = document.createElement("div");
+    nodes.className = "upgrade-nodes";
+    for (let index = 0; index < (tree.nodes || []).length; index += 1) {
+      const node = tree.nodes[index];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `upgrade-node${node.purchased ? " purchased" : ""}`;
+      button.textContent = node.code.toUpperCase();
+      button.title = t("town.upgradeNodeTip", { code: node.code.toUpperCase() });
+      button.addEventListener("click", (event) => changeBuildingRank(buildingId, tree.id,
+        event.shiftKey ? tree.maxRank : Math.min(tree.maxRank, tree.rank + 1), false));
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        changeBuildingRank(buildingId, tree.id, event.shiftKey ? 0 : Math.max(0, tree.rank - 1), false);
+      });
+      nodes.append(button);
+    }
+    card.append(heading, nodes);
+    content.push(card);
+  }
+  if (!content.length) content.push(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noUpgradeTrees") }));
+  presentBuildingEditor(title, t("town.buildingUpgrade"), actions, t("town.upgradeControls"), content);
+}
+
+async function changeBuildingRank(buildingId, treeId, rank, maximize) {
+  if (!latestCampaign) return;
+  if (!maximize) {
+    const tree = campaignBuilding(buildingId)?.upgradeTrees?.find((item) => item.id === treeId);
+    if (!tree || tree.rank === rank) return;
+  }
+  try {
+    const updated = maximize
+      ? await editorGateway.maximizeTownBuildings(latestCampaign.revision, buildingId)
+      : await editorGateway.setTownBuildingRank(buildingId, treeId, rank, latestCampaign.revision);
+    renderCampaign(updated);
+    openBuildingEditor(buildingId);
+  } catch (error) { elements.townSaveState.textContent = displayError(error); }
+}
+
+function openDistrictEditor() {
+  if (!latestCampaign) return;
+  const systemOpen = latestCampaign.districtSystemOpen;
+  const actions = [
+    createTownAction("town.unlockAllDistricts", () => changeDistrict("unlock_all")),
+    createTownAction("town.lockAllAndSystem", () => changeDistrict("system_lock"), "secondary"),
+    createTownAction(systemOpen ? "town.lockDistrictSystem" : "town.unlockDistrictSystem",
+      () => changeDistrict(systemOpen ? "system_lock" : "system_open"), "secondary"),
+  ];
+  actions[0].disabled = !systemOpen;
+  actions[1].disabled = !systemOpen;
+  const content = [];
+  for (const district of latestCampaign.districts || []) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `district-entry${district.built ? " built" : ""}`;
+    row.disabled = !district.editable;
+    row.textContent = `${district.name} · ${district.built ? t("town.districtUnlocked") : t("town.districtLocked")}`;
+    row.title = t("town.districtClickTip");
+    row.addEventListener("click", () => changeDistrict("set", district.id, true));
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      changeDistrict("set", district.id, false);
+    });
+    content.push(row);
+  }
+  if (!content.length) content.push(Object.assign(document.createElement("p"), { className: "town-data-message", textContent: t("town.noDistricts") }));
+  presentBuildingEditor(t("town.areaBuildings"), t("town.districtSystem"), actions,
+    systemOpen ? t("town.districtControls") : t("town.districtSystemLocked"), content);
+}
+
+async function changeDistrict(action, districtId = undefined, built = undefined) {
+  if (!latestCampaign) return;
+  try {
+    renderCampaign(await editorGateway.editDistrict(action, latestCampaign.revision, districtId, built));
+    openDistrictEditor();
+  } catch (error) { elements.townSaveState.textContent = displayError(error); }
 }
 
 async function loadCampaign() {
@@ -461,6 +625,13 @@ elements.form.addEventListener("submit", async (event) => {
 });
 
 elements.refreshProfiles.addEventListener("click", loadProfiles);
+elements.buildingEditorClose.addEventListener("click", () => elements.buildingEditor.close());
+elements.buildingMaximizeAll.addEventListener("click", async () => {
+  if (!latestCampaign) return;
+  elements.buildingMaximizeAll.disabled = true;
+  try { renderCampaign(await editorGateway.maximizeTownBuildings(latestCampaign.revision)); }
+  catch (error) { elements.townSaveState.textContent = displayError(error); }
+});
 elements.reinitializeMods.addEventListener("click", async () => {
   elements.reinitializeMods.disabled = true;
   elements.configurationMessage.textContent = t("initialization.reinitializing");

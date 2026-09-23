@@ -215,6 +215,7 @@ if(DDSE_BUILD_HTTP)
     target_link_libraries(ddse_http_adapter PUBLIC
         ddse_application
         Drogon::Drogon
+        nlohmann_json::nlohmann_json
     )
 
     add_executable(ddse_http src/composition_root/http_main.cpp)
