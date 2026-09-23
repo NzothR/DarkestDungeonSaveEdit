@@ -969,6 +969,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
 
         auto cloned = clone_document(original);
         auto source_snapshot = clone_document(original);
+        std::size_t active_mutation_index{};
         const auto clone_entry = [&](const CampaignDocumentMutation& mutation, bool insert_at_position)
             -> core::Result<void, core::Error> {
             std::string reason;
@@ -982,7 +983,11 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   reason.empty() ? "Clone source has a different DSON value kind" : reason,
-                                  {{"document", document_id}, {"path", mutation.source_path}}));
+                                  {{"document", document_id}, {"path", mutation.source_path},
+                                   {"source_path", mutation.source_path},
+                                   {"target_path", mutation.target_path},
+                                   {"mutation_index", std::to_string(active_mutation_index)},
+                                   {"phase", "clone_source_lookup"}}));
             const auto slash = mutation.target_path.find_last_of('/');
             if (slash == std::string::npos || mutation.target_path.substr(slash + 1) != mutation.new_key)
                 return core::Result<void, core::Error>::failure(
@@ -1044,12 +1049,21 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             if (!erased)
                 return core::Result<SaveCandidate, core::Error>::failure(erased.error());
         }
+        active_mutation_index = 0;
         for (const auto& mutation : document_mutations) {
+            ++active_mutation_index;
             std::string reason;
             if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                 mutation.kind == CampaignDocumentMutationKind::InsertClone) {
                 auto appended = clone_entry(mutation, mutation.kind == CampaignDocumentMutationKind::InsertClone);
-                if (!appended) return core::Result<SaveCandidate, core::Error>::failure(appended.error());
+                if (!appended) {
+                    auto error = appended.error();
+                    error.context["semantic_property"] = mutation.semantic_property;
+                    error.context["mutation_index"] = std::to_string(active_mutation_index);
+                    error.context["target_path"] = mutation.target_path;
+                    error.context["source_path"] = mutation.source_path;
+                    return core::Result<SaveCandidate, core::Error>::failure(std::move(error));
+                }
             } else if (mutation.kind == CampaignDocumentMutationKind::Erase) {
                 auto target = locate_field_by_path(cloned, mutation.target_path, reason);
                 if (!target || target->get().kind != mutation.expected_kind)

@@ -914,6 +914,34 @@ std::filesystem::path commit_backup_directory(const application::AppConfiguratio
     return configuration.backup_root / "SaveBackups" / directory;
 }
 
+nlohmann::json save_error_log_value(const core::Error& error) {
+    nlohmann::json value{{"code", core::to_string(error.code)},
+                         {"module", error.module},
+                         {"message", error.message},
+                         {"context", error.context}};
+    if (error.cause) value["cause"] = save_error_log_value(*error.cause);
+    return value;
+}
+
+void append_save_debug_log(const std::filesystem::path& data_root, std::string_view profile_id,
+                           std::uint64_t revision, const core::Error& error) noexcept {
+    try {
+        const auto directory = data_root / "logs";
+        std::filesystem::create_directories(directory);
+        std::ofstream output(directory / "save-debug.jsonl", std::ios::binary | std::ios::app);
+        if (!output) return;
+        const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const nlohmann::json entry{{"timestamp_unix_ms", timestamp},
+                                   {"profile_id", profile_id},
+                                   {"revision", revision},
+                                   {"error", save_error_log_value(error)}};
+        output << entry.dump() << '\n';
+    } catch (...) {
+        // Logging must not change the save result or interrupt the HTTP handler.
+    }
+}
+
 void handle_campaign_save(const drogon::HttpRequestPtr& request,
                           std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                           const std::shared_ptr<ServerContext>& context) {
@@ -944,6 +972,8 @@ void handle_campaign_save(const drogon::HttpRequestPtr& request,
         context->campaign->profile, changes, context->campaign->profile.descriptor.root_path,
         backup_directory, application::SaveCommitMode::DirectSource);
     if (!committed) {
+        append_save_debug_log(configuration.data_root, context->campaign->profile.descriptor.id,
+                              context->campaign->edits->revision(), committed.error());
         const auto status = committed.error().code == core::ErrorCode::ConcurrentSaveChanged
             ? drogon::k409Conflict
             : (committed.error().code == core::ErrorCode::ValidationFailed ||
