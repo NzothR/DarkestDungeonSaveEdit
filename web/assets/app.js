@@ -44,6 +44,8 @@ const elements = {
   townBackground: document.querySelector("#town-background"),
   townBackgroundFallback: document.querySelector(".town-background-fallback"),
   townSettingsButton: document.querySelector("#town-settings-button"),
+  townReloadProfile: document.querySelector("#town-reload-profile"),
+  settingsReturnTown: document.querySelector("#settings-return-town"),
   heroList: document.querySelector("#hero-list"),
   trinketGrid: document.querySelector("#trinket-grid"),
   resourceGrid: document.querySelector("#resource-grid"),
@@ -97,6 +99,7 @@ async function setLocale(nextLocale) {
 
 function showTownShell() {
   settingsMode = false;
+  elements.settingsReturnTown.hidden = true;
   elements.panel.hidden = true;
   elements.townShell.hidden = false;
   const candidates = [
@@ -652,9 +655,28 @@ elements.townSettingsButton.addEventListener("click", () => {
   settingsMode = true;
   elements.townShell.hidden = true;
   elements.panel.hidden = false;
+  elements.settingsReturnTown.hidden = false;
   elements.configurationSubmit.disabled = false;
   elements.configurationSubmit.dataset.mode = "save";
   elements.configurationSubmit.textContent = t("settings.save");
+});
+elements.settingsReturnTown.addEventListener("click", () => {
+  if (!settingsMode) return;
+  elements.settingsReturnTown.hidden = true;
+  showTownShell();
+});
+elements.townReloadProfile.addEventListener("click", async () => {
+  if (latestCampaign?.dirty && !window.confirm(t("town.reloadDiscardDraft"))) return;
+  elements.townReloadProfile.disabled = true;
+  elements.townSaveState.textContent = t("town.reloadWorking");
+  try {
+    renderCampaign(await editorGateway.reloadCampaign());
+    elements.townSaveState.textContent = t("town.reloadComplete");
+  } catch (error) {
+    elements.townSaveState.textContent = displayError(error);
+  } finally {
+    elements.townReloadProfile.disabled = false;
+  }
 });
 elements.townUndo.addEventListener("click", async () => {
   if (!latestCampaign?.canUndo) return;

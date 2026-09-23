@@ -35,7 +35,10 @@
             <p class="eyebrow left" data-i18n="f1.eyebrow"></p>
             <h2 data-i18n="f1.workspace"></h2>
           </div>
-          <span id="configuration-state" class="badge"></span>
+          <div class="panel-heading-actions">
+            <span id="configuration-state" class="badge"></span>
+            <button id="settings-return-town" class="secondary" type="button" data-i18n="settings.backToTown" hidden></button>
+          </div>
         </div>
         <form id="configuration-form" class="settings-form">
           <label><span data-i18n="settings.gameRoot"></span><span class="path-picker"><input id="game-root" name="gameRoot" type="text" readonly required><button type="button" data-directory-kind="game" data-i18n-aria="picker.game">…</button></span></label>
@@ -110,7 +113,10 @@
             <button id="town-undo" type="button" class="secondary" data-i18n="town.undo">撤销</button>
             <button id="town-redo" type="button" class="secondary" data-i18n="town.redo">重做</button>
           </div>
-          <button id="town-settings-button" class="town-settings-button" type="button" data-i18n="town.settings">设置</button>
+          <div class="town-utility-controls">
+            <button id="town-reload-profile" class="town-reload-button" type="button" data-i18n-title="town.reloadProfileTip" data-i18n-aria="town.reloadProfileTip">↻</button>
+            <button id="town-settings-button" class="town-settings-button" type="button" data-i18n="town.settings">设置</button>
+          </div>
           <button id="town-save" class="town-save-button" type="button" data-i18n="town.save">保存</button>
           <footer class="town-status-bar"><span id="town-save-state" class="town-save-state" data-i18n="town.clean">未修改</span></footer>
         </div>

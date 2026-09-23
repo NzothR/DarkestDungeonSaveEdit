@@ -73,6 +73,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 
 .panel { margin-top: 24px; padding: 22px; border: 1px solid var(--line); background: #ffffff04; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.panel-heading-actions { display: flex; align-items: center; gap: 8px; }
+.panel-heading-actions button { border: 1px solid #ffffff30; padding: 6px 9px; background: #ffffff08; color: var(--muted); cursor: pointer; font: inherit; }
 .panel-heading h2 { margin: 4px 0 0; font: 500 22px Georgia, "Microsoft YaHei UI", serif; }
 .eyebrow.left { margin: 0; text-align: left; }
 .badge { padding: 5px 8px; border: 1px solid #83a66e66; color: #a9c38b; font-size: 11px; }
@@ -182,7 +184,10 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .town-history-controls button:disabled { opacity: .45; cursor: not-allowed; }
 .town-save-button { position: absolute; z-index: 9; left: 50%; bottom: 1.1%; transform: translateX(-50%); min-width: 110px; }
 .town-save-button:disabled { opacity: .5; cursor: not-allowed; }
-.town-settings-button { position: absolute; right: 1.8%; bottom: 1.1%; z-index: 8; padding: 6px 15px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; }
+.town-utility-controls { position: absolute; right: 1.8%; bottom: 1.1%; z-index: 8; display: flex; gap: 7px; }
+.town-settings-button, .town-reload-button { padding: 6px 12px; color: #d7b476; border: 1px solid #9a754766; background: #151210dd; box-shadow: 0 3px 10px #0008; font: inherit; cursor: pointer; }
+.town-reload-button { width: 36px; padding: 5px; font-size: 20px; line-height: 1; }
+.town-utility-controls button:disabled { opacity: .5; cursor: wait; }
 .town-status-bar { position: absolute; z-index: 7; left: 0; right: 0; bottom: 0; height: 6.5%; display: flex; align-items: center; gap: 8px; padding: 0 2%; border-top: 1px solid #c59a5366; background: #12100eee; color: #c6b79f; font-size: clamp(9px, .75vw, 13px); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #83a66e; box-shadow: 0 0 10px #83a66e; }
 .town-save-state { max-width: 78%; color: #b89a68; overflow-wrap: anywhere; }

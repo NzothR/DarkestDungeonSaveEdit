@@ -627,6 +627,21 @@ void handle_campaign(const drogon::HttpRequestPtr& request,
     callback(json_ok(campaign_value(*context->campaign)));
 }
 
+void handle_campaign_reload(const drogon::HttpRequestPtr& request,
+                            std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                            const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    std::lock_guard lock(context->campaign_mutex);
+    context->campaign.reset();
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    callback(json_ok(campaign_value(*context->campaign)));
+}
+
 void handle_campaign_resource(const drogon::HttpRequestPtr& request,
                               std::function<void(const drogon::HttpResponsePtr&)>&& callback,
                               const std::shared_ptr<ServerContext>& context) {
@@ -1637,6 +1652,11 @@ int run_drogon_http_server(
                                       std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign(request, std::move(callback), context);
         }, {drogon::Get});
+    server.registerHandler(
+        "/api/campaign/reload", [context](const drogon::HttpRequestPtr& request,
+                                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_reload(request, std::move(callback), context);
+        }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/resource", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {

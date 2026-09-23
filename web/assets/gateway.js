@@ -57,6 +57,7 @@ export const editorGateway = Object.freeze({
   restoreRecovery: () => request("/api/recovery/restore", "POST", {}),
   discardRecovery: () => request("/api/recovery", "POST", {}),
   getCampaign: () => request("/api/campaign"),
+  reloadCampaign: () => request("/api/campaign/reload", "POST", {}),
   setCampaignResource: (index, amount, revision) => request("/api/campaign/resource", "POST", { index, amount, revision }),
   setTownBuildingRank: (buildingId, treeId, rank, revision) => request("/api/campaign/building-rank", "POST", { buildingId, treeId, rank, revision }),
   maximizeTownBuildings: (revision, buildingId = undefined) => request("/api/campaign/building-max", "POST", { revision, ...(buildingId === undefined ? {} : { buildingId }) }),

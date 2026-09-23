@@ -24,6 +24,7 @@
   "settings.autoEditSave": "Enable automatic edit saves",
   "settings.autoEditSaveInterval": "Auto-save interval (seconds)",
   "settings.save": "Save settings",
+  "settings.backToTown": "Back to town",
   "language.en_us": "English",
   "language.zh_cn": "Simplified Chinese",
   "settings.saving": "Saving settings…",
@@ -84,6 +85,10 @@
   ,"town.memory": "Memory"
   ,"town.blueprint": "Blueprint"
   ,"town.settings": "Settings"
+  ,"town.reloadProfileTip": "Reload the current save profile"
+  ,"town.reloadDiscardDraft": "Reloading will discard unsaved edits. Continue?"
+  ,"town.reloadWorking": "Reloading save profile…"
+  ,"town.reloadComplete": "Save profile reloaded"
   ,"town.stageCoach": "Stage Coach"
   ,"town.guild": "Guild"
   ,"town.blacksmith": "Blacksmith"
