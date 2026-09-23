@@ -978,7 +978,16 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                     adapter_error(core::ErrorCode::ConcurrentSaveChanged,
                                   "Clone destination already exists",
                                   {{"document", document_id}, {"path", mutation.target_path}}));
+            reason.clear();
+            DsonDocument* source_document_tree = &source_snapshot;
             auto source_field = locate_field_by_path(source_snapshot, mutation.source_path, reason);
+            if (!source_field) {
+                // Some ordered batches intentionally clone a container created by an earlier
+                // mutation in this same batch (for example districts -> districts/buildings).
+                reason.clear();
+                source_field = locate_field_by_path(cloned, mutation.source_path, reason);
+                if (source_field) source_document_tree = &cloned;
+            }
             if (!source_field || source_field->get().kind != mutation.expected_kind)
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
@@ -988,6 +997,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                                    {"target_path", mutation.target_path},
                                    {"mutation_index", std::to_string(active_mutation_index)},
                                    {"phase", "clone_source_lookup"}}));
+            reason.clear();
             const auto slash = mutation.target_path.find_last_of('/');
             if (slash == std::string::npos || mutation.target_path.substr(slash + 1) != mutation.new_key)
                 return core::Result<void, core::Error>::failure(
@@ -995,7 +1005,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                                   "Clone key does not match the mapped destination path",
                                   {{"path", mutation.target_path}}));
             auto destination = locate_document_for_path(cloned, mutation.target_path.substr(0, slash), reason);
-            auto source_document = locate_document_for_path(source_snapshot, mutation.source_path, reason);
+            auto source_document = locate_document_for_path(*source_document_tree, mutation.source_path, reason);
             if (!destination || !source_document)
                 return core::Result<void, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
