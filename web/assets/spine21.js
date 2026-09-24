@@ -511,14 +511,32 @@ function createRenderer(canvas, image) {
 
 function cameraFor(batches) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let weightedX = 0, totalArea = 0;
   for (const batch of batches) for (const [x, y] of batch.vertices) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     minX = Math.min(minX, x); minY = Math.min(minY, y);
     maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
   }
   if (!Number.isFinite(minX)) throw new Error("No visible Spine attachments");
-  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2,
-    width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  for (const batch of batches) {
+    for (let i = 0; i < batch.triangles.length; i += 3) {
+      const a = batch.vertices[batch.triangles[i]];
+      const b = batch.vertices[batch.triangles[i + 1]];
+      const c = batch.vertices[batch.triangles[i + 2]];
+      if (!a || !b || !c) continue;
+      const area = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+      if (!Number.isFinite(area)) continue;
+      const visibleArea = area * batch.alpha;
+      weightedX += (a[0] + b[0] + c[0]) / 3 * visibleArea;
+      totalArea += visibleArea;
+    }
+  }
+  const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+  const boundsCenterX = (minX + maxX) / 2;
+  const visualCenterX = totalArea > 0 ? weightedX / totalArea : boundsCenterX;
+  const horizontalOffset = Math.max(-width * .07, Math.min(width * .07, visualCenterX - boundsCenterX));
+  return { x: boundsCenterX + horizontalOffset, y: (minY + maxY) / 2 + height * .05,
+    width, height };
 }
 
 export async function mountSpine21(canvas, paths, signal) {

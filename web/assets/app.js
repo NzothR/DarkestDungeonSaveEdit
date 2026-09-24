@@ -500,10 +500,17 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
     card.className = `hero-detail-item hero-detail-item-${kind}`;
     if (entry.polarity === "negative") card.classList.add("hero-detail-item-negative");
     card.title = cleanGameText(entry.name || entry.id);
+    if (kind === "camping" && entry.learned === false) {
+      card.classList.add("hero-detail-skill-unlearned");
+      card.title += ` · ${t("hero.skillUnlearned")}`;
+    }
     if (kind !== "quirk") {
       const image = heroDetailImage(entry.iconPath, entry.assets, [kind, "icon", "skill", "trinket"], null);
-      if (image) card.append(image);
-      else card.append(Object.assign(document.createElement("span"), { className: "hero-detail-item-symbol", textContent: kind === "disease" ? "✚" : "✦" }));
+      const art = kind === "trinket" ? document.createElement("span") : card;
+      if (kind === "trinket") art.className = "hero-detail-trinket-art";
+      if (image) art.append(image);
+      else art.append(Object.assign(document.createElement("span"), { className: "hero-detail-item-symbol", textContent: kind === "disease" ? "✚" : "✦" }));
+      if (kind === "trinket") card.append(art);
     }
     const name = document.createElement("span");
     name.textContent = cleanGameText(entry.name || entry.id);

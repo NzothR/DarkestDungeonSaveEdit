@@ -232,6 +232,7 @@
   ,"hero.noDiseases": "No diseases"
   ,"hero.previewPortrait": "Idle animation preview pending"
   ,"hero.idlePreview": "Hero idle animation"
+  ,"hero.skillUnlearned": "Not learned"
   ,"hero.previewUnavailable": "Preview unavailable"
   ,"hero.addHint": "Selected classes are added when selected; otherwise all visible classes are added."
   ,"hero.addSelected": "Add Heroes"

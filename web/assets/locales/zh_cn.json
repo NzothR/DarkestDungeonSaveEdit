@@ -232,6 +232,7 @@
   ,"hero.noDiseases": "暂无疾病"
   ,"hero.previewPortrait": "待机动画预览待接入"
   ,"hero.idlePreview": "英雄待机动画"
+  ,"hero.skillUnlearned": "未解锁"
   ,"hero.previewUnavailable": "暂无角色预览"
   ,"hero.addHint": "有选中时添加选中的职业；没有选中时添加当前显示的职业。"
   ,"hero.addSelected": "添加英雄"

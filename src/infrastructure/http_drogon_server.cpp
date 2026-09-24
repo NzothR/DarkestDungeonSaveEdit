@@ -965,7 +965,44 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             return entries;
         };
         item["combatSkills"] = skills_value(hero.combat_skills, false);
-        item["campingSkills"] = skills_value(hero.camping_skills, true);
+        Json::Value camping_skills(Json::arrayValue);
+        if (catalog != campaign.cached_hero_catalog.end() && (*catalog).isMember("availableCampingSkills"))
+            camping_skills = (*catalog)["availableCampingSkills"];
+        const auto selected_camping = skills_value(hero.camping_skills, true);
+        for (const auto& selected : selected_camping) {
+            bool found = false;
+            for (auto& available : camping_skills) {
+                if (available["id"].asString() != selected["id"].asString()) continue;
+                available["selected"] = true;
+                if (!available.isMember("iconPath") && selected.isMember("iconPath"))
+                    available["iconPath"] = selected["iconPath"];
+                found = true;
+                break;
+            }
+            if (!found) {
+                auto entry = selected;
+                entry["selected"] = true;
+                camping_skills.append(std::move(entry));
+            }
+        }
+        std::set<std::int32_t> purchase_instances;
+        const auto class_id = item["classId"].asString();
+        const auto weapon_tree = static_cast<std::int32_t>(core::dson::string_hash(class_id + ".weapon"));
+        for (const auto& node : model.upgrade_purchase_nodes)
+            if (node.tree_id == weapon_tree) purchase_instances.insert(node.instance_number);
+        for (auto& skill : camping_skills) {
+            bool learned = skill.get("selected", false).asBool();
+            if (purchase_instances.size() == 1) {
+                const auto skill_tree = static_cast<std::int32_t>(
+                    core::dson::string_hash(class_id + "." + skill["id"].asString()));
+                for (const auto& node : model.upgrade_purchase_nodes)
+                    if (node.instance_number == *purchase_instances.begin() && node.tree_id == skill_tree &&
+                        node.requirement_code == '0' && node.is_purchased.value.value_or(false)) learned = true;
+            }
+            skill["learned"] = learned;
+            if (!skill.isMember("selected")) skill["selected"] = false;
+        }
+        item["campingSkills"] = std::move(camping_skills);
         Json::Value equipped(Json::arrayValue);
         for (const auto& trinket : hero.trinkets) {
             Json::Value entry(Json::objectValue);
@@ -1395,6 +1432,55 @@ void cache_combat_skill_icons(ServerContext& context, ServerContext::CampaignSes
     }
 }
 
+Json::Value available_camping_skills(const application::ContentDefinition& hero_class,
+                                     const std::vector<application::ContentDefinition>& skills,
+                                     const application::IContentEnvironment& content) {
+    Json::Value result(Json::arrayValue);
+    std::set<std::string, std::less<>> included;
+    for (const auto& skill : skills) {
+        auto path = skill.provenance.virtual_path;
+        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (path.find("camping_skills") == std::string::npos) continue;
+        const auto separator = skill.id.find(':');
+        if (separator == std::string::npos || separator + 1 == skill.id.size()) continue;
+        const auto raw_id = skill.id.substr(separator + 1);
+        bool applicable = skill.id.starts_with(hero_class.id + ":");
+        try {
+            const auto payload = nlohmann::json::parse(skill.payload_json);
+            if (!payload.is_object()) continue;
+            if (payload.contains("level")) {
+                const auto& level = payload["level"];
+                if ((level.is_number_integer() && level.get<std::int32_t>() != 0) ||
+                    (level.is_string() && level.get<std::string>() != "0")) continue;
+            }
+            if (payload.contains("hero_classes") && payload["hero_classes"].is_array()) {
+                applicable = std::any_of(payload["hero_classes"].begin(), payload["hero_classes"].end(),
+                    [&](const auto& value) { return value.is_string() && value.template get<std::string>() == hero_class.id; });
+            }
+        } catch (const nlohmann::json::exception&) { continue; }
+        if (!applicable || !included.insert(raw_id).second) continue;
+        Json::Value entry(Json::objectValue);
+        entry["id"] = raw_id;
+        const auto localized = content.resolve_localization("camping_skill_name_" + raw_id);
+        const auto name = localized && localized.value() && !localized.value()->value.empty()
+            ? localized.value()->value
+            : (skill.localized_name.empty() ? skill.display_name : skill.localized_name);
+        entry["name"] = strip_game_markup(name.empty() ? raw_id : name);
+        const auto icon = std::find_if(skill.asset_references.begin(), skill.asset_references.end(),
+            [](const auto& asset) { return asset.role == "skill_icon" && asset.resolved_asset.has_value(); });
+        if (icon != skill.asset_references.end()) entry["iconPath"] = icon->virtual_path;
+        else {
+            const auto icon_path = "raid/camping/skill_icons/camp_skill_" + raw_id + ".png";
+            const auto resolved = content.resolve_asset(icon_path);
+            if (resolved && resolved.value()) entry["iconPath"] = icon_path;
+        }
+        result.append(std::move(entry));
+    }
+    return result;
+}
+
 void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& campaign) {
     const auto started = std::chrono::steady_clock::now();
     const auto listed = campaign.content->list_content("hero_class");
@@ -1465,6 +1551,7 @@ void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& c
         for (const auto& skill : starter.value().camping_skills) camping_skills.append(skill);
         item["starterCombatSkills"] = std::move(combat_skills);
         item["starterCampingSkills"] = std::move(camping_skills);
+        item["availableCampingSkills"] = available_camping_skills(definition, skills.value(), *campaign.content);
         item["baseHitPoints"] = starter.value().base_hit_points;
         campaign.cached_hero_catalog.push_back(std::move(item));
     }
