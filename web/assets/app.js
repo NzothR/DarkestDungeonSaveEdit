@@ -73,6 +73,8 @@ const elements = {
   heroDetailNegative: document.querySelector("#hero-detail-negative"),
   heroDetailUnknownWrap: document.querySelector("#hero-detail-unknown-wrap"),
   heroDetailUnknown: document.querySelector("#hero-detail-unknown"),
+  heroDetailWeapon: document.querySelector("#hero-detail-weapon"),
+  heroDetailArmour: document.querySelector("#hero-detail-armour"),
   heroDetailTrinkets: document.querySelector("#hero-detail-trinkets"),
   heroDetailCombat: document.querySelector("#hero-detail-combat"),
   heroDetailCamping: document.querySelector("#hero-detail-camping"),
@@ -520,6 +522,26 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
   }
 }
 
+function renderHeroEquipment(container, equipment, kind) {
+  container.replaceChildren();
+  const label = t(kind === "weapon" ? "hero.weapon" : "hero.armour");
+  const art = document.createElement("span");
+  art.className = "hero-detail-gear-art";
+  const image = heroDetailImage(equipment?.iconPath, null, [], null);
+  if (image) art.append(image);
+  else art.append(Object.assign(document.createElement("span"), { className: "hero-detail-item-symbol", textContent: kind === "weapon" ? "⚔" : "◆" }));
+  const copy = document.createElement("span");
+  copy.className = "hero-detail-gear-copy";
+  copy.append(Object.assign(document.createElement("small"), { textContent: label }));
+  const name = cleanGameText(equipment?.name || label);
+  copy.append(Object.assign(document.createElement("strong"), { textContent: name }));
+  copy.append(Object.assign(document.createElement("span"), {
+    textContent: t("hero.equipmentRank", { rank: equipment?.rank == null ? "—" : equipment.rank }),
+  }));
+  container.title = `${name} · ${copy.lastChild.textContent}`;
+  container.append(art, copy);
+}
+
 function stopHeroIdle() {
   heroIdleController?.abort();
   heroIdleController = null;
@@ -578,6 +600,8 @@ function renderHeroDetail() {
   const unknownQuirks = quirks.filter((entry) => entry.polarity !== "positive" && entry.polarity !== "negative");
   elements.heroDetailUnknownWrap.hidden = !unknownQuirks.length;
   if (unknownQuirks.length) renderHeroDetailEntries(elements.heroDetailUnknown, unknownQuirks, "quirk", "hero.noQuirks");
+  renderHeroEquipment(elements.heroDetailWeapon, hero.equipment?.weapon, "weapon");
+  renderHeroEquipment(elements.heroDetailArmour, hero.equipment?.armour, "armour");
   renderHeroDetailEntries(elements.heroDetailCombat, hero.combatSkills || [], "combat", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailCamping, hero.campingSkills || [], "camping", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailDiseases, (hero.quirks || []).filter((entry) => entry.isDisease), "disease", "hero.noDiseases");

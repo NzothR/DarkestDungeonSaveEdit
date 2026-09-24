@@ -19,6 +19,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -110,6 +111,7 @@ struct ServerContext {
         std::vector<Json::Value> cached_trinket_catalog;
         std::vector<Json::Value> cached_hero_catalog;
         std::map<std::string, std::string, std::less<>> cached_combat_skill_icons;
+        std::map<std::string, Json::Value, std::less<>> cached_hero_equipment;
         std::vector<std::int32_t> resolve_level_thresholds;
         std::uint64_t next_hero_guid{1};
         std::vector<application::ContentDefinition> trinket_definitions;
@@ -918,6 +920,26 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             if (!item.isMember("portraitPath") && catalog->isMember("portraitPath"))
                 item["portraitPath"] = (*catalog)["portraitPath"];
         }
+        Json::Value equipment(Json::objectValue);
+        const auto art = campaign.cached_hero_equipment.find(item["classId"].asString());
+        for (const auto& [kind, rank] : std::array{
+                 std::pair{"weapon", hero.weapon_rank.value},
+                 std::pair{"armour", hero.armour_rank.value}}) {
+            Json::Value entry(Json::objectValue);
+            entry["rank"] = rank ? Json::Value(*rank) : Json::Value(Json::nullValue);
+            if (art != campaign.cached_hero_equipment.end() && art->second.isMember(kind)) {
+                const auto& levels = art->second[kind];
+                entry["maxRank"] = static_cast<Json::Int>(levels.size()) - 1;
+                if (rank && *rank >= 0 && static_cast<Json::ArrayIndex>(*rank) < levels.size() &&
+                    levels[static_cast<Json::ArrayIndex>(*rank)].isObject()) {
+                    const auto& level = levels[static_cast<Json::ArrayIndex>(*rank)];
+                    if (level.isMember("name")) entry["name"] = level["name"];
+                    if (level.isMember("iconPath")) entry["iconPath"] = level["iconPath"];
+                }
+            }
+            equipment[kind] = std::move(entry);
+        }
+        item["equipment"] = std::move(equipment);
         Json::Value quirks(Json::arrayValue);
         for (const auto& quirk : hero.quirks) {
             Json::Value entry(Json::objectValue);
@@ -1398,8 +1420,8 @@ std::string art_field(std::string_view line, std::string_view field) {
     return std::string{line.substr(start, end == std::string_view::npos ? end : end - start)};
 }
 
-void cache_combat_skill_icons(ServerContext& context, ServerContext::CampaignSession& campaign,
-                              const application::ContentDefinition& definition) {
+void cache_hero_art(ServerContext& context, ServerContext::CampaignSession& campaign,
+                    const application::ContentDefinition& definition) {
     const auto& config = context.configuration_store.current();
     std::filesystem::path source_root;
     const auto& source = definition.provenance.source_id;
@@ -1421,14 +1443,45 @@ void cache_combat_skill_icons(ServerContext& context, ServerContext::CampaignSes
     std::string line;
     while (std::getline(input, line)) {
         const auto first = line.find_first_not_of(" \t");
-        if (first == std::string::npos || !std::string_view{line}.substr(first).starts_with("combat_skill:")) continue;
-        const auto skill_id = art_field(line, "id");
-        const auto icon_id = art_field(line, "icon");
-        if (skill_id.empty() || icon_id.empty() || icon_id.find_first_of("/\\.") != std::string::npos) continue;
-        const auto virtual_path = "heroes/" + definition.id + "/" + definition.id + ".ability." + icon_id + ".png";
+        if (first == std::string::npos) continue;
+        const auto record = std::string_view{line}.substr(first);
+        if (record.starts_with("combat_skill:")) {
+            const auto skill_id = art_field(line, "id");
+            const auto icon_id = art_field(line, "icon");
+            if (skill_id.empty() || icon_id.empty() || icon_id.find_first_of("/\\.") != std::string::npos) continue;
+            const auto virtual_path = "heroes/" + definition.id + "/" + definition.id + ".ability." + icon_id + ".png";
+            const auto resolved = campaign.content->resolve_asset(virtual_path);
+            if (resolved && resolved.value())
+                campaign.cached_combat_skill_icons.insert_or_assign(definition.id + ":" + skill_id, virtual_path);
+            continue;
+        }
+        const auto kind = record.starts_with("weapon:") ? std::string{"weapon"} :
+            record.starts_with("armour:") ? std::string{"armour"} : std::string{};
+        if (kind.empty()) continue;
+        const auto name_key = art_field(line, "name");
+        const auto icon_file = art_field(line, "icon");
+        const auto suffix = name_key.find_last_of('_');
+        if (suffix == std::string::npos || !name_key.starts_with(definition.id + "_" + kind + "_") ||
+            icon_file.empty() || !icon_file.ends_with(".png") ||
+            icon_file.find_first_of("/\\") != std::string::npos) continue;
+        std::int32_t rank{};
+        const auto number = std::string_view{name_key}.substr(suffix + 1);
+        const auto [end, error] = std::from_chars(number.data(), number.data() + number.size(), rank);
+        if (error != std::errc{} || end != number.data() + number.size() || rank < 0 || rank > 50) continue;
+        Json::Value entry(Json::objectValue);
+        entry["rank"] = rank;
+        const auto localized = campaign.content->resolve_localization(name_key);
+        if (localized && localized.value() && !localized.value()->value.empty() &&
+            localized.value()->value != name_key)
+            entry["name"] = strip_game_markup(localized.value()->value);
+        const auto virtual_path = "heroes/" + definition.id + "/icons_equip/" + icon_file;
         const auto resolved = campaign.content->resolve_asset(virtual_path);
-        if (resolved && resolved.value())
-            campaign.cached_combat_skill_icons.insert_or_assign(definition.id + ":" + skill_id, virtual_path);
+        if (resolved && resolved.value()) entry["iconPath"] = virtual_path;
+        auto& equipment = campaign.cached_hero_equipment[definition.id];
+        if (equipment.isNull()) equipment = Json::Value(Json::objectValue);
+        auto& levels = equipment[kind];
+        if (levels.isNull()) levels = Json::Value(Json::arrayValue);
+        levels[static_cast<Json::ArrayIndex>(rank)] = std::move(entry);
     }
 }
 
@@ -1502,7 +1555,7 @@ void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& c
 
     std::size_t rejected_count{};
     for (const auto& definition : listed.value()) {
-        cache_combat_skill_icons(context, campaign, definition);
+        cache_hero_art(context, campaign, definition);
         const auto starter = hero_starter_data(definition, skills.value());
         if (!starter) {
             ++rejected_count;

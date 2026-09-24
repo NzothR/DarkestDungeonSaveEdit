@@ -492,14 +492,18 @@ function createRenderer(canvas, image) {
       gl.viewport(0, 0, width, height);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
-      const scale = Math.min(width * .82 / camera.width, height * .86 / camera.height);
+      const scale = Math.min(width * .82 / camera.width,
+        width * .9 / camera.fitWidth, height * .86 / camera.height);
+      const heightUse = camera.height * scale / height;
+      const bottomOffset = Math.max(.3, Math.min(.4, heightUse - .45));
+      const cameraY = camera.minY + height * bottomOffset / scale;
       const data = [];
       for (const batch of batches) {
         for (const index of batch.triangles) {
           const point = batch.vertices[index], uv = batch.uvs[index];
           if (!point || !uv) continue;
           data.push((point[0] - camera.x) * scale * 2 / width,
-            (point[1] - camera.y) * scale * 2 / height, uv[0], uv[1], batch.alpha);
+            (point[1] - cameraY) * scale * 2 / height, uv[0], uv[1], batch.alpha);
         }
       }
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
@@ -511,32 +515,30 @@ function createRenderer(canvas, image) {
 
 function cameraFor(batches) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  let weightedX = 0, totalArea = 0;
-  for (const batch of batches) for (const [x, y] of batch.vertices) {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    minX = Math.min(minX, x); minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-  }
-  if (!Number.isFinite(minX)) throw new Error("No visible Spine attachments");
   for (const batch of batches) {
-    for (let i = 0; i < batch.triangles.length; i += 3) {
-      const a = batch.vertices[batch.triangles[i]];
-      const b = batch.vertices[batch.triangles[i + 1]];
-      const c = batch.vertices[batch.triangles[i + 2]];
-      if (!a || !b || !c) continue;
-      const area = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
-      if (!Number.isFinite(area)) continue;
-      const visibleArea = area * batch.alpha;
-      weightedX += (a[0] + b[0] + c[0]) / 3 * visibleArea;
-      totalArea += visibleArea;
+    if (batch.alpha <= .05) continue;
+    for (const [x, y] of batch.vertices) {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
     }
   }
+  if (!Number.isFinite(minX)) throw new Error("No visible Spine attachments");
   const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+  let footX = 0, footPoints = 0;
+  for (const batch of batches) {
+    if (batch.alpha <= .05) continue;
+    for (const [x, y] of batch.vertices) {
+      if (!Number.isFinite(x) || !Number.isFinite(y) || y > minY + height * .18) continue;
+      footX += x;
+      footPoints++;
+    }
+  }
   const boundsCenterX = (minX + maxX) / 2;
-  const visualCenterX = totalArea > 0 ? weightedX / totalArea : boundsCenterX;
-  const horizontalOffset = Math.max(-width * .07, Math.min(width * .07, visualCenterX - boundsCenterX));
-  return { x: boundsCenterX + horizontalOffset, y: (minY + maxY) / 2 + height * .05,
-    width, height };
+  const footCenterX = footPoints ? footX / footPoints : boundsCenterX;
+  const x = boundsCenterX + .65 * Math.max(-width * .2, Math.min(width * .2, footCenterX - boundsCenterX));
+  return { x, minY, width, height,
+    fitWidth: 2 * Math.max(x - minX, maxX - x) };
 }
 
 export async function mountSpine21(canvas, paths, signal) {

@@ -280,20 +280,31 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .hero-detail-item.locked { border-color: #bd9b5766; }
 .hero-detail-item-disease .hero-detail-item-symbol { color: #81a345; }
 .hero-detail-empty { margin: 7px 0; color: #766f64; font-size: 12px; }
+.hero-detail-gear { flex: 0 0 142px; min-height: 0; }
+.hero-detail-gear-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.hero-detail-gear-item { display: flex; align-items: center; min-width: 0; height: 82px; box-sizing: border-box; gap: 9px; padding: 5px; border: 1px solid #8b79534d; background: #15120fbb; }
+.hero-detail-gear-art { position: relative; display: grid; place-items: center; width: 64px; height: 68px; flex: 0 0 64px; box-sizing: border-box; overflow: hidden; border: 1px solid #8b79534d; background: #0b0a09; }
+.hero-detail-gear-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.hero-detail-gear-copy { display: grid; min-width: 0; gap: 4px; }
+.hero-detail-gear-copy small { color: #a99b85; font-size: 11px; }
+.hero-detail-gear-copy strong { overflow: hidden; color: #d9c69c; font-size: clamp(11px, .85vw, 15px); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.hero-detail-gear-copy span { color: #d7bd84; font-size: 12px; }
 .hero-detail-equipment { flex: 0 0 clamp(195px, 22vh, 210px); min-height: 0; }
 .hero-detail-trinket-list { display: flex; align-items: flex-start; flex-wrap: nowrap; min-width: 0; gap: 9px; padding-bottom: 9px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-color: #816944 #17130e; touch-action: pan-x; }
 .hero-detail-item-trinket { flex: 0 0 112px; flex-direction: column; justify-content: center; width: 112px; height: 132px; box-sizing: border-box; padding: 3px; text-align: center; scroll-snap-align: start; }
-.hero-detail-trinket-art { display: grid; place-items: center; width: 104px; height: 105px; flex: 0 0 105px; overflow: hidden; }
+.hero-detail-trinket-art { display: grid; place-items: center; width: 104px; height: 96px; flex: 0 0 96px; overflow: hidden; }
 .hero-detail-trinket-art img, .hero-detail-trinket-art .hero-detail-item-symbol { display: block; width: 104px; height: 105px; object-fit: contain; }
 .hero-detail-trinket-art img { transform: scale(1.65); }
 .hero-detail-item-trinket span:last-child { max-width: 100%; font-size: 11px; }
-.hero-detail-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 7px; }
-.hero-detail-skill-grid .hero-detail-item { min-height: 67px; flex-direction: column; justify-content: center; gap: 3px; padding: 5px; text-align: center; }
+.hero-detail-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); grid-auto-rows: 82px; gap: 7px; overflow-y: auto; scrollbar-color: #816944 #17130e; }
+.hero-detail-combat-panel .hero-detail-skill-grid { max-height: calc(82px * 3 + 7px * 2); }
+.hero-detail-camping-panel .hero-detail-skill-grid { max-height: calc(82px * 2 + 7px); }
+.hero-detail-skill-grid .hero-detail-item { box-sizing: border-box; min-height: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 5px; text-align: center; }
 .hero-detail-skill-grid .hero-detail-item img, .hero-detail-skill-grid .hero-detail-item-symbol { width: 42px; height: 42px; flex-basis: 42px; }
 .hero-detail-skill-grid .hero-detail-item span:last-child { max-width: 100%; font-size: 11px; }
 .hero-detail-skill-unlearned img { filter: grayscale(1) brightness(.45); }
 .hero-detail-skill-unlearned span:last-child { color: #827d78; }
-.hero-detail-diseases { margin-top: auto; }
+.hero-detail-diseases { flex: 0 0 auto; }
 .building-editor::backdrop { background: #050403bb; backdrop-filter: blur(2px); }
 .building-editor-shell { display: flex; max-height: min(82vh, 900px); flex-direction: column; padding: 20px; }
 .building-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 12px; border-bottom: 1px solid #ffffff18; }
