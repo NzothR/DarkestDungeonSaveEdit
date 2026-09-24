@@ -70,6 +70,11 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
         "inventory_item: .type \"gold\" .id \"\" .base_stack_limit 1750\n"
         "inventory_item: .type \"heirloom\" .id \"portrait\" .base_stack_limit 3\n");
     put(fs, game, "heroes/crusader/crusader.sprite.png", "png-metadata-only");
+    put(fs, game, "heroes/crusader/crusader_A/anim/crusader.sprite.idle.png", "idle-parts");
+    put(fs, game, "heroes/crusader/anim/crusader.sprite.idle.atlas", "idle-atlas");
+    put(fs, game, "heroes/crusader/anim/crusader.sprite.idle.skel", "idle-skeleton");
+    put(fs, game, "heroes/Mystic/Mystic.info.darkest", "combat_skill: .id \"spell\" .level 0\n");
+    put(fs, game, "heroes/Mystic/Mystic_A/anim/Mystic.sprite.idle.png", "mixed-case-idle");
     put(fs, game, "heroes/crusader/crusader.camping_skills.json",
         R"({"skills":[{"id":"stand_tall","buffs":[]}]})");
     put(fs, game, "panels/icons_equip/trinket/inv_trinket+test_trinket.png", "trinket-icon");
@@ -90,7 +95,7 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     ASSERT_EQ(first.value().sources.size(), 2U);
     EXPECT_EQ(first.value().sources[0].id, "vanilla");
     EXPECT_EQ(first.value().sources[1].id, "dlc:580100_crimson_court");
-    ASSERT_EQ(first.value().assets.size(), 2U);
+    ASSERT_EQ(first.value().assets.size(), 6U);
     EXPECT_TRUE(std::any_of(first.value().assets.begin(), first.value().assets.end(), [](const auto& asset) {
         return asset.virtual_path == "heroes/crusader/crusader.sprite.png";
     }));
@@ -102,7 +107,9 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
     EXPECT_NE(find_definition(first.value(), "hero_class", "flagellant"), nullptr);
     EXPECT_NE(find_definition(first.value(), "skill", "crusader:smite"), nullptr);
     EXPECT_NE(find_definition(first.value(), "skill", "flagellant:exsanguinate"), nullptr);
-    EXPECT_NE(find_definition(first.value(), "skill", "crusader:stand_tall"), nullptr);
+    const auto* camping_skill = find_definition(first.value(), "skill", "crusader:stand_tall");
+    ASSERT_NE(camping_skill, nullptr);
+    EXPECT_EQ(camping_skill->localization_key, "camping_skill_name_stand_tall");
     EXPECT_NE(find_definition(first.value(), "trinket", "test_trinket"), nullptr);
     EXPECT_NE(find_definition(first.value(), "trinket", "cc_trinket"), nullptr);
     EXPECT_NE(find_definition(first.value(), "quirk", "tough"), nullptr);
@@ -115,9 +122,26 @@ TEST(BaseContentScanner, ParsesDefinitionsLocalizationAssetsAndSeparatesDlcSourc
         return ref.definition_type == "hero_class" && ref.content_id == "crusader" &&
                ref.reference_type == "directory" && ref.virtual_path == "heroes/crusader/";
     }));
+    for (const auto role : {"idle_sprite", "idle_atlas", "idle_skeleton"}) {
+        EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(),
+            [&](const auto& ref) {
+                return ref.definition_type == "hero_class" && ref.content_id == "crusader" &&
+                       ref.asset_role == role && ref.reference_type == "file";
+            }));
+    }
+    EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(),
+        [](const auto& ref) {
+            return ref.definition_type == "hero_class" && ref.content_id == "Mystic" &&
+                   ref.asset_role == "idle_sprite" && ref.virtual_path == "heroes/Mystic/Mystic_A/anim/Mystic.sprite.idle.png";
+        }));
     EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(), [](const auto& ref) {
         return ref.definition_type == "trinket" && ref.content_id == "test_trinket" &&
                ref.virtual_path == "panels/icons_equip/trinket/inv_trinket+test_trinket.png";
+    }));
+    EXPECT_TRUE(std::any_of(first.value().asset_references.begin(), first.value().asset_references.end(), [](const auto& ref) {
+        return ref.definition_type == "skill" && ref.content_id == "crusader:stand_tall" &&
+               ref.asset_role == "skill_icon" &&
+               ref.virtual_path == "raid/camping/skill_icons/camp_skill_stand_tall.png";
     }));
     EXPECT_TRUE(std::any_of(first.value().relationships.begin(), first.value().relationships.end(), [](const auto& relation) {
         return relation.parent_type == "hero_class" && relation.parent_id == "crusader" &&

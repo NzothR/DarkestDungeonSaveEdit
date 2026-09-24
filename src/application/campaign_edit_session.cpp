@@ -673,6 +673,122 @@ bool apply_trinket_inventory_mutations(CampaignModel& model,
     return true;
 }
 
+bool apply_hero_roster_mutations(CampaignModel& model,
+                                 const std::vector<CampaignDocumentMutation>& mutations) {
+    const auto rewrite = [](std::string& path, std::string_view old_id, std::string_view new_id) {
+        const auto marker = "/heroes/" + std::string{old_id};
+        const auto position = path.find(marker);
+        if (position != std::string::npos) path.replace(position + 8, old_id.size(), new_id);
+    };
+    for (const auto& mutation : mutations) {
+        if (mutation.semantic_property != "Hero.PersistentId" || mutation.document_id != "persist.roster.json") continue;
+        if (mutation.kind == CampaignDocumentMutationKind::Erase) {
+            const auto found = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+                return hero.raw.display_path == mutation.target_path;
+            });
+            if (found == model.heroes.end()) return false;
+            model.heroes.erase(found);
+            for (std::size_t index = 0; index < model.heroes.size(); ++index) model.heroes[index].roster_position = index;
+        } else if (mutation.kind == CampaignDocumentMutationKind::Rename) {
+            const auto found = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+                return hero.raw.display_path == mutation.target_path;
+            });
+            if (found == model.heroes.end()) return false;
+            const auto old_id = found->persistent_id;
+            found->persistent_id = mutation.new_key;
+            rewrite(found->raw.display_path, old_id, mutation.new_key);
+            if (found->name.raw) rewrite(found->name.raw->display_path, old_id, mutation.new_key);
+            if (found->class_id.raw) rewrite(found->class_id.raw->display_path, old_id, mutation.new_key);
+        } else if (mutation.kind == CampaignDocumentMutationKind::AppendTemplate) {
+            domain::Hero added;
+            added.persistent_id = mutation.new_key;
+            added.roster_position = model.heroes.size();
+            added.state = domain::EntityState::Resolved;
+            added.read_only = false;
+            added.raw = {"persist.roster.json", {}, mutation.target_path};
+            const auto embedded = mutation.target_path + "/hero_file_data/raw_data => base_root/";
+            added.name.value = std::string{};
+            added.name.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "actor/name"};
+            added.class_id.value = mutation.template_hero_class;
+            added.class_id.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "heroClass"};
+            added.definition.raw_id = mutation.template_hero_class;
+            added.definition.display_name = mutation.template_class_name;
+            added.definition.source_id = mutation.template_source_id;
+            added.definition.state = domain::EntityState::Resolved;
+            if (!mutation.template_portrait_path.empty())
+                added.definition.assets.push_back({"portrait_roster", mutation.template_portrait_path,
+                    mutation.template_source_id, true});
+            added.resolve_xp.value = 0;
+            added.resolve_xp.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "resolveXp"};
+            added.level.value = 0;
+            added.stress.value = 0.0F;
+            added.stress.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "m_Stress"};
+            added.current_hp.value = mutation.template_base_hit_points;
+            added.current_hp.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "actor/current_hp"};
+            added.weapon_rank.value = 0;
+            added.weapon_rank.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "weapon_rank"};
+            added.armour_rank.value = 0;
+            added.armour_rank.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "armour_rank"};
+            for (const auto& id : mutation.template_combat_skills) {
+                domain::HeroSkillSelection skill;
+                skill.id = id;
+                skill.read_only = false;
+                skill.raw = {"persist.roster.json", {}, embedded + "skills/selected_combat_skills/" + id};
+                skill.raw_value.value = 0;
+                skill.raw_value.raw = skill.raw;
+                added.combat_skills.push_back(std::move(skill));
+            }
+            for (const auto& id : mutation.template_camping_skills) {
+                domain::HeroSkillSelection skill;
+                skill.id = id;
+                skill.camping = true;
+                skill.read_only = false;
+                skill.raw = {"persist.roster.json", {}, embedded + "skills/selected_camping_skills/" + id};
+                skill.raw_value.value = 0;
+                skill.raw_value.raw = skill.raw;
+                added.camping_skills.push_back(std::move(skill));
+            }
+            model.heroes.push_back(std::move(added));
+        } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+            const auto source = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+                return hero.raw.display_path == mutation.source_path;
+            });
+            if (source == model.heroes.end()) return false;
+            auto added = *source;
+            const auto old_id = added.persistent_id;
+            added.persistent_id = mutation.new_key;
+            added.roster_position = model.heroes.size();
+            rewrite(added.raw.display_path, old_id, mutation.new_key);
+            added.raw.display_path = mutation.target_path;
+            if (added.name.raw) rewrite(added.name.raw->display_path, old_id, mutation.new_key);
+            if (added.class_id.raw) rewrite(added.class_id.raw->display_path, old_id, mutation.new_key);
+            for (const auto& field : mutations) {
+                if (field.semantic_property != "Hero.PersistentId" || !field.after ||
+                    !field.target_path.starts_with(mutation.target_path + "/hero_file_data/raw_data => base_root/")) continue;
+                if (field.target_path.ends_with("/actor/name")) {
+                    if (const auto* value = std::get_if<std::string>(&*field.after)) added.name.value = *value;
+                } else if (field.target_path.ends_with("/resolveXp")) {
+                    if (const auto* value = std::get_if<std::int32_t>(&*field.after)) added.resolve_xp.value = *value;
+                } else if (field.target_path.ends_with("/weapon_rank")) {
+                    if (const auto* value = std::get_if<std::int32_t>(&*field.after)) added.weapon_rank.value = *value;
+                } else if (field.target_path.ends_with("/armour_rank")) {
+                    if (const auto* value = std::get_if<std::int32_t>(&*field.after)) added.armour_rank.value = *value;
+                } else if (field.target_path.ends_with("/m_Stress")) {
+                    if (const auto* value = std::get_if<float>(&*field.after)) added.stress.value = *value;
+                }
+            }
+            for (const auto& field : mutations) if (field.semantic_property == "Hero.PersistentId" &&
+                field.kind == CampaignDocumentMutationKind::ClearChildren &&
+                field.target_path.starts_with(mutation.target_path + "/hero_file_data/raw_data => base_root/")) {
+                if (field.target_path.ends_with("/quirks")) added.quirks.clear();
+                if (field.target_path.ends_with("/trinkets/items")) added.trinkets.clear();
+            }
+            model.heroes.push_back(std::move(added));
+        }
+    }
+    return true;
+}
+
 bool same_target(const CampaignOperationTarget& lhs, const CampaignOperationTarget& rhs) {
     return lhs.semantic_property == rhs.semantic_property && lhs.entity_id == rhs.entity_id &&
            lhs.occurrence_index == rhs.occurrence_index && lhs.member_id == rhs.member_id;
@@ -845,7 +961,7 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
         {"campaign.hero.set_resolve_xp", "修改英雄经验", CampaignOperationAvailability::Available,
          {"Hero.ResolveXp"}, "经验可写入；等级阈值与 UI 等级转换由上层规则负责。"},
         {"campaign.hero.rename", "修改英雄名称", CampaignOperationAvailability::Available,
-         {"Hero.Name"}, "可生成隔离验收档；游戏内确认前不允许普通安全提交。"},
+         {"Hero.Name"}, "支持修改现有英雄和本次会话新建英雄的名称。"},
         {"campaign.hero.set_stress", "设置英雄压力值", CampaignOperationAvailability::Available,
          {"Hero.Stress"}, "压力值可设置为任意有限非负数；设为 0 即清空压力。候选写回待游戏内验收。"},
         {"campaign.hero.set_affliction_state", "设置或清除英雄折磨", CampaignOperationAvailability::Available,
@@ -860,7 +976,11 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
         {"campaign.town.set_district_built", "设置小镇建筑状态", CampaignOperationAvailability::Available,
          {"Town.District.Built"}, "要求存档已经包含开放的小镇建筑系统状态。"},
         {"campaign.hero.add", "新增英雄", CampaignOperationAvailability::Available,
-         {"Hero.PersistentId"}, "仅使用有效 mod 英雄作为模板并清除继承的怪癖与饰品记录。"},
+         {"Hero.PersistentId"}, "使用程序内置的空白 0 级 DSON 模板，并从当前内容环境初始化职业与技能。"},
+        {"campaign.hero.delete", "删除英雄", CampaignOperationAvailability::Available,
+         {"Hero.PersistentId"}, "从英雄名单删除完整记录；引用检查由入口执行。"},
+        {"campaign.hero.reorder", "调整英雄名单顺序", CampaignOperationAvailability::Available,
+         {"Hero.PersistentId"}, "按用户提交的完整英雄 ID 列表重排 DSON 名单。"},
         {"campaign.hero.set_equipment_ranks", "设置武器与防具等级", CampaignOperationAvailability::Available,
          {"Hero.WeaponRank", "Hero.ArmourRank", "Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "武器、防具等级与购买节点在同一复合操作中原子写入；稀疏缺失节点按有效升级树补建。"},
         {"campaign.hero.set_combat_skill_rank", "设置战斗技能等级", CampaignOperationAvailability::Available,
@@ -939,6 +1059,13 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
         }
         for (const auto& mutation : document_operation->mutations) {
             CampaignOperationTarget target{mutation.semantic_property};
+            if (document_operation->operation_id == "campaign.hero.add" &&
+                (mutation.kind != CampaignDocumentMutationKind::AppendTemplate ||
+                 mutation.semantic_property != "Hero.PersistentId")) {
+                add_issue(report, ValidationSeverity::Error, "mutation.hero_add_shape_invalid",
+                          "Hero creation only accepts built-in template appends", target, true);
+                continue;
+            }
             const auto* mapping = find_mapping(mutation.semantic_property);
             if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable ||
                 mapping->document_id != mutation.document_id || mutation.target_path.empty() ||
@@ -951,6 +1078,14 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 mutation.kind == CampaignDocumentMutationKind::AppendClone &&
                 (mutation.source_path.starts_with("base_root/buildings/") ||
                  mutation.source_path.starts_with("base_root/"));
+            const bool built_in_hero_template = document_operation->operation_id == "campaign.hero.add" &&
+                mutation.kind == CampaignDocumentMutationKind::AppendTemplate &&
+                mutation.semantic_property == "Hero.PersistentId" && mutation.document_id == "persist.roster.json" &&
+                mutation.source_path == "base_root/heroes/1" && mutation.template_document != nullptr &&
+                mutation.expected_kind == core::dson::ValueKind::Object && safe_dson_key(mutation.new_key) &&
+                mutation.target_path == "base_root/heroes/" + mutation.new_key &&
+                safe_dson_key(mutation.template_hero_class) && !mutation.template_combat_skills.empty() &&
+                mutation.template_base_hit_points > 0.0F;
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                 !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source) {
@@ -959,6 +1094,7 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 continue;
             }
             const bool kind_allowed =
+                (mutation.kind == CampaignDocumentMutationKind::AppendTemplate && built_in_hero_template) ||
                 (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
@@ -973,7 +1109,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
                   mutation.semantic_property == "Town.DistrictSystem")) ||
                 (mutation.kind == CampaignDocumentMutationKind::Rename &&
-                 (mutation.semantic_property == "Hero.Quirks" || mutation.semantic_property == "TrinketInventory.Items")) ||
+                 (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
+                  mutation.semantic_property == "TrinketInventory.Items")) ||
                 (mutation.kind == CampaignDocumentMutationKind::ClearChildren &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Town.DistrictSystem" ||
                   mutation.semantic_property == "Town.Districts")) ||
@@ -1045,7 +1182,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 (mutation.kind == CampaignDocumentMutationKind::Erase &&
                  mutation.expected_kind == core::dson::ValueKind::Unknown) ||
                 (mutation.kind == CampaignDocumentMutationKind::ClearChildren &&
-                 mutation.expected_kind != core::dson::ValueKind::Object)) {
+                 mutation.expected_kind != core::dson::ValueKind::Object) ||
+                (mutation.kind == CampaignDocumentMutationKind::AppendTemplate && !built_in_hero_template)) {
                 add_issue(report, ValidationSeverity::Error, "mutation.payload_invalid",
                           "The structural mutation is missing a required typed payload", target, true);
             }
@@ -1486,6 +1624,10 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
         change_set.district_system_snapshot = std::move(snapshot);
     }
     if (mapped_operation_id && mapped_mutations) {
+        const bool projects_hero_roster = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
+            [](const auto& mutation) { return mutation.semantic_property == "Hero.PersistentId"; });
+        ChangeSet::HeroRosterSnapshot hero_snapshot;
+        if (projects_hero_roster) hero_snapshot.before = candidate.heroes;
         const bool projects_trinket_inventory = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) { return mutation.semantic_property == "TrinketInventory.Items"; });
         ChangeSet::TrinketInventorySnapshot trinket_snapshot;
@@ -1517,6 +1659,15 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
                 {core::ErrorCode::ValidationFailed,
                  "The mapped purchase-node append could not be projected into the campaign session: " + projection_failure,
                  "CampaignEditSession"});
+        if (projects_hero_roster && !apply_hero_roster_mutations(candidate, *mapped_mutations))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed,
+                 "The hero roster mutation could not be projected into the campaign session",
+                 "CampaignEditSession"});
+        if (projects_hero_roster) {
+            hero_snapshot.after = candidate.heroes;
+            change_set.hero_roster_snapshot = std::move(hero_snapshot);
+        }
         if (projects_trinket_inventory && !apply_trinket_inventory_mutations(candidate, *mapped_mutations, true))
             return core::Result<CampaignEditResult, core::Error>::failure(
                 {core::ErrorCode::ValidationFailed,
@@ -1595,6 +1746,10 @@ CampaignEditSession::replay(const HistoryRecord& record, bool forward, std::uint
                                               : changes.trinket_inventory_snapshot->before;
         if (!forward) std::swap(changes.trinket_inventory_snapshot->before,
                                 changes.trinket_inventory_snapshot->after);
+    }
+    if (changes.hero_roster_snapshot) {
+        candidate.heroes = forward ? changes.hero_roster_snapshot->after : changes.hero_roster_snapshot->before;
+        if (!forward) std::swap(changes.hero_roster_snapshot->before, changes.hero_roster_snapshot->after);
     }
     if (!forward) {
         for (auto& change : changes.changes) std::swap(change.before, change.after);

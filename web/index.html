@@ -98,7 +98,7 @@
             <div id="building-list" class="building-list"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-roster-panel">
-            <h2 data-i18n="town.roster">Roster</h2>
+            <div class="town-panel-heading"><h2 data-i18n="town.roster">Roster</h2><button id="hero-add" type="button" data-i18n="hero.add">新增英雄</button></div>
             <div id="hero-list" class="hero-list"><p class="town-data-message" data-i18n="town.loadingData"></p></div>
           </aside>
           <aside class="town-trinket-panel">
@@ -106,7 +106,6 @@
               <h2 data-i18n="town.trinketChest">Trinket Chest</h2>
               <div class="trinket-actions">
                 <button id="trinket-sort" type="button" data-i18n="trinket.sort" data-i18n-title="trinket.sortTip">一键排序</button>
-                <button id="trinket-add" type="button" data-i18n="trinket.add">添加饰品</button>
                 <button id="trinket-batch-add" type="button" data-i18n="trinket.batchAdd">批量添加</button>
                 <button id="trinket-batch-delete" type="button" data-i18n="trinket.batchDelete">批量删除</button>
               </div>
@@ -143,6 +142,59 @@
           <div id="building-editor-actions" class="building-editor-actions"></div>
           <p id="building-editor-hint" class="building-editor-hint"></p>
           <div id="building-editor-content" class="building-editor-content"></div>
+        </div>
+      </dialog>
+
+      <dialog id="hero-selector" class="building-editor trinket-selector">
+        <div class="building-editor-shell">
+          <header class="building-editor-heading">
+            <div><small class="eyebrow left" data-i18n="hero.selectorKicker">内容数据库</small><h2 data-i18n="hero.selectorTitle">新增英雄</h2></div>
+            <button id="hero-selector-close" class="secondary" type="button" data-i18n="town.close">关闭</button>
+          </header>
+          <div class="trinket-search-controls hero-search-controls">
+            <input id="hero-search" type="search" data-i18n-placeholder="hero.searchPlaceholder" placeholder="搜索职业名称或 ID">
+            <select id="hero-mod-filter" aria-label="Mod filter"><option value="" data-i18n="hero.allMods">所有 Mod</option></select>
+          </div>
+          <p id="hero-selector-message" class="building-editor-hint"></p>
+          <div id="hero-selector-list" class="trinket-selector-list"></div>
+          <footer class="trinket-batch-footer">
+            <div><p data-i18n="hero.addHint">有选中时添加选中职业，没有选中时添加当前显示的职业。</p><small id="hero-selection-count"></small></div>
+            <button id="hero-clear-selection" class="secondary" type="button" data-i18n="trinket.clearSelection">清空所有选中</button>
+            <button id="hero-batch-confirm" type="button" data-i18n="hero.addSelected">添加英雄</button>
+          </footer>
+        </div>
+      </dialog>
+
+      <dialog id="hero-detail" class="hero-detail" aria-labelledby="hero-detail-name">
+        <div class="hero-detail-shell">
+          <button id="hero-detail-close" class="hero-detail-close" type="button" data-i18n-aria="town.close" aria-label="关闭">×</button>
+          <section class="hero-detail-identity">
+            <div class="hero-detail-heading">
+              <div><h2 id="hero-detail-name"></h2><p id="hero-detail-class"></p></div>
+              <button id="hero-detail-rename" class="hero-detail-rename" type="button" data-i18n-title="hero.editName" data-i18n-aria="hero.editName" aria-label="修改英雄名称">✎</button>
+            </div>
+            <div class="hero-detail-progress">
+              <div class="hero-detail-level"><span data-i18n="hero.level">等级</span><strong id="hero-detail-level"></strong><small id="hero-detail-xp"></small></div>
+              <div class="hero-detail-stress"><div><span data-i18n="hero.stress">压力</span><strong id="hero-detail-stress"></strong></div><progress id="hero-detail-stress-bar" max="200" value="0"></progress></div>
+            </div>
+            <div id="hero-detail-idle" class="hero-detail-idle"></div>
+          </section>
+          <main class="hero-detail-center">
+            <section class="hero-detail-panel hero-detail-quirks">
+              <h3 data-i18n="hero.quirks">特质</h3>
+              <div class="hero-detail-quirk-columns">
+                <div><h4 data-i18n="hero.positiveQuirks">正面怪癖</h4><div id="hero-detail-positive" class="hero-detail-trait-list"></div></div>
+                <div><h4 data-i18n="hero.negativeQuirks">负面怪癖</h4><div id="hero-detail-negative" class="hero-detail-trait-list"></div></div>
+              </div>
+              <div id="hero-detail-unknown-wrap" class="hero-detail-unknown" hidden><h4 data-i18n="hero.unknownQuirks">未分类怪癖</h4><div id="hero-detail-unknown" class="hero-detail-trait-list"></div></div>
+            </section>
+            <section class="hero-detail-panel hero-detail-equipment"><h3 data-i18n="hero.trinkets">饰品</h3><div id="hero-detail-trinkets" class="hero-detail-trinket-list"></div></section>
+          </main>
+          <aside class="hero-detail-right">
+            <section class="hero-detail-panel"><h3 data-i18n="hero.combatSkills">战斗技能</h3><div id="hero-detail-combat" class="hero-detail-skill-grid"></div></section>
+            <section class="hero-detail-panel"><h3 data-i18n="hero.campingSkills">扎营技能</h3><div id="hero-detail-camping" class="hero-detail-skill-grid"></div></section>
+            <section class="hero-detail-panel hero-detail-diseases"><h3 data-i18n="hero.diseases">疾病</h3><div id="hero-detail-diseases" class="hero-detail-trait-list"></div></section>
+          </aside>
         </div>
       </dialog>
 

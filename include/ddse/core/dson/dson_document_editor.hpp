@@ -34,6 +34,12 @@ public:
                   std::string_view child_name,
                   const std::vector<std::pair<std::string, Value>>& primitive_fields);
 
+    // Adds a typed primitive field to an object. Used for definition-driven
+    // keyed collections such as a new hero's selected skill maps.
+    [[nodiscard]] static Result<std::size_t, Error>
+    append_value(DsonDocument& target, std::string_view parent_path,
+                 std::string_view child_name, Value value);
+
     // Renames a field and all paths below it, preserving its value and children.
     [[nodiscard]] static Result<void, Error>
     rename(DsonDocument& document, std::string_view path, std::string_view new_name);

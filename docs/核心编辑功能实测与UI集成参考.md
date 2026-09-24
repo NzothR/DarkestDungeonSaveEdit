@@ -112,7 +112,7 @@ UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级�
 | `DestroyTrinketOperation`（英雄装备栏） | 英雄 `trinkets/items/{key}` | 可写候选并可提交；销毁，不转入库存 |
 | `DestroyTrinketOperation`（饰品物品栏） | 庄园 `trinkets/items/{key}` | 可写候选并可提交；按原始键销毁，不重排其他条目 |
 | `UnequipHeroCampingSkillOperation` | 英雄 `selected_camping_skills` 集合 | 可写候选并可提交；只取消装备，不改变训练解锁 |
-| `campaign.hero.add` | 英雄名单及英雄内嵌数据 | 映射操作追加 mod 英雄模板，并清除继承的怪癖和饰品 |
+| `campaign.hero.add` | 英雄名单及英雄内嵌数据 | 使用程序内置、版本化的 0 级空白 DSON 模板，再按有效职业定义初始化；不得依赖当前存档已有英雄。空 roster 必须可新增。模板及初始化规则通过保存重载和游戏内验证前，不得标记为已验证 |
 | `campaign.hero.add_or_replace_quirk` | 英雄怪癖集合 | 新增时初始化记录元数据；正面替换沿用替换机制，负面替换执行删除再按原顺序位置克隆新增 |
 | `campaign.trinket.add_inventory` | 庄园饰品库存 | 按有效内容定义追加一个库存条目 |
 | `campaign.hero.equip_trinket` | 英雄饰品栏 | 追加装备记录并校验饰品职业限制 |

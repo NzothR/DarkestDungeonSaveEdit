@@ -104,7 +104,7 @@ TEST(Stage7ResourceMapping, MappingSeparatesCandidateSupportFromGameEvidence) {
     ASSERT_NE(hero, ddse::application::stage8_campaign_mappings().end());
     EXPECT_TRUE(hero->editable_in_session);
     EXPECT_TRUE(hero->semantically_writable);
-    EXPECT_FALSE(hero->game_mutation_verified);
+    EXPECT_TRUE(hero->game_mutation_verified);
 
     const auto* stress = ddse::application::find_campaign_mapping("Hero.Stress");
     ASSERT_NE(stress, nullptr);

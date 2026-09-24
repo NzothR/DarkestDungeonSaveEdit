@@ -1,4 +1,5 @@
 #include "ddse/application/save_commit.hpp"
+#include "ddse/application/hero_template.hpp"
 
 #include "ddse/application/campaign_mappings.hpp"
 #include "ddse/core/dson/dson_document_editor.hpp"
@@ -316,6 +317,7 @@ std::map<std::vector<std::size_t>, std::set<std::size_t>> allowed_fields(
     for (const auto& change : changes) {
         std::vector<std::size_t> document_path;
         const auto& steps = change.raw.steps;
+        if (steps.empty()) continue;
         for (std::size_t index = 0; index + 1 < steps.size(); ++index)
             if (steps[index].enters_embedded_document) document_path.push_back(steps[index].field_index);
         result[document_path].insert(steps.back().field_index);
@@ -534,7 +536,7 @@ bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
     std::size_t index{};
     const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), index);
     if (key.empty() || error != std::errc{} || end != key.data() + key.size()) return false;
-    if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+        if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
         if (separator != std::string_view::npos || mutation.new_key != key ||
             !mutation.source_path.starts_with(prefix)) return false;
         const auto source_key = std::string_view{mutation.source_path}.substr(prefix.size());
@@ -576,6 +578,7 @@ bool path_is_removed(std::string_view field_path, const std::vector<CampaignDocu
 bool path_is_added(std::string_view field_path, const std::vector<CampaignDocumentMutation>& mutations) {
     return std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
         if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+            mutation.kind == CampaignDocumentMutationKind::AppendTemplate ||
             mutation.kind == CampaignDocumentMutationKind::CreateObject ||
             mutation.kind == CampaignDocumentMutationKind::InsertClone)
             return field_path == mutation.target_path || field_path.starts_with(mutation.target_path + "/") ||
@@ -589,6 +592,34 @@ bool path_is_added(std::string_view field_path, const std::vector<CampaignDocume
         }
         return false;
     });
+}
+
+// Appending a hero from the built-in template also advances the roster's
+// identity allocator. This is the only existing scalar the template operation
+// may change; the expected value is derived from the declared new hero IDs.
+bool expected_template_next_guid(const DsonDocument& original,
+                                 const std::vector<CampaignDocumentMutation>& mutations,
+                                 std::int32_t& expected) {
+    const auto original_field = std::find_if(original.fields.begin(), original.fields.end(),
+        [](const auto& field) { return field.path == "base_root/nextGuid"; });
+    if (original_field == original.fields.end() || original_field->kind != ValueKind::Integer ||
+        !std::holds_alternative<std::int32_t>(original_field->value)) return false;
+    expected = std::get<std::int32_t>(original_field->value);
+    if (expected < 0) return false;
+    bool has_template_append = false;
+    for (const auto& mutation : mutations) {
+        if (mutation.kind != CampaignDocumentMutationKind::AppendTemplate ||
+            mutation.semantic_property != "Hero.PersistentId" ||
+            mutation.document_id != "persist.roster.json") continue;
+        has_template_append = true;
+        std::int32_t hero_id{};
+        const auto [end, error] = std::from_chars(mutation.new_key.data(),
+            mutation.new_key.data() + mutation.new_key.size(), hero_id);
+        if (error != std::errc{} || end != mutation.new_key.data() + mutation.new_key.size() ||
+            hero_id < 0 || hero_id == std::numeric_limits<std::int32_t>::max()) return false;
+        expected = std::max(expected, hero_id + 1);
+    }
+    return has_template_append;
 }
 
 bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument& candidate,
@@ -612,6 +643,9 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
     std::map<std::string, std::vector<FieldSnapshot>, std::less<>> after;
     collect_field_snapshots(original, {}, before);
     collect_field_snapshots(candidate, {}, after);
+    std::int32_t expected_next_guid{};
+    const bool template_updates_next_guid = expected_template_next_guid(
+        original, mutations, expected_next_guid);
 
     for (const auto& change : structural_changes) {
         const auto target = before.find(change.raw.display_path);
@@ -638,6 +672,15 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
             if (field.name != current.name || field.kind != current.kind) {
                 reason = "Candidate changed a DSON field identity outside its mapped ChangeSet: " + path;
                 return false;
+            }
+            if (template_updates_next_guid && path == "base_root/nextGuid") {
+                if (fields.size() != 1U || current.kind != ValueKind::Integer ||
+                    !std::holds_alternative<std::int32_t>(current.value) ||
+                    std::get<std::int32_t>(current.value) != expected_next_guid) {
+                    reason = "Candidate roster nextGuid does not match the template-created hero IDs";
+                    return false;
+                }
+                continue;
             }
             if (!scalar_target && field.value != current.value) {
                 reason = "Candidate changed a DSON value outside its mapped ChangeSet: " + path;
@@ -801,33 +844,106 @@ std::string bytes_to_string(const std::vector<std::byte>& bytes) {
     return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
+ChangeSet effective_hero_deletion_changes(const ChangeSet& requested) {
+    ChangeSet result = requested;
+    std::set<std::string, std::less<>> deleted_hero_paths;
+    for (const auto& batch : requested.document_mutation_batches) {
+        if (batch.operation_id != "campaign.hero.delete" || batch.cancel) continue;
+        for (const auto& mutation : batch.mutations)
+            if (mutation.kind == CampaignDocumentMutationKind::Erase &&
+                mutation.semantic_property == "Hero.PersistentId" &&
+                mutation.document_id == "persist.roster.json" &&
+                mutation.target_path.starts_with("base_root/heroes/"))
+                deleted_hero_paths.insert(mutation.target_path);
+    }
+    const auto inside_deleted_hero = [&](const std::string& document_id, const std::string& path) {
+        if (document_id != "persist.roster.json") return false;
+        return std::any_of(deleted_hero_paths.begin(), deleted_hero_paths.end(), [&](const auto& hero_path) {
+            return path.starts_with(hero_path + "/");
+        });
+    };
+    std::erase_if(result.changes, [&](const auto& change) {
+        return inside_deleted_hero(change.raw.document_id, change.raw.display_path);
+    });
+    std::erase_if(result.structural_changes, [&](const auto& change) {
+        return inside_deleted_hero(change.raw.document_id, change.raw.display_path);
+    });
+    return result;
+}
+
 } // namespace
 
 core::Result<SaveCandidate, core::Error>
-SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& changes) const {
+SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& requested_changes) const {
+    const auto normalized = effective_hero_deletion_changes(requested_changes);
+    const auto& changes = normalized;
     if (changes.empty())
         return core::Result<SaveCandidate, core::Error>::failure(
             adapter_error(core::ErrorCode::ValidationFailed, "Cannot build a save candidate from an empty ChangeSet"));
+
+    std::set<std::string, std::less<>> template_created_hero_ids;
+    for (const auto& batch : changes.document_mutation_batches) {
+        if (batch.operation_id != "campaign.hero.add") continue;
+        for (const auto& mutation : batch.mutations) {
+            if (mutation.kind == CampaignDocumentMutationKind::AppendTemplate &&
+                mutation.semantic_property == "Hero.PersistentId" &&
+                mutation.document_id == "persist.roster.json")
+                template_created_hero_ids.insert(mutation.new_key);
+        }
+    }
 
     std::map<std::string, std::vector<CampaignFieldChange>, std::less<>> grouped_fields;
     std::map<std::string, std::vector<CampaignStructuralChange>, std::less<>> grouped_structural;
     std::map<std::string, std::vector<CampaignDocumentMutation>, std::less<>> grouped_mutations;
     std::set<std::string, std::less<>> expected_documents;
     std::set<std::string, std::less<>> unique_targets;
+    std::map<std::string, std::string, std::less<>> template_created_hero_names;
     for (const auto& change : changes.changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);
+        const bool built_in_template_name = change.target.semantic_property == "Hero.Name" &&
+            template_created_hero_ids.contains(change.target.entity_id) &&
+            change.raw.document_id == "persist.roster.json" &&
+            change.raw.display_path == "base_root/heroes/" + change.target.entity_id +
+                "/hero_file_data/raw_data => base_root/actor/name";
         if (mapping == nullptr || mapping->capability() < CampaignMappingCapability::CandidateWritable)
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
                               "ChangeSet contains a property without an implemented writable mapping",
                               {{"property", change.target.semantic_property}}));
-        if (mapping->document_id != change.raw.document_id || change.raw.steps.empty() ||
+        if (mapping->document_id != change.raw.document_id ||
+            (change.raw.steps.empty() && !built_in_template_name) ||
             change.raw.display_path != expand_path(mapping->raw_path_template, change.target))
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
                               "ChangeSet locator does not match the registered mapping",
                               {{"property", change.target.semantic_property},
-                               {"document", change.raw.document_id}, {"path", change.raw.display_path}}));
+                               {"document", change.raw.document_id}, {"path", change.raw.display_path},
+                               {"expected_path", expand_path(mapping->raw_path_template, change.target)},
+                               {"locator_step_count", std::to_string(change.raw.steps.size())}}));
+        if (built_in_template_name) {
+            const auto* before = std::get_if<std::string>(&change.before);
+            const auto* after = std::get_if<std::string>(&change.after);
+            if (!before || !before->empty() || !after || *before == *after)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed,
+                                  "A template-created hero name must change from the template's empty default",
+                                  {{"hero_id", change.target.entity_id}}));
+            template_created_hero_names[change.target.entity_id] = *after;
+            const auto target_key = change.raw.document_id + "|" + change.raw.display_path;
+            if (!unique_targets.insert(target_key).second)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed,
+                                  "ChangeSet contains a duplicate raw target", {{"path", change.raw.display_path}}));
+            expected_documents.insert(change.raw.document_id);
+            // This scalar is written into the built-in hero template before it
+            // is appended. It is not an indexed field in the original save.
+            continue;
+        }
+        if (change.raw.steps.empty())
+            return core::Result<SaveCandidate, core::Error>::failure(
+                adapter_error(core::ErrorCode::MappingNotWritable,
+                              "ChangeSet locator has no field steps",
+                              {{"property", change.target.semantic_property}, {"path", change.raw.display_path}}));
         if (change.raw.steps.back().field_name != expected_leaf(*mapping))
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
@@ -899,6 +1015,12 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                               "Document mutation operation has not passed its in-game validation gate",
                               {{"operation", batch.operation_id}}));
         for (const auto& mutation : batch.mutations) {
+            if (batch.operation_id == "campaign.hero.add" &&
+                (mutation.kind != CampaignDocumentMutationKind::AppendTemplate ||
+                 mutation.semantic_property != "Hero.PersistentId"))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable,
+                                  "Hero creation only accepts built-in template appends"));
             const auto* mapping = find_mapping(mutation.semantic_property);
             if (mapping == nullptr || mapping->capability() != CampaignMappingCapability::CommitWritable ||
                 mapping->document_id != mutation.document_id || mutation.target_path.empty() ||
@@ -907,6 +1029,32 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Document mutation path is outside the registered game-verified mapping",
                                   {{"property", mutation.semantic_property}, {"path", mutation.target_path}}));
+            const bool valid_builtin_hero_template = batch.operation_id == "campaign.hero.add" &&
+                mutation.kind == CampaignDocumentMutationKind::AppendTemplate &&
+                mutation.semantic_property == "Hero.PersistentId" && mutation.document_id == "persist.roster.json" &&
+                mutation.source_path == "base_root/heroes/1" && mutation.expected_kind == ValueKind::Object &&
+                mutation.template_document != nullptr && safe_dson_key(mutation.new_key) &&
+                mutation.target_path == "base_root/heroes/" + mutation.new_key &&
+                safe_dson_key(mutation.template_hero_class) && mutation.template_base_hit_points > 0.0F &&
+                !mutation.template_combat_skills.empty();
+            if (mutation.kind == CampaignDocumentMutationKind::AppendTemplate && !valid_builtin_hero_template)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable, "Built-in hero template mutation is invalid",
+                                  {{"path", mutation.target_path}}));
+            if (valid_builtin_hero_template) {
+                const auto expected_template = build_blank_level_zero_hero_template(
+                    mutation.template_hero_class, mutation.template_combat_skills,
+                    mutation.template_camping_skills, mutation.template_base_hit_points);
+                const auto supplied_bytes = core::dson::DsonWriter{}.encode(*mutation.template_document);
+                const auto expected_bytes = expected_template
+                    ? core::dson::DsonWriter{}.encode(*expected_template.value())
+                    : core::Result<std::vector<std::byte>, core::Error>::failure(expected_template.error());
+                if (!supplied_bytes || !expected_bytes || supplied_bytes.value() != expected_bytes.value())
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable,
+                                      "Hero template does not match the versioned built-in template",
+                                      {{"path", mutation.target_path}}));
+            }
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                 !mutation_path_matches_mapping(*mapping, mutation.source_path) &&
@@ -999,14 +1147,45 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                                   "Clone destination already exists",
                                   {{"document", document_id}, {"path", mutation.target_path}}));
             reason.clear();
+            DsonDocument prepared_template;
             DsonDocument* source_document_tree = &source_snapshot;
-            auto source_field = locate_field_by_path(source_snapshot, mutation.source_path, reason);
+            // Roster reordering must carry earlier edits to a hero in this session.
+            // The original snapshot would restore stale name/skill/equipment bytes.
+            if (mutation.kind == CampaignDocumentMutationKind::AppendClone &&
+                mutation.semantic_property == "Hero.PersistentId")
+                source_document_tree = &cloned;
+            if (mutation.kind == CampaignDocumentMutationKind::AppendTemplate) {
+                if (mutation.template_document == nullptr)
+                    return core::Result<void, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable, "Built-in hero template is unavailable"));
+                prepared_template = clone_document(*mutation.template_document);
+                source_document_tree = &prepared_template;
+                const auto desired_name = template_created_hero_names.find(mutation.new_key);
+                if (desired_name != template_created_hero_names.end()) {
+                    auto name_field = locate_field_by_path(prepared_template,
+                        "base_root/heroes/1/hero_file_data/raw_data => base_root/actor/name", reason);
+                    if (!name_field || name_field->get().kind != ValueKind::String ||
+                        !std::holds_alternative<std::string>(name_field->get().value) ||
+                        !std::get<std::string>(name_field->get().value).empty())
+                        return core::Result<void, core::Error>::failure(
+                            adapter_error(core::ErrorCode::MappingNotWritable,
+                                          reason.empty() ? "Built-in hero template name field is invalid" : reason,
+                                          {{"hero_id", mutation.new_key}}));
+                    replace_field_value(name_field->get(), CampaignValue{desired_name->second});
+                }
+            }
+            if (source_document_tree == nullptr)
+                return core::Result<void, core::Error>::failure(
+                    adapter_error(core::ErrorCode::MappingNotWritable, "Built-in hero template is unavailable"));
+            auto source_field = locate_field_by_path(*source_document_tree, mutation.source_path, reason);
             if (!source_field) {
                 // Some ordered batches intentionally clone a container created by an earlier
                 // mutation in this same batch (for example districts -> districts/buildings).
                 reason.clear();
-                source_field = locate_field_by_path(cloned, mutation.source_path, reason);
-                if (source_field) source_document_tree = &cloned;
+                if (mutation.kind != CampaignDocumentMutationKind::AppendTemplate) {
+                    source_field = locate_field_by_path(cloned, mutation.source_path, reason);
+                    if (source_field) source_document_tree = &cloned;
+                }
             }
             if (!source_field || source_field->get().kind != mutation.expected_kind)
                 return core::Result<void, core::Error>::failure(
@@ -1039,6 +1218,26 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                     destination->first.get(), destination->second,
                     source_document->first.get(), source_document->second, mutation.new_key);
             if (!result) return core::Result<void, core::Error>::failure(result.error());
+            if (mutation.kind == CampaignDocumentMutationKind::AppendTemplate) {
+                const auto next_guid_field = locate_field_by_path(cloned, "base_root/nextGuid", reason);
+                std::uint64_t hero_guid{};
+                const auto [end, parse_error] = std::from_chars(
+                    mutation.new_key.data(), mutation.new_key.data() + mutation.new_key.size(), hero_guid);
+                if (!next_guid_field || next_guid_field->get().kind != ValueKind::Integer ||
+                    parse_error != std::errc{} || end != mutation.new_key.data() + mutation.new_key.size() ||
+                    hero_guid >= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+                    return core::Result<void, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ValidationFailed,
+                                      "Built-in hero append has an invalid persistent ID or missing nextGuid"));
+                auto& next_guid = next_guid_field->get();
+                if (!std::holds_alternative<std::int32_t>(next_guid.value))
+                    return core::Result<void, core::Error>::failure(
+                        adapter_error(core::ErrorCode::ConcurrentSaveChanged,
+                                      "Roster nextGuid has an unexpected value type"));
+                const auto current_next = std::get<std::int32_t>(next_guid.value);
+                const auto desired_next = static_cast<std::int32_t>(hero_guid + 1);
+                if (current_next < desired_next) next_guid.replace_value(desired_next);
+            }
             return core::Result<void, core::Error>::success();
         };
         std::vector<const CampaignFieldChange*> deferred_field_changes;
@@ -1084,6 +1283,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             ++active_mutation_index;
             std::string reason;
             if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                mutation.kind == CampaignDocumentMutationKind::AppendTemplate ||
                 mutation.kind == CampaignDocumentMutationKind::InsertClone) {
                 auto appended = clone_entry(mutation, mutation.kind == CampaignDocumentMutationKind::InsertClone);
                 if (!appended) {
@@ -1206,6 +1406,20 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             replace_field_value(target, change->after);
         }
 
+        for (const auto& [hero_id, expected_name] : template_created_hero_names) {
+            const auto name_path = "base_root/heroes/" + hero_id +
+                "/hero_file_data/raw_data => base_root/actor/name";
+            std::string name_reason;
+            auto name_field = locate_field_by_path(cloned, name_path, name_reason);
+            if (!name_field || name_field->get().kind != ValueKind::String ||
+                !std::holds_alternative<std::string>(name_field->get().value) ||
+                std::get<std::string>(name_field->get().value) != expected_name)
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed,
+                                  name_reason.empty() ? "Built-in hero template name did not survive materialization" : name_reason,
+                                  {{"hero_id", hero_id}, {"path", name_path}}));
+        }
+
         auto encoded = writer.encode(cloned);
         if (!encoded)
             return core::Result<SaveCandidate, core::Error>::failure(encoded.error());
@@ -1233,16 +1447,21 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
         for (const auto& change : document_changes) output.expected_field_paths.push_back(change.raw.display_path);
         for (const auto& change : structural_changes) output.expected_field_paths.push_back(change.raw.display_path);
         for (const auto& mutation : document_mutations) output.expected_field_paths.push_back(mutation.target_path);
+        if (document_id == "persist.roster.json" && std::any_of(document_mutations.begin(), document_mutations.end(),
+                [](const auto& mutation) { return mutation.kind == CampaignDocumentMutationKind::AppendTemplate; }))
+            output.expected_field_paths.push_back("base_root/nextGuid");
         candidate.documents.push_back(std::move(output));
     }
     return core::Result<SaveCandidate, core::Error>::success(std::move(candidate));
 }
 
 core::Result<SaveCommitResult, core::Error>
-SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet& changes,
+SafeSaveCommitter::commit(const RawSaveProfile& source_profile, const ChangeSet& requested_changes,
                           const std::filesystem::path& target_profile_root,
                           const std::filesystem::path& backup_directory,
                           SaveCommitMode mode) const {
+    const auto normalized = effective_hero_deletion_changes(requested_changes);
+    const auto& changes = normalized;
     const auto& source_root = source_profile.descriptor.root_path;
     if (source_root.empty() || target_profile_root.empty() || backup_directory.empty())
         return core::Result<SaveCommitResult, core::Error>::failure(

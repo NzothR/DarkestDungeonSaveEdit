@@ -406,6 +406,8 @@ TEST(CampaignEditSession, CapabilityCatalogEnablesVerifiedFeaturesAndKeepsDeferr
     const auto disease = find("campaign.hero.edit_disease");
     const auto add_hero = find("campaign.hero.add");
     const auto rename = find("campaign.hero.rename");
+    const auto delete_hero = find("campaign.hero.delete");
+    const auto reorder_heroes = find("campaign.hero.reorder");
     const auto set_stress = find("campaign.hero.set_stress");
     const auto affliction_state = find("campaign.hero.set_affliction_state");
     ASSERT_NE(resource, catalog.end());
@@ -413,6 +415,8 @@ TEST(CampaignEditSession, CapabilityCatalogEnablesVerifiedFeaturesAndKeepsDeferr
     ASSERT_NE(disease, catalog.end());
     ASSERT_NE(add_hero, catalog.end());
     ASSERT_NE(rename, catalog.end());
+    ASSERT_NE(delete_hero, catalog.end());
+    ASSERT_NE(reorder_heroes, catalog.end());
     ASSERT_NE(set_stress, catalog.end());
     ASSERT_NE(affliction_state, catalog.end());
     EXPECT_EQ(resource->availability, application::CampaignOperationAvailability::Available);
@@ -420,6 +424,8 @@ TEST(CampaignEditSession, CapabilityCatalogEnablesVerifiedFeaturesAndKeepsDeferr
     EXPECT_EQ(disease->availability, application::CampaignOperationAvailability::Deferred);
     EXPECT_EQ(add_hero->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(rename->availability, application::CampaignOperationAvailability::Available);
+    EXPECT_EQ(delete_hero->availability, application::CampaignOperationAvailability::Available);
+    EXPECT_EQ(reorder_heroes->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(set_stress->availability, application::CampaignOperationAvailability::Available);
     EXPECT_EQ(affliction_state->availability, application::CampaignOperationAvailability::Available);
 }

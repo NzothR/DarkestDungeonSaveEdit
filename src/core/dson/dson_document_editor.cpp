@@ -132,6 +132,18 @@ Result<std::size_t, Error> DsonDocumentEditor::insert_clone_at(
     cloned.reserve(source_order.size());
     for (const auto old_index : source_order) {
         auto field = source.fields[old_index];
+        // A built-in template can come from a different DSON file than the
+        // destination. Raw value bytes are preserved, but their absolute source
+        // offsets are used to recover alignment padding during serialization.
+        // Rebase those offsets to the destination's Data section so preserved
+        // unknown fields remain byte-identical without pointing outside it.
+        const auto rebase_offset = [&](std::uint64_t offset) {
+            if (offset < source.header.data_offset) return offset;
+            return static_cast<std::uint64_t>(target.header.data_offset) +
+                   (offset - source.header.data_offset);
+        };
+        field.source_name_offset = rebase_offset(field.source_name_offset);
+        field.source_value_offset = rebase_offset(field.source_value_offset);
         field.embedded_document = field.embedded_document
             ? std::make_shared<DsonDocument>(deep_clone(*field.embedded_document))
             : nullptr;
@@ -245,6 +257,48 @@ Result<std::size_t, Error> DsonDocumentEditor::append_object(
                          std::make_move_iterator(appended.begin()), std::make_move_iterator(appended.end()));
     auto& children = target.fields[adjusted_parent_index].children;
     children.push_back(insertion_index);
+    target.structural_dirty = true;
+    return Result<std::size_t, Error>::success(insertion_index);
+}
+
+Result<std::size_t, Error> DsonDocumentEditor::append_value(
+    DsonDocument& target, std::string_view parent_path, std::string_view child_name, Value value) {
+    if (child_name.empty() || child_name.find('/') != std::string_view::npos)
+        return Result<std::size_t, Error>::failure(edit_error("New field name is empty or contains a path separator"));
+    const auto parent_index = find_field(target, parent_path);
+    if (!parent_index || target.fields[*parent_index].kind != ValueKind::Object)
+        return Result<std::size_t, Error>::failure(edit_error("Destination path is not an object", std::string{parent_path}));
+    const auto& parent = target.fields[*parent_index];
+    if (std::any_of(parent.children.begin(), parent.children.end(), [&](std::size_t child) {
+            return child < target.fields.size() && target.fields[child].name == child_name;
+        }))
+        return Result<std::size_t, Error>::failure(edit_error("Destination object already has a child with that name",
+            std::string{parent_path} + "/" + std::string{child_name}));
+    const auto kind = value_kind(value);
+    if (kind == ValueKind::Unknown || kind == ValueKind::Object || kind == ValueKind::EmbeddedDson)
+        return Result<std::size_t, Error>::failure(edit_error("New field value is not a supported primitive", std::string{child_name}));
+
+    const auto insertion_index = subtree_end(target, *parent_index);
+    const auto path = target.fields[*parent_index].path + "/" + std::string{child_name};
+    DsonField field;
+    field.name = std::string{child_name};
+    field.path = path;
+    field.kind = kind;
+    field.value = std::move(value);
+    field.parent_index = *parent_index;
+    field.dirty = true;
+
+    for (auto& existing : target.fields) {
+        if (existing.parent_index != DsonField::no_index && existing.parent_index >= insertion_index)
+            ++existing.parent_index;
+        for (auto& child : existing.children) if (child >= insertion_index) ++child;
+    }
+    for (auto& root : target.root_fields) if (root >= insertion_index) ++root;
+    auto inserted_parent_index = *parent_index;
+    if (inserted_parent_index >= insertion_index) ++inserted_parent_index;
+    field.parent_index = inserted_parent_index;
+    target.fields.insert(target.fields.begin() + static_cast<std::ptrdiff_t>(insertion_index), std::move(field));
+    target.fields[inserted_parent_index].children.push_back(insertion_index);
     target.structural_dirty = true;
     return Result<std::size_t, Error>::success(insertion_index);
 }

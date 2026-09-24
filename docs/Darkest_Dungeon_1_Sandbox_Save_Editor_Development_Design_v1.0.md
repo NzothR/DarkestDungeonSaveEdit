@@ -2010,17 +2010,37 @@ source hero outer node
 
 Create Hero 晚于 Clone Hero。
 
+HeroFactory 使用程序内置、版本化的 0 级（最低 resolve 等级）空白英雄模板；不得从当前存档克隆已有英雄。这个要求也使空英雄名单的存档可以新增英雄。
+
+模板的来源和职责分开：官方 Mod 制作指南描述职业定义文件中的通用属性、技能和生成数据；真实存档逆向分析用于确定 roster 条目、内嵌英雄 DSON、身份引用和初始记录的序列化结构。`.info.darkest` 不是可直接写进存档的英雄实例，HeroFactory 必须把有效内容定义映射到存档实例格式。
+
 HeroFactory 必须基于：
 
 ```text
 HeroDefinition
 + Environment
-+ verified starter template
++ versioned built-in blank resolve-level-zero DSON template
 + IdentityAllocator
 + UpgradeInitializer
 ```
 
-禁止手工拼一个“最小 Hero JSON/DSON”。
+职业的初始化数据从当前生效的 Base/Mod 内容数据库解析：基础属性、武器与防具阶段、战斗/移动技能、生存技能和生成规则来自职业定义及关联技能定义。官方 Mod 指南把英雄 `.info.darkest` 分为通用属性、能力和生成数据；这些定义用于说明职业内容，不等同于存档里的 Hero DSON。
+
+数据库结构约定：
+
+| 数据 | 数据库位置 | 内容 |
+| --- | --- | --- |
+| 职业定义 | `content_definitions(hero_class).payload_json` | 按源文件顺序保存 `.info.darkest` 记录及原始字段，包括基础属性、武器/防具、技能定义与生成规则 |
+| 战斗/移动技能 | `content_definitions(skill).payload_json` + `content_relationships` | 保存技能等级和效果；用 `combat_skill` 关系关联职业 |
+| 生存技能 | `content_definitions(skill).payload_json` + `content_relationships` | 保存技能效果；共享技能按 `hero_classes` 关联，职业专属技能从 `<class>.camping_skills.json` 文件名识别并关联 |
+| 有效定义来源 | Base/Mod 来源与 Effective Environment 表 | 保存原版、DLC、Mod 的来源和覆盖顺序，解析后提供给 HeroFactory |
+| 空白存档模板 | 程序内置模板资源 | 保存经逆向分析的 0 级（最低 resolve 等级）DSON 外壳、嵌套结构和未知字段；独立记录模板版本及来源游戏版本 |
+
+现有通用定义/关系 Schema 已可承载职业详情，因此不重复复制到新的英雄详情表。若扫描器缺少模板初始化必需的定义字段，应记录诊断并禁用该职业新增；不得从现存 Hero 实例回退取值。
+
+模板应保留基准样本中尚未解析的字段和嵌套结构；初始化器只改写已经理解且通过验证的职业、身份、技能/升级和初始状态字段。清空姓名、压力、折磨、怪癖、已装备饰品等非空白状态，并确保 resolve XP 为 0、武器/防具与技能处于最低阶段。
+
+模板必须记录模板版本和来源游戏版本。某个职业的必需数据无法从有效内容环境安全初始化时，拒绝生成该职业并给出诊断；不得改为克隆当前存档中的英雄，也不得猜测缺失字段。模板和初始化规则通过空 roster、原版职业、Mod 职业、多次连续新增、保存重载及游戏内载入验证后，才允许将 `campaign.hero.add` 标记为游戏验证通过。
 
 ## 16.8 Delete / Dismiss Hero
 

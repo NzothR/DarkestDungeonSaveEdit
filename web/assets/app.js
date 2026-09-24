@@ -1,4 +1,5 @@
 import { editorGateway, GatewayError } from "./gateway.js";
+import { mountSpine21 } from "./spine21.js";
 
 const elements = {
   indicator: document.querySelector("#connection-indicator"),
@@ -48,9 +49,36 @@ const elements = {
   townReloadOverlay: document.querySelector("#town-reload-overlay"),
   settingsReturnTown: document.querySelector("#settings-return-town"),
   heroList: document.querySelector("#hero-list"),
+  heroAdd: document.querySelector("#hero-add"),
+  heroSelector: document.querySelector("#hero-selector"),
+  heroSelectorClose: document.querySelector("#hero-selector-close"),
+  heroSearch: document.querySelector("#hero-search"),
+  heroModFilter: document.querySelector("#hero-mod-filter"),
+  heroSelectorMessage: document.querySelector("#hero-selector-message"),
+  heroSelectorList: document.querySelector("#hero-selector-list"),
+  heroSelectionCount: document.querySelector("#hero-selection-count"),
+  heroClearSelection: document.querySelector("#hero-clear-selection"),
+  heroBatchConfirm: document.querySelector("#hero-batch-confirm"),
+  heroDetail: document.querySelector("#hero-detail"),
+  heroDetailClose: document.querySelector("#hero-detail-close"),
+  heroDetailName: document.querySelector("#hero-detail-name"),
+  heroDetailClass: document.querySelector("#hero-detail-class"),
+  heroDetailRename: document.querySelector("#hero-detail-rename"),
+  heroDetailLevel: document.querySelector("#hero-detail-level"),
+  heroDetailXp: document.querySelector("#hero-detail-xp"),
+  heroDetailStress: document.querySelector("#hero-detail-stress"),
+  heroDetailStressBar: document.querySelector("#hero-detail-stress-bar"),
+  heroDetailIdle: document.querySelector("#hero-detail-idle"),
+  heroDetailPositive: document.querySelector("#hero-detail-positive"),
+  heroDetailNegative: document.querySelector("#hero-detail-negative"),
+  heroDetailUnknownWrap: document.querySelector("#hero-detail-unknown-wrap"),
+  heroDetailUnknown: document.querySelector("#hero-detail-unknown"),
+  heroDetailTrinkets: document.querySelector("#hero-detail-trinkets"),
+  heroDetailCombat: document.querySelector("#hero-detail-combat"),
+  heroDetailCamping: document.querySelector("#hero-detail-camping"),
+  heroDetailDiseases: document.querySelector("#hero-detail-diseases"),
   trinketGrid: document.querySelector("#trinket-grid"),
   trinketSort: document.querySelector("#trinket-sort"),
-  trinketAdd: document.querySelector("#trinket-add"),
   trinketBatchAdd: document.querySelector("#trinket-batch-add"),
   trinketBatchDelete: document.querySelector("#trinket-batch-delete"),
   trinketSelector: document.querySelector("#trinket-selector"),
@@ -93,6 +121,12 @@ let trinketDefinitions = [];
 let trinketSelectorMode = "add";
 let selectedTrinketIds = new Set();
 let selectedTrinketRawKeys = new Set();
+let heroClassDefinitions = [];
+let selectedHeroClassIds = new Set();
+let activeHeroId = null;
+let heroIdleKey = "";
+let heroIdleStop = null;
+let heroIdleController = null;
 
 function t(key, variables = {}) {
   let value = strings[key] ?? key;
@@ -444,6 +478,114 @@ function attachTrinketTooltip(owner, tooltip) {
   owner._hideTrinketTooltip = hide;
 }
 
+function heroDetailImage(path, assets, roles, fallback) {
+  const asset = path ? { path, resolved: true } : chooseAsset((assets || []).filter((entry) =>
+    String(entry.path || "").toLowerCase().endsWith(".png")), roles);
+  if (!asset || !String(asset.path).toLowerCase().endsWith(".png")) return null;
+  const image = document.createElement("img");
+  image.alt = "";
+  image.src = assetUrl(asset);
+  image.onerror = () => { if (fallback) image.replaceWith(fallback()); else image.remove(); };
+  return image;
+}
+
+function renderHeroDetailEntries(container, entries, kind, emptyKey) {
+  container.replaceChildren();
+  if (!entries.length) {
+    container.append(Object.assign(document.createElement("p"), { className: "hero-detail-empty", textContent: t(emptyKey) }));
+    return;
+  }
+  for (const entry of entries) {
+    const card = document.createElement("div");
+    card.className = `hero-detail-item hero-detail-item-${kind}`;
+    if (entry.polarity === "negative") card.classList.add("hero-detail-item-negative");
+    card.title = cleanGameText(entry.name || entry.id);
+    if (kind !== "quirk") {
+      const image = heroDetailImage(entry.iconPath, entry.assets, [kind, "icon", "skill", "trinket"], null);
+      if (image) card.append(image);
+      else card.append(Object.assign(document.createElement("span"), { className: "hero-detail-item-symbol", textContent: kind === "disease" ? "✚" : "✦" }));
+    }
+    const name = document.createElement("span");
+    name.textContent = cleanGameText(entry.name || entry.id);
+    card.append(name);
+    if (entry.isLocked) card.classList.add("locked");
+    container.append(card);
+  }
+}
+
+function stopHeroIdle() {
+  heroIdleController?.abort();
+  heroIdleController = null;
+  heroIdleStop?.();
+  heroIdleStop = null;
+  heroIdleKey = "";
+}
+
+function renderIdleFallback(hero) {
+  elements.heroDetailIdle.replaceChildren();
+  const portrait = heroDetailImage(hero.portraitPath, hero.assets, ["portrait_roster", "portrait"],
+    () => Object.assign(document.createElement("span"), { className: "hero-detail-idle-fallback", textContent: t("hero.previewUnavailable") }));
+  if (portrait) elements.heroDetailIdle.append(portrait);
+  else elements.heroDetailIdle.append(Object.assign(document.createElement("span"), { className: "hero-detail-idle-fallback", textContent: t("hero.previewUnavailable") }));
+  elements.heroDetailIdle.append(Object.assign(document.createElement("small"), { textContent: t("hero.previewUnavailable") }));
+}
+
+function renderHeroIdle(hero) {
+  const paths = { sprite: hero.idleSpritePath, atlas: hero.idleAtlasPath, skeleton: hero.idleSkeletonPath };
+  const key = `${hero.id}|${paths.sprite}|${paths.atlas}|${paths.skeleton}`;
+  if (key === heroIdleKey) return;
+  stopHeroIdle();
+  heroIdleKey = key;
+  elements.heroDetailIdle.dataset.idleSpritePath = paths.sprite || "";
+  elements.heroDetailIdle.dataset.idleAtlasPath = paths.atlas || "";
+  elements.heroDetailIdle.dataset.idleSkeletonPath = paths.skeleton || "";
+  if (!paths.sprite || !paths.atlas || !paths.skeleton) { renderIdleFallback(hero); return; }
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("aria-label", t("hero.idlePreview"));
+  elements.heroDetailIdle.replaceChildren(canvas);
+  const controller = new AbortController();
+  heroIdleController = controller;
+  mountSpine21(canvas, paths, controller.signal).then((stop) => {
+    if (controller.signal.aborted || heroIdleKey !== key) stop();
+    else heroIdleStop = stop;
+  }).catch(() => {
+    if (!controller.signal.aborted && heroIdleKey === key) renderIdleFallback(hero);
+  });
+}
+
+function renderHeroDetail() {
+  if (!activeHeroId) return;
+  const hero = (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId);
+  if (!hero) { elements.heroDetail.close(); activeHeroId = null; return; }
+  elements.heroDetailName.textContent = cleanGameText(hero.name || t("hero.unnamed"));
+  elements.heroDetailClass.textContent = cleanGameText(hero.className || hero.classId || t("town.unknownClass"));
+  elements.heroDetailRename.disabled = hero.nameEditable === false;
+  elements.heroDetailLevel.textContent = hero.level == null ? "—" : String(hero.level);
+  elements.heroDetailXp.textContent = hero.level == null && hero.resolveXp != null
+    ? t("hero.xpUnresolved", { xp: hero.resolveXp }) : "";
+  elements.heroDetailStress.textContent = hero.stress == null ? "—" : String(Math.round(hero.stress));
+  elements.heroDetailStressBar.value = Math.max(0, Math.min(200, Number(hero.stress) || 0));
+  const quirks = (hero.quirks || []).filter((entry) => !entry.isDisease);
+  renderHeroDetailEntries(elements.heroDetailPositive, quirks.filter((entry) => entry.polarity === "positive"), "quirk", "hero.noQuirks");
+  renderHeroDetailEntries(elements.heroDetailNegative, quirks.filter((entry) => entry.polarity === "negative"), "quirk", "hero.noQuirks");
+  const unknownQuirks = quirks.filter((entry) => entry.polarity !== "positive" && entry.polarity !== "negative");
+  elements.heroDetailUnknownWrap.hidden = !unknownQuirks.length;
+  if (unknownQuirks.length) renderHeroDetailEntries(elements.heroDetailUnknown, unknownQuirks, "quirk", "hero.noQuirks");
+  renderHeroDetailEntries(elements.heroDetailCombat, hero.combatSkills || [], "combat", "hero.noSkills");
+  renderHeroDetailEntries(elements.heroDetailCamping, hero.campingSkills || [], "camping", "hero.noSkills");
+  renderHeroDetailEntries(elements.heroDetailDiseases, (hero.quirks || []).filter((entry) => entry.isDisease), "disease", "hero.noDiseases");
+  renderHeroDetailEntries(elements.heroDetailTrinkets, hero.trinkets || [], "trinket", "hero.noTrinkets");
+  renderHeroIdle(hero);
+}
+
+async function renameHero(hero) {
+  const updatedName = window.prompt(t("hero.namePrompt"), hero.name || "");
+  if (updatedName == null || updatedName === hero.name) return;
+  try { renderCampaign(await editorGateway.editHeroes("rename", latestCampaign.revision,
+    { heroId: hero.id, name: updatedName })); }
+  catch (error) { elements.townSaveState.textContent = displayError(error); }
+}
+
 function renderCampaign(campaign) {
   latestCampaign = campaign;
   const resources = campaign.resources || [];
@@ -487,6 +629,9 @@ function renderCampaign(campaign) {
   for (const hero of campaign.heroes || []) {
     const row = document.createElement("div");
     row.className = "hero-entry";
+    row.dataset.heroId = hero.id;
+    row.draggable = true;
+    row.title = t("hero.rowHint");
     const asset = hero.portraitPath
       ? { path: hero.portraitPath, resolved: true }
       : chooseAsset(hero.assets, ["portrait_roster", "portrait", "hero", "roster"]);
@@ -494,19 +639,55 @@ function renderCampaign(campaign) {
       const image = document.createElement("img");
       image.alt = "";
       image.src = assetUrl(asset);
+      image.draggable = false;
       image.onerror = () => { image.replaceWith(Object.assign(document.createElement("span"), { className: "missing-art portrait-fallback" })); };
       row.append(image);
     } else row.append(Object.assign(document.createElement("span"), { className: "missing-art portrait-fallback" }));
     const text = document.createElement("div");
     text.className = "hero-entry-text";
     const name = document.createElement("strong");
-    name.textContent = cleanGameText(hero.name || hero.id);
+    name.textContent = cleanGameText(hero.name || t("hero.unnamed"));
     const className = document.createElement("small");
     className.textContent = cleanGameText(hero.className || hero.classId || t("town.unknownClass"));
     text.append(name, className);
     row.append(text);
+    row.addEventListener("click", () => {
+      activeHeroId = hero.id;
+      renderHeroDetail();
+      if (!elements.heroDetail.open) elements.heroDetail.showModal();
+    });
+    row.addEventListener("contextmenu", async (event) => {
+      event.preventDefault();
+      if (!event.shiftKey && !window.confirm(t("hero.deleteConfirm", { name: cleanGameText(hero.name || hero.className || hero.id) }))) return;
+      try { renderCampaign(await editorGateway.editHeroes("delete", latestCampaign.revision, { heroId: hero.id })); }
+      catch (error) { elements.townSaveState.textContent = displayError(error); }
+    });
+    row.addEventListener("dragstart", (event) => {
+      row.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-ddse-hero", hero.id);
+    });
+    row.addEventListener("dragend", () => row.classList.remove("dragging"));
+    row.addEventListener("dragover", (event) => {
+      if (!event.dataTransfer.types.includes("application/x-ddse-hero")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    });
+    row.addEventListener("drop", async (event) => {
+      const from = event.dataTransfer.getData("application/x-ddse-hero");
+      if (!from) return;
+      event.preventDefault();
+      const order = [...elements.heroList.querySelectorAll(".hero-entry")].map((item) => item.dataset.heroId);
+      const fromIndex = order.indexOf(from);
+      const toIndex = order.indexOf(hero.id);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+      order.splice(toIndex, 0, ...order.splice(fromIndex, 1));
+      try { renderCampaign(await editorGateway.editHeroes("reorder", latestCampaign.revision, { heroIds: order })); }
+      catch (error) { elements.townSaveState.textContent = displayError(error); }
+    });
     elements.heroList.append(row);
   }
+  if (elements.heroDetail.open) renderHeroDetail();
 
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="inventory"]').forEach((tooltip) => tooltip.remove());
   elements.trinketGrid.replaceChildren();
@@ -718,6 +899,61 @@ function renderTrinketSelector() {
     });
     elements.trinketSelectorList.append(row);
   }
+}
+
+function renderHeroSelector() {
+  const query = elements.heroSearch.value.trim().toLocaleLowerCase();
+  const sourceId = elements.heroModFilter.value;
+  const visible = heroClassDefinitions.filter((item) => {
+    const searchable = `${item.id} ${item.name} ${item.modName} ${item.sourceId}`.toLocaleLowerCase();
+    return (!sourceId || item.sourceId === sourceId) && (!query || searchable.includes(query));
+  });
+  elements.heroSelectorList.replaceChildren();
+  for (const item of visible) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `trinket-selector-item${selectedHeroClassIds.has(item.id) ? " selected" : ""}`;
+    if (item.portraitPath) {
+      const image = document.createElement("img");
+      image.alt = "";
+      image.src = `/api/content-asset?path=${encodeURIComponent(item.portraitPath)}`;
+      image.onerror = () => image.replaceWith(Object.assign(document.createElement("span"),
+        { className: "missing-art item-fallback" }));
+      row.append(image);
+    } else row.append(Object.assign(document.createElement("span"), { className: "missing-art item-fallback" }));
+    const info = document.createElement("span");
+    info.className = "trinket-selector-info";
+    info.append(Object.assign(document.createElement("strong"), { textContent: item.name || item.id }));
+    info.append(Object.assign(document.createElement("small"), { textContent: `${item.modName || item.sourceId} · ${item.id}` }));
+    row.append(info);
+    row.addEventListener("click", () => {
+      if (selectedHeroClassIds.has(item.id)) selectedHeroClassIds.delete(item.id);
+      else selectedHeroClassIds.add(item.id);
+      renderHeroSelector();
+    });
+    elements.heroSelectorList.append(row);
+  }
+  elements.heroSelectorMessage.textContent = heroClassDefinitions.length
+    ? t("hero.results", { count: visible.length })
+    : t("hero.noSafeTemplate");
+  elements.heroSelectionCount.textContent = t("hero.selectedCount", { count: selectedHeroClassIds.size });
+}
+
+async function openHeroSelector() {
+  selectedHeroClassIds.clear();
+  elements.heroSearch.value = "";
+  elements.heroModFilter.replaceChildren(new Option(t("hero.allMods"), ""));
+  elements.heroSelectorList.replaceChildren();
+  elements.heroSelectorMessage.textContent = t("hero.loading");
+  if (!elements.heroSelector.open) elements.heroSelector.showModal();
+  try {
+    heroClassDefinitions = await editorGateway.listHeroClasses();
+    const mods = new Map();
+    for (const item of heroClassDefinitions) if (item.sourceId)
+      mods.set(item.sourceId, item.modName || item.sourceId);
+    for (const [id, name] of mods) elements.heroModFilter.add(new Option(name, id));
+    renderHeroSelector();
+  } catch (error) { elements.heroSelectorMessage.textContent = displayError(error); }
 }
 
 async function openTrinketSelector(mode) {
@@ -1202,7 +1438,41 @@ elements.language.addEventListener("change", async () => {
   });
 }
 
-elements.trinketAdd.addEventListener("click", () => openTrinketSelector("add"));
+elements.heroAdd.addEventListener("click", openHeroSelector);
+elements.heroDetailClose.addEventListener("click", () => elements.heroDetail.close());
+elements.heroDetail.addEventListener("close", () => { activeHeroId = null; stopHeroIdle(); });
+elements.heroDetailRename.addEventListener("click", () => {
+  const hero = (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId);
+  if (hero && hero.nameEditable !== false) renameHero(hero);
+});
+elements.heroDetailTrinkets.addEventListener("wheel", (event) => {
+  if (elements.heroDetailTrinkets.scrollWidth <= elements.heroDetailTrinkets.clientWidth || !event.deltaY) return;
+  event.preventDefault();
+  elements.heroDetailTrinkets.scrollLeft += event.deltaY;
+}, { passive: false });
+elements.heroSelectorClose.addEventListener("click", () => elements.heroSelector.close());
+elements.heroSelector.addEventListener("close", () => { selectedHeroClassIds.clear(); });
+elements.heroSearch.addEventListener("input", renderHeroSelector);
+elements.heroModFilter.addEventListener("change", () => { selectedHeroClassIds.clear(); renderHeroSelector(); });
+elements.heroClearSelection.addEventListener("click", () => { selectedHeroClassIds.clear(); renderHeroSelector(); });
+elements.heroBatchConfirm.addEventListener("click", async () => {
+  const query = elements.heroSearch.value.trim().toLocaleLowerCase();
+  const sourceId = elements.heroModFilter.value;
+  const visible = heroClassDefinitions.filter((item) => {
+    const text = `${item.id} ${item.name} ${item.modName} ${item.sourceId}`.toLocaleLowerCase();
+    return (!sourceId || item.sourceId === sourceId) && (!query || text.includes(query));
+  });
+  const selected = selectedHeroClassIds.size ? [...selectedHeroClassIds] : visible.map((item) => item.id);
+  if (!selected.length) { elements.heroSelectorMessage.textContent = t("hero.noChanges"); return; }
+  if (selected.length > 1 && !window.confirm(t("hero.confirmBatch", { count: selected.length }))) return;
+  elements.heroBatchConfirm.disabled = true;
+  elements.heroSelectorMessage.textContent = t("hero.working");
+  try {
+    renderCampaign(await editorGateway.editHeroes("add", latestCampaign.revision, { classIds: selected }));
+    elements.heroSelector.close();
+  } catch (error) { elements.heroSelectorMessage.textContent = displayError(error); }
+  finally { elements.heroBatchConfirm.disabled = false; }
+});
 elements.trinketSort.addEventListener("click", async () => {
   if (!latestCampaign?.trinkets?.length) return;
   const desired = sortedTrinketInventory(latestCampaign.trinkets);
@@ -1269,7 +1539,7 @@ elements.trinketBatchConfirm.addEventListener("click", async () => {
   const estimate = trinketSelectorMode === "batchAdd" ? estimatedAddCount
     : rawKeys ? rawKeys.length : (latestCampaign?.trinkets || []).length;
   if (!estimate) { elements.trinketSelectorMessage.textContent = t("trinket.noChanges"); return; }
-  if (!window.confirm(t("trinket.confirmBatch", { count: estimate }))) return;
+  if (estimate > 1 && !window.confirm(t("trinket.confirmBatch", { count: estimate }))) return;
   elements.trinketBatchConfirm.disabled = true;
   elements.trinketSelectorMessage.textContent = t("trinket.working");
   try {

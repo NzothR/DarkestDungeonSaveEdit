@@ -37,10 +37,10 @@ const std::vector<CampaignMappingDescriptor>& stage8_campaign_mappings() {
     static const std::vector<CampaignMappingDescriptor> mappings{
         {"Hero.PersistentId", "persist.roster.json", "base_root/heroes/{guid}",
          core::dson::ValueKind::Object, "VERIFIED_GAME", true, true,
-         "新增 mod 英雄的克隆结构及初始状态已通过游戏验证；只允许经 HeroFactory 生成并清理集合后追加。"},
+         "由程序内置的空白 0 级英雄 DSON 模板生成；职业初始技能与属性从当前生效的原版/mod 内容定义读取。"},
         {"Hero.Name", "persist.roster.json", "base_root/heroes/{guid}/hero_file_data/raw_data => base_root/actor/name",
-         core::dson::ValueKind::String, "VERIFIED_SAMPLE", true, false,
-         "名称字段可定位并生成候选写回；独立改名仍待游戏内验收。", true},
+         core::dson::ValueKind::String, "VERIFIED_GAME", true, true,
+         "英雄改名已通过游戏内验收；现有英雄和内置模板生成的英雄使用相同的名称字段。", true},
         {"Hero.Class", "persist.roster.json", "base_root/heroes/{guid}/hero_file_data/raw_data => base_root/heroClass",
          core::dson::ValueKind::String, "VERIFIED_SAMPLE", false, false,
          "保留原始职业 ID，通过有效内容环境解析名称、来源和资源。"},

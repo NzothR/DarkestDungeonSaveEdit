@@ -222,7 +222,7 @@ CREATE INDEX idx_content_relationships_parent ON content_relationships(parent_ty
             [&](sqlite::Statement& s, std::size_t row) {
                 auto r = bind_text(s, 1, row == 0 ? std::string_view{"schema_version"} : std::string_view{"scanner_version"});
                 if (!r) return r;
-                return bind_text(s, 2, row == 0 ? std::string_view{"2"} : std::string_view{"stage6"});
+                return bind_text(s, 2, row == 0 ? std::string_view{"2"} : std::string_view{"stage9"});
             });
         if (!inserted) return inserted;
 

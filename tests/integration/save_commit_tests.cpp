@@ -1,7 +1,11 @@
 #include "ddse/application/campaign_mappings.hpp"
+#include "ddse/application/campaign_edit_session.hpp"
+#include "ddse/application/hero_template.hpp"
 #include "ddse/application/save_commit.hpp"
 #include "ddse/application/save_profile.hpp"
+#include "ddse/core/dson/dson_document_editor.hpp"
 #include "ddse/core/dson/dson_reader.hpp"
+#include "ddse/core/dson/dson_writer.hpp"
 #include "ddse/infrastructure/native_file_system.hpp"
 
 #include <gtest/gtest.h>
@@ -472,7 +476,7 @@ TEST(SafeSaveCommitter, CommitsMappedStructuralEraseToTheCopyAndKeepsBackupAndSo
     EXPECT_EQ(result.value().committed_documents, (std::vector<std::string>{"persist.roster.json"}));
 }
 
-TEST(SafeSaveCommitter, RefusesCandidateOnlyMappingsBeforeBackupOrDiskWrite) {
+TEST(SafeSaveCommitter, CommitsVerifiedHeroRenameWithBackup) {
     TempDirectory temp;
     const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
     if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
@@ -484,14 +488,307 @@ TEST(SafeSaveCommitter, RefusesCandidateOnlyMappingsBeforeBackupOrDiskWrite) {
     const auto profile = load_profile(fs, source_root);
     const auto name = hero_name_change(profile);
     ASSERT_TRUE(name);
-    const auto backup_path = temp.path / "backups" / "unverified";
+    const auto backup_path = temp.path / "backups" / "hero-rename";
 
     const auto result = application::SafeSaveCommitter{fs}.commit(profile, change_set({*name}), target_root, backup_path);
-    ASSERT_FALSE(result);
-    EXPECT_EQ(result.error().code, core::ErrorCode::MappingNotWritable);
-    EXPECT_EQ(fs.atomic_write_count, 0U);
-    EXPECT_FALSE(std::filesystem::exists(backup_path));
-    EXPECT_EQ(read_bytes(target_root / "persist.roster.json"), profile.documents.at("persist.roster.json").bytes);
+    ASSERT_TRUE(result) << result.error().message;
+    EXPECT_EQ(fs.atomic_write_count, 1U);
+    EXPECT_TRUE(std::filesystem::exists(backup_path / "persist.roster.json"));
+    EXPECT_NE(read_bytes(target_root / "persist.roster.json"), profile.documents.at("persist.roster.json").bytes);
+}
+
+TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    TempDirectory temp;
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    infrastructure::NativeFileSystem fs;
+    auto profile = load_profile(fs, source_root);
+    const auto template_result = application::build_blank_level_zero_hero_template(
+        "crusader", {"smite", "stunning_blow"}, {}, 33.0F);
+    ASSERT_TRUE(template_result) << template_result.error().message;
+    auto empty_roster = *profile.documents.at("persist.roster.json").decoded;
+    constexpr std::string_view hero_prefix{"base_root/heroes/"};
+    while (true) {
+        const auto hero = std::find_if(empty_roster.fields.begin(), empty_roster.fields.end(), [hero_prefix](const auto& field) {
+            return field.kind == core::dson::ValueKind::Object && field.path.starts_with(hero_prefix) &&
+                field.path.find('/', hero_prefix.size()) == std::string::npos;
+        });
+        if (hero == empty_roster.fields.end()) break;
+        const auto erased = core::dson::DsonDocumentEditor::erase(empty_roster, hero->path);
+        ASSERT_TRUE(erased) << erased.error().message;
+    }
+    const auto encoded = core::dson::DsonWriter{}.encode(empty_roster);
+    ASSERT_TRUE(encoded) << encoded.error().message;
+    const std::string bytes{reinterpret_cast<const char*>(encoded.value().data()), encoded.value().size()};
+    write_bytes(source_root / "persist.roster.json", bytes);
+    profile = load_profile(fs, source_root);
+    const auto parsed = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{encoded.value().data(), encoded.value().size()}, "persist.roster.json");
+    ASSERT_TRUE(parsed) << parsed.error().message;
+    const auto next_guid_field = std::find_if(parsed.value().fields.begin(), parsed.value().fields.end(),
+        [](const auto& field) { return field.path == "base_root/nextGuid"; });
+    ASSERT_NE(next_guid_field, parsed.value().fields.end());
+    const auto starting_guid = std::get<std::int32_t>(next_guid_field->value);
+    const auto hero_id = std::to_string(std::max(starting_guid, 2));
+
+    application::CampaignDocumentMutation append{
+        application::CampaignDocumentMutationKind::AppendTemplate, "Hero.PersistentId",
+        "persist.roster.json", "base_root/heroes/" + hero_id, "base_root/heroes/1", hero_id,
+        core::dson::ValueKind::Object};
+    append.template_document = template_result.value();
+    append.template_hero_class = "crusader";
+    append.template_class_name = "Crusader";
+    append.template_source_id = "vanilla";
+    append.template_base_hit_points = 33.0F;
+    append.template_combat_skills = {"smite", "stunning_blow"};
+    application::CampaignEditSession session{domain::CampaignModel{}};
+    const auto added = session.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.add", {append}}}, 0);
+    ASSERT_TRUE(added) << added.error().message;
+    ASSERT_EQ(session.model().heroes.size(), 1U);
+    const auto renamed = session.apply(application::CampaignOperation{
+        application::SetCampaignValueOperation{{"Hero.Name", hero_id}, std::string{"New Crusader"}}},
+        session.revision());
+    ASSERT_TRUE(renamed) << renamed.error().message;
+
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, session.pending_changes());
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    ASSERT_EQ(candidate.value().documents.size(), 1U);
+    const auto& candidate_bytes = candidate.value().documents.front().bytes;
+    const auto decoded = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{reinterpret_cast<const std::byte*>(candidate_bytes.data()), candidate_bytes.size()},
+        "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    const auto advanced = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(),
+        [](const auto& field) { return field.path == "base_root/nextGuid"; });
+    ASSERT_NE(advanced, decoded.value().fields.end());
+    EXPECT_EQ(std::get<std::int32_t>(advanced->value), std::max(starting_guid, std::stoi(hero_id) + 1));
+    const auto embedded = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(), [&](const auto& field) {
+        return field.path == "base_root/heroes/" + hero_id + "/hero_file_data/raw_data";
+    });
+    ASSERT_NE(embedded, decoded.value().fields.end());
+    ASSERT_TRUE(embedded->embedded_document);
+    const auto embedded_value = [&](std::string_view path) -> const core::dson::DsonField* {
+        const auto found = std::find_if(embedded->embedded_document->fields.begin(),
+            embedded->embedded_document->fields.end(), [path](const auto& field) { return field.path == path; });
+        return found == embedded->embedded_document->fields.end() ? nullptr : &*found;
+    };
+    const auto* roster_status = embedded_value("base_root/roster.status");
+    const auto* prior_status = embedded_value("base_root/roster.before_on_start_town_visit_status");
+    const auto* current_hp = embedded_value("base_root/actor/current_hp");
+    const auto* resolve_xp = embedded_value("base_root/resolveXp");
+    const auto* weapon_rank = embedded_value("base_root/weapon_rank");
+    const auto* armour_rank = embedded_value("base_root/armour_rank");
+    ASSERT_NE(roster_status, nullptr);
+    ASSERT_NE(prior_status, nullptr);
+    ASSERT_NE(current_hp, nullptr);
+    ASSERT_NE(resolve_xp, nullptr);
+    ASSERT_NE(weapon_rank, nullptr);
+    ASSERT_NE(armour_rank, nullptr);
+    EXPECT_EQ(std::get<std::int32_t>(roster_status->value), 0);
+    EXPECT_EQ(std::get<std::int32_t>(prior_status->value), 0);
+    EXPECT_FLOAT_EQ(std::get<float>(current_hp->value), 33.0F);
+    EXPECT_EQ(std::get<std::int32_t>(resolve_xp->value), 0);
+    EXPECT_EQ(std::get<std::int32_t>(weapon_rank->value), 0);
+    EXPECT_EQ(std::get<std::int32_t>(armour_rank->value), 0);
+    ASSERT_NE(embedded_value("base_root/skills/selected_combat_skills/smite"), nullptr);
+    ASSERT_NE(embedded_value("base_root/skills/selected_combat_skills/stunning_blow"), nullptr);
+    const auto name = std::find_if(embedded->embedded_document->fields.begin(), embedded->embedded_document->fields.end(),
+        [](const auto& field) { return field.path == "base_root/actor/name"; });
+    ASSERT_NE(name, embedded->embedded_document->fields.end());
+    EXPECT_EQ(std::get<std::string>(name->value), "New Crusader");
+
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(source_root, target_root);
+    const auto backup_root = temp.path / "backups" / "hero-add-rename";
+    const auto committed = application::SafeSaveCommitter{fs}.commit(
+        profile, session.pending_changes(), target_root, backup_root);
+    ASSERT_TRUE(committed) << committed.error().message;
+    EXPECT_EQ(read_bytes(target_root / "persist.roster.json"), candidate_bytes);
+    EXPECT_EQ(read_bytes(backup_root / "persist.roster.json"), bytes);
+    EXPECT_EQ(read_bytes(source_root / "persist.roster.json"), bytes);
+}
+
+TEST(SaveAdapter, ReordersAndDeletesHeroesWithUndoAndCandidateReadback) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, fixture);
+    const auto& roster = *profile.documents.at("persist.roster.json").decoded;
+    domain::CampaignModel model;
+    std::vector<std::string> original_ids;
+    constexpr std::string_view prefix{"base_root/heroes/"};
+    for (const auto& field : roster.fields) {
+        if (field.kind != core::dson::ValueKind::Object || !field.path.starts_with(prefix) ||
+            field.path.find('/', prefix.size()) != std::string::npos) continue;
+        const auto id = field.path.substr(prefix.size());
+        domain::Hero hero;
+        hero.persistent_id = id;
+        hero.roster_position = model.heroes.size();
+        hero.state = domain::EntityState::Resolved;
+        hero.read_only = false;
+        hero.raw = {"persist.roster.json", {}, field.path};
+        model.heroes.push_back(std::move(hero));
+        original_ids.push_back(id);
+    }
+    ASSERT_GE(original_ids.size(), 2U);
+
+    using Kind = application::CampaignDocumentMutationKind;
+    const auto path = [](std::string_view id) { return "base_root/heroes/" + std::string{id}; };
+    auto reordered_ids = original_ids;
+    std::swap(reordered_ids[0], reordered_ids[1]);
+    std::vector<application::CampaignDocumentMutation> reorder;
+    for (std::size_t index = 0; index < reordered_ids.size(); ++index) {
+        const auto temporary = "ddse_test_order_" + std::to_string(index);
+        reorder.emplace_back(Kind::AppendClone, "Hero.PersistentId", "persist.roster.json",
+            path(temporary), path(reordered_ids[index]), temporary, core::dson::ValueKind::Object);
+    }
+    for (const auto& id : original_ids)
+        reorder.emplace_back(Kind::Erase, "Hero.PersistentId", "persist.roster.json",
+            path(id), "", "", core::dson::ValueKind::Object);
+    for (std::size_t index = 0; index < reordered_ids.size(); ++index)
+        reorder.emplace_back(Kind::Rename, "Hero.PersistentId", "persist.roster.json",
+            path("ddse_test_order_" + std::to_string(index)), "", reordered_ids[index], core::dson::ValueKind::Object);
+
+    application::CampaignEditSession session{model};
+    const auto applied = session.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.reorder", reorder}}, 0);
+    ASSERT_TRUE(applied) << applied.error().message;
+    EXPECT_EQ(session.model().heroes.front().persistent_id, reordered_ids.front());
+    ASSERT_TRUE(session.undo(session.revision()));
+    EXPECT_EQ(session.model().heroes.front().persistent_id, original_ids.front());
+    ASSERT_TRUE(session.redo(session.revision()));
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, session.pending_changes());
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    const auto& bytes = candidate.value().documents.front().bytes;
+    const auto decoded = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()}, "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    std::vector<std::string> actual_ids;
+    for (const auto& field : decoded.value().fields)
+        if (field.kind == core::dson::ValueKind::Object && field.path.starts_with(prefix) &&
+            field.path.find('/', prefix.size()) == std::string::npos)
+            actual_ids.push_back(field.path.substr(prefix.size()));
+    EXPECT_EQ(actual_ids, reordered_ids);
+
+    application::CampaignEditSession deletion{model};
+    const auto deleted_id = original_ids.back();
+    std::vector<application::CampaignDocumentMutation> erase;
+    erase.emplace_back(Kind::Erase, "Hero.PersistentId", "persist.roster.json",
+        path(deleted_id), "", "", core::dson::ValueKind::Object);
+    const auto deleted = deletion.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.delete", erase}}, 0);
+    ASSERT_TRUE(deleted) << deleted.error().message;
+    ASSERT_TRUE(deletion.undo(deletion.revision()));
+    ASSERT_TRUE(deletion.redo(deletion.revision()));
+    const auto deletion_candidate = application::SaveAdapter{}.build_candidate(profile, deletion.pending_changes());
+    ASSERT_TRUE(deletion_candidate) << deletion_candidate.error().message;
+    const auto& deleted_bytes = deletion_candidate.value().documents.front().bytes;
+    const auto deleted_roster = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{reinterpret_cast<const std::byte*>(deleted_bytes.data()), deleted_bytes.size()},
+        "persist.roster.json");
+    ASSERT_TRUE(deleted_roster) << deleted_roster.error().message;
+    EXPECT_TRUE(std::none_of(deleted_roster.value().fields.begin(), deleted_roster.value().fields.end(),
+        [&](const auto& field) { return field.path == path(deleted_id); }));
+    EXPECT_EQ(profile.documents.at("persist.roster.json").bytes, read_bytes(fixture / "persist.roster.json"));
+
+    const auto rename = hero_name_change(profile, "Delete After Rename");
+    ASSERT_TRUE(rename);
+    auto named_model = model;
+    auto named_hero = std::find_if(named_model.heroes.begin(), named_model.heroes.end(), [&](const auto& hero) {
+        return hero.persistent_id == rename->target.entity_id;
+    });
+    ASSERT_NE(named_hero, named_model.heroes.end());
+    named_hero->name.value = std::get<std::string>(rename->before);
+    named_hero->name.raw = rename->raw;
+    application::CampaignEditSession renamed_then_reordered{named_model};
+    const auto rename_before_reorder = renamed_then_reordered.apply(application::CampaignOperation{
+        application::SetCampaignValueOperation{{"Hero.Name", named_hero->persistent_id},
+            std::string{"Rename Before Reorder"}}}, 0);
+    ASSERT_TRUE(rename_before_reorder) << rename_before_reorder.error().message;
+    const auto reordered_after_rename = renamed_then_reordered.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.reorder", reorder}},
+        renamed_then_reordered.revision());
+    ASSERT_TRUE(reordered_after_rename) << reordered_after_rename.error().message;
+    const auto renamed_reordered_candidate = application::SaveAdapter{}.build_candidate(
+        profile, renamed_then_reordered.pending_changes());
+    ASSERT_TRUE(renamed_reordered_candidate) << renamed_reordered_candidate.error().message;
+    application::CampaignEditSession renamed_then_deleted{named_model};
+    const auto renamed = renamed_then_deleted.apply(application::CampaignOperation{
+        application::SetCampaignValueOperation{{"Hero.Name", named_hero->persistent_id},
+            std::string{"Delete After Rename"}}}, 0);
+    ASSERT_TRUE(renamed) << renamed.error().message;
+    std::vector<application::CampaignDocumentMutation> erase_named;
+    erase_named.emplace_back(Kind::Erase, "Hero.PersistentId", "persist.roster.json",
+        path(named_hero->persistent_id), "", "", core::dson::ValueKind::Object);
+    const auto removed_named = renamed_then_deleted.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.delete", erase_named}},
+        renamed_then_deleted.revision());
+    ASSERT_TRUE(removed_named) << removed_named.error().message;
+    const auto renamed_deleted_candidate = application::SaveAdapter{}.build_candidate(
+        profile, renamed_then_deleted.pending_changes());
+    ASSERT_TRUE(renamed_deleted_candidate) << renamed_deleted_candidate.error().message;
+    TempDirectory temp;
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(fixture, target_root);
+    const auto committed = application::SafeSaveCommitter{fs}.commit(profile,
+        renamed_then_deleted.pending_changes(), target_root, temp.path / "backup");
+    ASSERT_TRUE(committed) << committed.error().message;
+    EXPECT_EQ(read_bytes(target_root / "persist.roster.json"),
+        renamed_deleted_candidate.value().documents.front().bytes);
+}
+
+TEST(SaveAdapter, AddsTrinketFromBuiltInSchemaToEmptyInventory) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    infrastructure::NativeFileSystem fs;
+    auto profile = load_profile(fs, fixture);
+    auto& estate = profile.documents.at("persist.estate.json");
+    auto empty_estate = *estate.decoded;
+    constexpr std::string_view item_prefix{"base_root/trinkets/items/"};
+    while (true) {
+        const auto item = std::find_if(empty_estate.fields.begin(), empty_estate.fields.end(), [item_prefix](const auto& field) {
+            return field.kind == core::dson::ValueKind::Object && field.path.starts_with(item_prefix) &&
+                field.path.find('/', item_prefix.size()) == std::string::npos;
+        });
+        if (item == empty_estate.fields.end()) break;
+        const auto erased = core::dson::DsonDocumentEditor::erase(empty_estate, item->path);
+        ASSERT_TRUE(erased) << erased.error().message;
+    }
+    const auto encoded = core::dson::DsonWriter{}.encode(empty_estate);
+    ASSERT_TRUE(encoded) << encoded.error().message;
+    estate.bytes.assign(reinterpret_cast<const char*>(encoded.value().data()), encoded.value().size());
+    const auto parsed = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{encoded.value().data(), encoded.value().size()}, "persist.estate.json");
+    ASSERT_TRUE(parsed) << parsed.error().message;
+    estate.decoded = parsed.value();
+
+    using Kind = application::CampaignDocumentMutationKind;
+    std::vector<application::CampaignDocumentMutation> mutations;
+    mutations.emplace_back(Kind::CreateObject, "TrinketInventory.Items", "persist.estate.json",
+        "base_root/trinkets/items/0", "", "0", core::dson::ValueKind::Object);
+    mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
+        "base_root/trinkets/items/0/id", "", "", core::dson::ValueKind::String,
+        application::CampaignValue{std::string{}}, application::CampaignValue{std::string{"test_trinket"}});
+    application::CampaignEditSession session{domain::CampaignModel{}};
+    const auto added = session.apply(application::CampaignOperation{
+        application::ApplyCampaignDocumentMutationsOperation{"campaign.trinket.add_inventory", mutations}}, 0);
+    ASSERT_TRUE(added) << added.error().message;
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, session.pending_changes());
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    ASSERT_EQ(candidate.value().documents.size(), 1U);
+    const auto& output = candidate.value().documents.front().bytes;
+    const auto decoded = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{reinterpret_cast<const std::byte*>(output.data()), output.size()},
+        "persist.estate.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    const auto trinket = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(), [](const auto& field) {
+        return field.path == "base_root/trinkets/items/0/id";
+    });
+    ASSERT_NE(trinket, decoded.value().fields.end());
+    EXPECT_EQ(std::get<std::string>(trinket->value), "test_trinket");
 }
 
 TEST(SafeSaveCommitter, AcceptanceTestModeWritesCandidateMappingOnlyToVerifiedCopy) {

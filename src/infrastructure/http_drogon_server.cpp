@@ -4,6 +4,7 @@
 #include "ddse/application/save_commit.hpp"
 #include "ddse/application/campaign_model_builder.hpp"
 #include "ddse/application/campaign_edit_session.hpp"
+#include "ddse/application/hero_template.hpp"
 #include "ddse/core/dson/dson_document.hpp"
 #include "ddse/application/mod_environment.hpp"
 #include "ddse/infrastructure/database_initialization.hpp"
@@ -32,9 +33,11 @@
 #include <map>
 #include <random>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -105,6 +108,10 @@ struct ServerContext {
         mutable std::optional<std::vector<DatabaseModRecord>> cached_mod_records;
         mutable std::map<std::string, Json::Value, std::less<>> cached_trinket_details;
         std::vector<Json::Value> cached_trinket_catalog;
+        std::vector<Json::Value> cached_hero_catalog;
+        std::map<std::string, std::string, std::less<>> cached_combat_skill_icons;
+        std::vector<std::int32_t> resolve_level_thresholds;
+        std::uint64_t next_hero_guid{1};
         std::vector<application::ContentDefinition> trinket_definitions;
         std::vector<BuildingUpgradeTree> building_upgrade_trees;
         std::vector<std::string> official_district_ids;
@@ -301,6 +308,7 @@ std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
 std::vector<std::string> load_official_district_ids(application::IFileSystem& file_system,
                                                     const std::filesystem::path& game_root);
 void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession& campaign);
+void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& campaign);
 
 std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     const auto& configuration = context.configuration_store.current();
@@ -344,11 +352,41 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     session->official_district_ids = load_official_district_ids(context.file_system,
         context.configuration_store.current().game_root);
     session->profile = std::move(profile.value());
+    if (const auto roster = session->profile.documents.find("persist.roster.json");
+        roster != session->profile.documents.end() && roster->second.decoded) {
+        for (const auto& field : roster->second.decoded->fields) {
+            if (field.path == "base_root/nextGuid") {
+                if (const auto* value = std::get_if<std::int32_t>(&field.value); value && *value > 0)
+                    session->next_hero_guid = static_cast<std::uint64_t>(*value);
+                break;
+            }
+        }
+    }
     session->mod_database_path = context.initialization.mod_database_path();
+    if (const auto roster_rules = context.file_system.read_file(
+            context.configuration_store.current().game_root / "campaign/roster/roster.variables.json")) {
+        try {
+            const auto rules = nlohmann::json::parse(roster_rules.value());
+            if (rules.contains("resolve_level_thresholds") && rules["resolve_level_thresholds"].is_array()) {
+                for (const auto& threshold : rules["resolve_level_thresholds"]) {
+                    if (!threshold.is_number_integer()) break;
+                    const auto number = threshold.get<std::int32_t>();
+                    if (!session->resolve_level_thresholds.empty() && number <= session->resolve_level_thresholds.back()) break;
+                    session->resolve_level_thresholds.push_back(number);
+                }
+                if (session->resolve_level_thresholds.empty() || session->resolve_level_thresholds.front() != 0 ||
+                    session->resolve_level_thresholds.size() != rules["resolve_level_thresholds"].size())
+                    session->resolve_level_thresholds.clear();
+            }
+        } catch (const nlohmann::json::exception&) {
+            session->resolve_level_thresholds.clear();
+        }
+    }
     for (const auto& item : model.trinket_inventory) session->reserved_trinket_keys.insert(item.raw_key);
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
     warm_trinket_catalog(context, *session);
+    warm_hero_catalog(context, *session);
     context.campaign = std::move(session);
     return std::nullopt;
 }
@@ -852,7 +890,9 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     for (const auto& hero : model.heroes) {
         Json::Value item(Json::objectValue);
         item["id"] = hero.persistent_id;
-        item["name"] = strip_game_markup(hero.name.value ? *hero.name.value : hero.persistent_id);
+        item["name"] = strip_game_markup(hero.name.value.value_or(std::string{}));
+        item["nameEditable"] = hero.name.value.has_value() && hero.name.raw.has_value();
+        item["rosterPosition"] = static_cast<Json::UInt64>(hero.roster_position);
         item["classId"] = hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id;
         item["className"] = strip_game_markup(hero.definition.display_name.empty()
             ? (hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id)
@@ -860,6 +900,82 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["state"] = hero.state == domain::EntityState::Resolved ? "resolved" : "partial";
         item["assets"] = definition_assets(hero.definition);
         if (const auto portrait = hero_roster_portrait(hero.definition)) item["portraitPath"] = *portrait;
+        auto level = hero.level.value;
+        if (!level && hero.resolve_xp.value && !campaign.resolve_level_thresholds.empty()) {
+            const auto found = std::upper_bound(campaign.resolve_level_thresholds.begin(),
+                campaign.resolve_level_thresholds.end(), *hero.resolve_xp.value);
+            if (found != campaign.resolve_level_thresholds.begin())
+                level = static_cast<std::int32_t>(found - campaign.resolve_level_thresholds.begin() - 1);
+        }
+        item["level"] = level ? Json::Value(*level) : Json::Value(Json::nullValue);
+        item["resolveXp"] = hero.resolve_xp.value ? Json::Value(*hero.resolve_xp.value) : Json::Value(Json::nullValue);
+        item["stress"] = hero.stress.value ? Json::Value(*hero.stress.value) : Json::Value(Json::nullValue);
+        const auto catalog = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
+            [&](const Json::Value& entry) { return entry["id"].asString() == item["classId"].asString(); });
+        if (catalog != campaign.cached_hero_catalog.end()) {
+            for (const auto* key : {"idleSpritePath", "idleAtlasPath", "idleSkeletonPath"})
+                if (catalog->isMember(key)) item[key] = (*catalog)[key];
+            if (!item.isMember("portraitPath") && catalog->isMember("portraitPath"))
+                item["portraitPath"] = (*catalog)["portraitPath"];
+        }
+        Json::Value quirks(Json::arrayValue);
+        for (const auto& quirk : hero.quirks) {
+            Json::Value entry(Json::objectValue);
+            entry["id"] = quirk.id;
+            entry["name"] = strip_game_markup(quirk.definition.display_name.empty()
+                ? quirk.id : quirk.definition.display_name);
+            entry["isDisease"] = quirk.is_disease;
+            entry["isLocked"] = quirk.is_locked.value.value_or(false);
+            entry["polarity"] = quirk.polarity == domain::QuirkPolarity::Positive ? "positive" :
+                quirk.polarity == domain::QuirkPolarity::Negative ? "negative" : "unknown";
+            entry["assets"] = definition_assets(quirk.definition);
+            quirks.append(std::move(entry));
+        }
+        item["quirks"] = std::move(quirks);
+        const auto skills_value = [&](const std::vector<domain::HeroSkillSelection>& skills, bool camping) {
+            Json::Value entries(Json::arrayValue);
+            for (const auto& skill : skills) {
+                Json::Value entry(Json::objectValue);
+                entry["id"] = skill.id;
+                std::string name = skill.definition.display_name;
+                if (camping) {
+                    const auto localized = campaign.content->resolve_localization("camping_skill_name_" + skill.id);
+                    if (localized && localized.value() && !localized.value()->value.empty())
+                        name = localized.value()->value;
+                }
+                entry["name"] = strip_game_markup(name.empty() ? skill.id : name);
+                entry["assets"] = definition_assets(skill.definition);
+                if (camping) {
+                    const auto icon = std::find_if(skill.definition.assets.begin(), skill.definition.assets.end(),
+                        [](const domain::AssetReference& asset) {
+                            return asset.role == "skill_icon" && asset.resolved;
+                        });
+                    if (icon != skill.definition.assets.end()) entry["iconPath"] = icon->virtual_path;
+                    else {
+                        const auto path = "raid/camping/skill_icons/camp_skill_" + skill.id + ".png";
+                        const auto resolved = campaign.content->resolve_asset(path);
+                        if (resolved && resolved.value()) entry["iconPath"] = path;
+                    }
+                } else {
+                    const auto found = campaign.cached_combat_skill_icons.find(item["classId"].asString() + ":" + skill.id);
+                    if (found != campaign.cached_combat_skill_icons.end()) entry["iconPath"] = found->second;
+                }
+                entries.append(std::move(entry));
+            }
+            return entries;
+        };
+        item["combatSkills"] = skills_value(hero.combat_skills, false);
+        item["campingSkills"] = skills_value(hero.camping_skills, true);
+        Json::Value equipped(Json::arrayValue);
+        for (const auto& trinket : hero.trinkets) {
+            Json::Value entry(Json::objectValue);
+            entry["id"] = trinket.id;
+            entry["name"] = strip_game_markup(trinket.definition.display_name.empty()
+                ? trinket.id : trinket.definition.display_name);
+            entry["assets"] = definition_assets(trinket.definition);
+            equipped.append(std::move(entry));
+        }
+        item["trinkets"] = std::move(equipped);
         heroes.append(std::move(item));
     }
     value["heroes"] = std::move(heroes);
@@ -1041,6 +1157,529 @@ void handle_campaign_resource(const drogon::HttpRequestPtr& request,
     callback(json_ok(campaign_value(*context->campaign)));
 }
 
+struct HeroStarterData {
+    std::vector<std::string> combat_skills;
+    std::vector<std::string> camping_skills;
+    float base_hit_points{};
+};
+
+void append_hero_catalog_debug_log(const std::filesystem::path& data_root,
+                                  std::string_view event,
+                                  const application::ContentDefinition* definition,
+                                  const core::Error* error,
+                                  std::size_t listed_count = 0,
+                                  std::size_t usable_count = 0) noexcept {
+    try {
+        const auto directory = data_root / "logs";
+        std::filesystem::create_directories(directory);
+        std::ofstream output(directory / "hero-catalog-debug.jsonl", std::ios::binary | std::ios::app);
+        if (!output) return;
+        const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        nlohmann::json context = nlohmann::json::object();
+        if (error) for (const auto& [key, value] : error->context) context[key] = value;
+        nlohmann::json entry{
+            {"timestamp_unix_ms", timestamp}, {"event", event},
+            {"listed_count", listed_count}, {"usable_count", usable_count},
+            {"error_code", error ? std::string{core::to_string(error->code)} : std::string{}},
+            {"error_module", error ? error->module : std::string{}},
+            {"error", error ? error->message : std::string{}}, {"context", std::move(context)}};
+        if (definition) {
+            entry["class_id"] = definition->id;
+            entry["source_id"] = definition->provenance.source_id;
+            entry["virtual_path"] = definition->provenance.virtual_path;
+        }
+        output << entry.dump() << '\n';
+    } catch (...) {
+        // Catalog diagnostics must never interrupt hero selection.
+    }
+}
+
+std::vector<std::string> definition_field_values(const nlohmann::json& record, std::string_view name) {
+    std::vector<std::string> result;
+    if (!record.is_object() || !record.contains("fields") || !record["fields"].is_object()) return result;
+    const auto& fields = record["fields"];
+    const auto found = fields.find(std::string{name});
+    if (found == fields.end()) return result;
+    if (found->is_array()) {
+        for (const auto& value : *found) {
+            if (value.is_string()) result.push_back(value.get<std::string>());
+            else if (value.is_number()) result.push_back(value.dump());
+        }
+    } else if (found->is_string()) result.push_back(found->get<std::string>());
+    return result;
+}
+
+std::optional<std::int32_t> definition_int_field(const nlohmann::json& record, std::string_view name) {
+    const auto values = definition_field_values(record, name);
+    if (values.empty()) return std::nullopt;
+    std::int32_t result{};
+    const auto& text = values.front();
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), result);
+    if (error != std::errc{} || end != text.data() + text.size()) return std::nullopt;
+    return result;
+}
+
+core::Result<HeroStarterData, core::Error> hero_starter_data(
+    const application::ContentDefinition& definition,
+    const std::vector<application::ContentDefinition>& skill_definitions) {
+    HeroStarterData starter;
+    std::vector<std::string> combat_order;
+    std::vector<std::string> guaranteed_combat;
+    std::int32_t combat_count = 4;
+    std::int32_t class_camping_count = 2;
+    std::int32_t shared_camping_count = 1;
+    try {
+        const auto payload = nlohmann::json::parse(definition.payload_json);
+        if (!payload.is_object() || !payload.contains("records") || !payload["records"].is_array())
+            return core::Result<HeroStarterData, core::Error>::failure(
+                {core::ErrorCode::ContentParseFailed, "Hero class definition has no parsed records", "HeroFactory",
+                 {{"class_id", definition.id}}});
+        for (const auto& record : payload["records"]) {
+            if (!record.is_object() || !record.contains("type") || !record["type"].is_string()) continue;
+            const auto type = record["type"].get<std::string>();
+            if (type == "generation") {
+                if (const auto value = definition_int_field(record, "number_of_random_combat_skills")) combat_count = *value;
+                if (const auto value = definition_int_field(record, "number_of_class_specific_camping_skills")) class_camping_count = *value;
+                if (const auto value = definition_int_field(record, "number_of_shared_camping_skills")) shared_camping_count = *value;
+            } else if (type == "armour") {
+                if (starter.base_hit_points <= 0.0F) {
+                    const auto values = definition_field_values(record, "hp");
+                    if (!values.empty()) {
+                        try { starter.base_hit_points = std::stof(values.front()); }
+                        catch (const std::exception&) {}
+                    }
+                }
+            } else if (type == "combat_skill") {
+                const auto ids = definition_field_values(record, "id");
+                const auto levels = definition_field_values(record, "level");
+                if (ids.empty() || (!levels.empty() && levels.front() != "0")) continue;
+                const auto& id = ids.front();
+                if (std::find(combat_order.begin(), combat_order.end(), id) == combat_order.end()) {
+                    combat_order.push_back(id);
+                    const auto guaranteed = definition_field_values(record, "generation_guaranteed");
+                    if (!guaranteed.empty() && (guaranteed.front() == "true" || guaranteed.front() == "True"))
+                        guaranteed_combat.push_back(id);
+                }
+            }
+        }
+    } catch (const nlohmann::json::exception& error) {
+        return core::Result<HeroStarterData, core::Error>::failure(
+            {core::ErrorCode::ContentParseFailed, "Hero class definition payload is invalid", "HeroFactory",
+             {{"class_id", definition.id}, {"reason", error.what()}}});
+    }
+    if (starter.base_hit_points <= 0.0F || combat_count <= 0 || class_camping_count < 0 || shared_camping_count < 0)
+        return core::Result<HeroStarterData, core::Error>::failure(
+            {core::ErrorCode::ContentParseFailed, "Hero class is missing valid resolve-level-zero equipment or skill rules", "HeroFactory",
+             {{"class_id", definition.id}}});
+    const auto wanted_combat = static_cast<std::size_t>(combat_count);
+    for (const auto& id : guaranteed_combat)
+        if (starter.combat_skills.size() < wanted_combat) starter.combat_skills.push_back(id);
+    for (const auto& id : combat_order)
+        if (starter.combat_skills.size() < wanted_combat &&
+            std::find(starter.combat_skills.begin(), starter.combat_skills.end(), id) == starter.combat_skills.end())
+            starter.combat_skills.push_back(id);
+    if (starter.combat_skills.empty())
+        return core::Result<HeroStarterData, core::Error>::failure(
+            {core::ErrorCode::ContentParseFailed, "Hero class has no level-zero combat skills", "HeroFactory",
+             {{"class_id", definition.id}}});
+
+    std::vector<std::string> class_camping;
+    std::vector<std::string> shared_camping;
+    const auto class_prefix = definition.id + ":";
+    for (const auto& skill : skill_definitions) {
+        auto path = skill.provenance.virtual_path;
+        std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+            return static_cast<char>(std::tolower(value));
+        });
+        if (path.find("camping_skills") == std::string::npos) continue;
+        const auto separator = skill.id.find(':');
+        if (separator == std::string::npos) continue;
+        const auto raw_id = skill.id.substr(separator + 1);
+        const bool class_prefixed = skill.id.starts_with(class_prefix);
+        bool applicable = class_prefixed;
+        bool is_class_specific = class_prefixed;
+        try {
+            const auto data = nlohmann::json::parse(skill.payload_json);
+            if (!data.is_object()) continue;
+            if (data.contains("level")) {
+                const auto& level = data["level"];
+                if ((level.is_number_integer() && level.get<std::int32_t>() != 0) ||
+                    (level.is_string() && level.get<std::string>() != "0")) continue;
+            }
+            if (data.is_object() && data.contains("hero_classes") && data["hero_classes"].is_array()) {
+                std::size_t class_count{};
+                for (const auto& hero_class : data["hero_classes"]) if (hero_class.is_string()) {
+                    ++class_count;
+                    applicable = applicable || hero_class.get<std::string>() == definition.id;
+                }
+                if (!applicable) continue;
+                // The game's default.camping_skills.json uses this threshold to
+                // divide class-specific skills from shared skills.
+                is_class_specific = class_count <= 4;
+            } else if (!class_prefixed) {
+                continue;
+            }
+        } catch (const nlohmann::json::exception&) {
+            continue;
+        }
+        auto& destination = is_class_specific ? class_camping : shared_camping;
+        if (!raw_id.empty() && std::find(destination.begin(), destination.end(), raw_id) == destination.end())
+            destination.push_back(raw_id);
+    }
+    std::sort(class_camping.begin(), class_camping.end());
+    std::sort(shared_camping.begin(), shared_camping.end());
+    const auto append_unique = [&](const std::vector<std::string>& source, std::size_t limit) {
+        for (const auto& id : source) {
+            if (starter.camping_skills.size() >= limit) break;
+            if (std::find(starter.camping_skills.begin(), starter.camping_skills.end(), id) == starter.camping_skills.end())
+                starter.camping_skills.push_back(id);
+        }
+    };
+    const auto wanted_camping = static_cast<std::size_t>(class_camping_count + shared_camping_count);
+    append_unique(class_camping, static_cast<std::size_t>(class_camping_count));
+    append_unique(shared_camping, static_cast<std::size_t>(class_camping_count + shared_camping_count));
+    // Many class mods put every camping skill in the hero's own file even when
+    // their generation rule requests a shared skill. Use the remaining class
+    // skills as a safe fallback instead of hiding an otherwise valid class.
+    append_unique(class_camping, wanted_camping);
+    append_unique(shared_camping, wanted_camping);
+    return core::Result<HeroStarterData, core::Error>::success(std::move(starter));
+}
+
+std::string art_field(std::string_view line, std::string_view field) {
+    const auto marker = "." + std::string{field};
+    const auto at = line.find(marker);
+    if (at == std::string_view::npos) return {};
+    auto start = line.find_first_not_of(" \t", at + marker.size());
+    if (start == std::string_view::npos) return {};
+    if (line[start] == '"') {
+        const auto end = line.find('"', ++start);
+        return end == std::string_view::npos ? std::string{} : std::string{line.substr(start, end - start)};
+    }
+    const auto end = line.find_first_of(" \t\r\n", start);
+    return std::string{line.substr(start, end == std::string_view::npos ? end : end - start)};
+}
+
+void cache_combat_skill_icons(ServerContext& context, ServerContext::CampaignSession& campaign,
+                              const application::ContentDefinition& definition) {
+    const auto& config = context.configuration_store.current();
+    std::filesystem::path source_root;
+    const auto& source = definition.provenance.source_id;
+    if (source == "vanilla") source_root = config.game_root;
+    else if (source.starts_with("dlc:")) source_root = config.game_root / "dlc" / source.substr(4);
+    else if (campaign.cached_mod_records) {
+        const auto found = std::find_if(campaign.cached_mod_records->begin(), campaign.cached_mod_records->end(),
+            [&](const DatabaseModRecord& mod) { return mod.matched_mod_id == source; });
+        if (found != campaign.cached_mod_records->end()) source_root = found->root_path;
+    }
+    auto art_path = definition.provenance.virtual_path;
+    constexpr std::string_view info_suffix{".info.darkest"};
+    if (source_root.empty() || !art_path.ends_with(info_suffix)) return;
+    art_path.replace(art_path.size() - info_suffix.size(), info_suffix.size(), ".art.darkest");
+    const auto utf8_path = std::u8string{reinterpret_cast<const char8_t*>(art_path.data()), art_path.size()};
+    const auto bytes = context.file_system.read_file(source_root / std::filesystem::path{utf8_path});
+    if (!bytes) return;
+    std::istringstream input{bytes.value()};
+    std::string line;
+    while (std::getline(input, line)) {
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || !std::string_view{line}.substr(first).starts_with("combat_skill:")) continue;
+        const auto skill_id = art_field(line, "id");
+        const auto icon_id = art_field(line, "icon");
+        if (skill_id.empty() || icon_id.empty() || icon_id.find_first_of("/\\.") != std::string::npos) continue;
+        const auto virtual_path = "heroes/" + definition.id + "/" + definition.id + ".ability." + icon_id + ".png";
+        const auto resolved = campaign.content->resolve_asset(virtual_path);
+        if (resolved && resolved.value())
+            campaign.cached_combat_skill_icons.insert_or_assign(definition.id + ":" + skill_id, virtual_path);
+    }
+}
+
+void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& campaign) {
+    const auto started = std::chrono::steady_clock::now();
+    const auto listed = campaign.content->list_content("hero_class");
+    if (!listed) {
+        append_hero_catalog_debug_log(context.configuration_store.current().data_root,
+            "hero_class_catalog_failed", nullptr, &listed.error());
+        return;
+    }
+    const auto skills = campaign.content->list_content("skill");
+    if (!skills) {
+        append_hero_catalog_debug_log(context.configuration_store.current().data_root,
+            "hero_skill_catalog_failed", nullptr, &skills.error(), listed.value().size());
+        return;
+    }
+    if (!campaign.cached_mod_records) {
+        const auto queried = read_enabled_mods(campaign.mod_database_path);
+        campaign.cached_mod_records = queried ? queried.value() : std::vector<DatabaseModRecord>{};
+    }
+
+    std::size_t rejected_count{};
+    for (const auto& definition : listed.value()) {
+        cache_combat_skill_icons(context, campaign, definition);
+        const auto starter = hero_starter_data(definition, skills.value());
+        if (!starter) {
+            ++rejected_count;
+            append_hero_catalog_debug_log(context.configuration_store.current().data_root,
+                "hero_class_rejected", &definition, &starter.error());
+            continue;
+        }
+        Json::Value item(Json::objectValue);
+        item["id"] = definition.id;
+        item["name"] = strip_game_markup(definition.localized_name.empty()
+            ? (definition.display_name.empty() ? definition.id : definition.display_name)
+            : definition.localized_name);
+        item["sourceId"] = definition.provenance.source_id;
+        item["modName"] = definition.provenance.source_id;
+        for (const auto& mod : *campaign.cached_mod_records) {
+            if (mod.matched_mod_id == definition.provenance.source_id) {
+                item["modName"] = mod.display_name.empty() ? mod.fallback_name : mod.display_name;
+                break;
+            }
+        }
+        for (const auto& asset : definition.asset_references) {
+            auto asset_path = asset.virtual_path;
+            std::transform(asset_path.begin(), asset_path.end(), asset_path.begin(), [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+            if (asset_path.find("portrait_roster") != std::string::npos && !asset.virtual_path.empty()) {
+                item["portraitPath"] = asset.virtual_path;
+                break;
+            }
+        }
+        for (const auto& asset : definition.asset_references) {
+            auto path = asset.virtual_path;
+            std::transform(path.begin(), path.end(), path.begin(), [](unsigned char value) {
+                return static_cast<char>(std::tolower(value));
+            });
+            if (path.ends_with(".sprite.idle.png") && !item.isMember("idleSpritePath"))
+                item["idleSpritePath"] = asset.virtual_path;
+            else if (path.ends_with(".sprite.idle.atlas") && !item.isMember("idleAtlasPath"))
+                item["idleAtlasPath"] = asset.virtual_path;
+            else if (path.ends_with(".sprite.idle.skel") && !item.isMember("idleSkeletonPath"))
+                item["idleSkeletonPath"] = asset.virtual_path;
+        }
+        Json::Value combat_skills(Json::arrayValue);
+        for (const auto& skill : starter.value().combat_skills) combat_skills.append(skill);
+        Json::Value camping_skills(Json::arrayValue);
+        for (const auto& skill : starter.value().camping_skills) camping_skills.append(skill);
+        item["starterCombatSkills"] = std::move(combat_skills);
+        item["starterCampingSkills"] = std::move(camping_skills);
+        item["baseHitPoints"] = starter.value().base_hit_points;
+        campaign.cached_hero_catalog.push_back(std::move(item));
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+    append_hero_catalog_debug_log(context.configuration_store.current().data_root,
+        "hero_class_catalog_summary", nullptr, nullptr, listed.value().size(), campaign.cached_hero_catalog.size());
+    LOG_INFO << "Hero class catalog initialized " << campaign.cached_hero_catalog.size() << "/"
+             << listed.value().size() << " classes; rejected=" << rejected_count
+             << ", skills=" << skills.value().size() << ", elapsed_ms=" << elapsed;
+}
+
+void handle_campaign_hero_classes(const drogon::HttpRequestPtr& request,
+                                 std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                 const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    Json::Value result(Json::arrayValue);
+    for (const auto& item : context->campaign->cached_hero_catalog) result.append(item);
+    callback(json_ok(std::move(result)));
+}
+
+void handle_campaign_hero(const drogon::HttpRequestPtr& request,
+                          std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                          const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !body->isObject() || !(*body)["action"].isString() ||
+        !((*body)["revision"].isUInt() || (*body)["revision"].isUInt64())) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Hero operation requires an action and revision."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    auto& campaign = *context->campaign;
+    const auto& model = campaign.edits->model();
+    const auto action = (*body)["action"].asString();
+    if (action == "rename") {
+        if (!(*body)["heroId"].isString() || !(*body)["name"].isString()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Rename requires a hero ID and name."));
+            return;
+        }
+        const auto found = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+            return hero.persistent_id == (*body)["heroId"].asString();
+        });
+        if (found == model.heroes.end() || !found->name.raw) {
+            callback(json_error(drogon::k404NotFound, "HERO_NOT_FOUND", "The selected hero name cannot be edited."));
+            return;
+        }
+        application::SetCampaignValueOperation operation{
+            application::CampaignOperationTarget{"Hero.Name", found->persistent_id}, (*body)["name"].asString()};
+        auto applied = campaign.edits->apply(application::CampaignOperation{std::move(operation)}, (*body)["revision"].asUInt64());
+        if (!applied) {
+            const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision ? drogon::k409Conflict : drogon::k400BadRequest;
+            callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+            return;
+        }
+        callback(json_ok(campaign_value(campaign)));
+        return;
+    }
+
+    using Kind = application::CampaignDocumentMutationKind;
+    using Mutation = application::CampaignDocumentMutation;
+    std::vector<Mutation> mutations;
+    std::optional<std::uint64_t> pending_next_hero_guid;
+    const auto root_path = [](std::string_view id) { return "base_root/heroes/" + std::string{id}; };
+    if (action == "delete") {
+        if (!(*body)["heroId"].isString()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Delete requires a hero ID."));
+            return;
+        }
+        const auto found = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+            return hero.persistent_id == (*body)["heroId"].asString();
+        });
+        if (found == model.heroes.end()) {
+            callback(json_error(drogon::k404NotFound, "HERO_NOT_FOUND", "The selected hero is no longer in the roster."));
+            return;
+        }
+        const auto target = found->raw.display_path;
+        for (const auto& [document_id, document] : campaign.profile.documents) {
+            if (!document.decoded) continue;
+            for (const auto& field : document.decoded->fields) {
+                if (field.kind != core::dson::ValueKind::String ||
+                    !std::holds_alternative<std::string>(field.value) ||
+                    std::get<std::string>(field.value) != found->persistent_id) continue;
+                if (document_id != "persist.roster.json" ||
+                    (!field.path.starts_with(target + "/") && field.path != target)) {
+                    callback(json_error(drogon::k409Conflict, "HERO_REFERENCED",
+                        "This hero is referenced by another save field and cannot be safely removed."));
+                    return;
+                }
+            }
+        }
+        mutations.emplace_back(Kind::Erase, "Hero.PersistentId", "persist.roster.json", target,
+            std::string{}, std::string{}, core::dson::ValueKind::Object);
+    } else if (action == "reorder") {
+        const auto& ids = (*body)["heroIds"];
+        if (!ids.isArray() || ids.size() != model.heroes.size()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_ORDER", "The submitted hero order must contain every roster entry."));
+            return;
+        }
+        std::set<std::string, std::less<>> requested;
+        for (const auto& id : ids) if (!id.isString() || !requested.insert(id.asString()).second) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_ORDER", "The submitted hero order contains invalid or repeated IDs."));
+            return;
+        }
+        if (requested.size() != model.heroes.size() || std::any_of(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+                return !requested.contains(hero.persistent_id);
+            })) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_ORDER", "The submitted hero order does not match the current roster."));
+            return;
+        }
+        const auto suffix = std::to_string((*body)["revision"].asUInt64());
+        for (Json::ArrayIndex i = 0; i < ids.size(); ++i) {
+            const auto found = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+                return hero.persistent_id == ids[i].asString();
+            });
+            const auto temporary_id = "ddse_order_" + suffix + "_" + std::to_string(i);
+            mutations.emplace_back(Kind::AppendClone, "Hero.PersistentId", "persist.roster.json",
+                root_path(temporary_id), found->raw.display_path, temporary_id, core::dson::ValueKind::Object);
+        }
+        for (const auto& hero : model.heroes)
+            mutations.emplace_back(Kind::Erase, "Hero.PersistentId", "persist.roster.json",
+                hero.raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+        for (Json::ArrayIndex i = 0; i < ids.size(); ++i) {
+            const auto original = ids[i].asString();
+            const auto temporary_id = "ddse_order_" + suffix + "_" + std::to_string(i);
+            mutations.emplace_back(Kind::Rename, "Hero.PersistentId", "persist.roster.json",
+                root_path(temporary_id), std::string{}, original, core::dson::ValueKind::Object);
+        }
+    } else if (action == "add") {
+        const auto& requested = (*body)["classIds"];
+        if (!requested.isArray() || requested.empty()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_SELECTION", "Select at least one hero class."));
+            return;
+        }
+        std::uint64_t max_id = 0;
+        for (const auto& hero : model.heroes) {
+            std::uint64_t parsed{};
+            const auto [end, error] = std::from_chars(hero.persistent_id.data(), hero.persistent_id.data() + hero.persistent_id.size(), parsed);
+            if (error == std::errc{} && end == hero.persistent_id.data() + hero.persistent_id.size()) max_id = std::max(max_id, parsed);
+        }
+        std::set<std::string, std::less<>> added_classes;
+        auto next_guid = std::max(max_id + 1, campaign.next_hero_guid);
+        for (const auto& id : requested) {
+            if (!id.isString() || !added_classes.insert(id.asString()).second) continue;
+            const auto definition = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
+                [&](const auto& item) { return item["id"].asString() == id.asString(); });
+            if (definition == campaign.cached_hero_catalog.end()) continue;
+            if (next_guid >= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) break;
+            std::vector<std::string> combat_skills;
+            if ((*definition)["starterCombatSkills"].isArray())
+                for (const auto& skill : (*definition)["starterCombatSkills"])
+                    if (skill.isString()) combat_skills.push_back(skill.asString());
+            std::vector<std::string> camping_skills;
+            if ((*definition)["starterCampingSkills"].isArray())
+                for (const auto& skill : (*definition)["starterCampingSkills"])
+                    if (skill.isString()) camping_skills.push_back(skill.asString());
+            const auto class_id = (*definition)["id"].asString();
+            const auto class_name = (*definition)["name"].asString();
+            const auto source_id = (*definition)["sourceId"].asString();
+            const auto base_hit_points = (*definition)["baseHitPoints"].asFloat();
+            const auto template_document = application::build_blank_level_zero_hero_template(
+                class_id, combat_skills, camping_skills, base_hit_points);
+            if (!template_document) continue;
+            const auto new_id = std::to_string(next_guid++);
+            const auto target = root_path(new_id);
+            application::CampaignDocumentMutation append{Kind::AppendTemplate, "Hero.PersistentId",
+                "persist.roster.json", target, "base_root/heroes/1", new_id,
+                core::dson::ValueKind::Object};
+            append.template_document = template_document.value();
+            append.template_hero_class = class_id;
+            append.template_class_name = class_name;
+            append.template_source_id = source_id;
+            append.template_base_hit_points = base_hit_points;
+            append.template_portrait_path = (*definition)["portraitPath"].asString();
+            append.template_combat_skills = std::move(combat_skills);
+            append.template_camping_skills = std::move(camping_skills);
+            mutations.push_back(std::move(append));
+        }
+        if (mutations.empty()) {
+            callback(json_error(drogon::k409Conflict, "HERO_TEMPLATE_UNAVAILABLE",
+                "No selected class has enough effective resolve-level-zero equipment and skill definitions to build a hero."));
+            return;
+        }
+        pending_next_hero_guid = next_guid;
+    } else {
+        callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Unknown hero operation."));
+        return;
+    }
+
+    application::ApplyCampaignDocumentMutationsOperation operation{"campaign.hero.add", std::move(mutations)};
+    if (action == "delete") operation.operation_id = "campaign.hero.delete";
+    else if (action == "reorder") operation.operation_id = "campaign.hero.reorder";
+    auto applied = campaign.edits->apply(application::CampaignOperation{std::move(operation)}, (*body)["revision"].asUInt64());
+    if (!applied) {
+        const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision ? drogon::k409Conflict : drogon::k400BadRequest;
+        callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+        return;
+    }
+    if (pending_next_hero_guid) campaign.next_hero_guid = *pending_next_hero_guid;
+    callback(json_ok(campaign_value(campaign)));
+}
+
 bool request_nonnegative_integer(const Json::Value& value);
 
 void handle_campaign_trinket_catalog(const drogon::HttpRequestPtr& request,
@@ -1132,10 +1771,6 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
         const auto hero_class = (*body)["heroClass"].isString() ? (*body)["heroClass"].asString() : std::string{};
         const bool only_new = (*body)["onlyNew"].isBool() ? (*body)["onlyNew"].asBool() : false;
         const auto requested_id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
-        const auto inventory_template = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
-            [](const auto& entry) {
-                return !entry.raw.display_path.empty() && entry.id.raw.has_value() && entry.amount.raw.has_value();
-            });
         const bool has_requested_ids = action == "batch_add" && (*body).isMember("trinketIds");
         std::set<std::string, std::less<>> requested_ids;
         if (has_requested_ids) {
@@ -1169,26 +1804,14 @@ void handle_campaign_trinket_edit(const drogon::HttpRequestPtr& request,
             occupied_keys.insert(key);
             campaign.reserved_trinket_keys.insert(key);
             const auto target = "base_root/trinkets/items/" + key;
-            if (inventory_template != model.trinket_inventory.end()) {
-                mutations.emplace_back(Kind::AppendClone, "TrinketInventory.Items", "persist.estate.json",
-                    target, inventory_template->raw.display_path, key, core::dson::ValueKind::Object);
-                const auto template_id = inventory_template->id.value.value_or(std::string{});
-                const auto template_amount = inventory_template->amount.value.value_or(1);
-                mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
-                    target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
-                    application::CampaignValue{template_id}, application::CampaignValue{definition.id});
-                mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
-                    target + "/amount", std::string{}, std::string{}, core::dson::ValueKind::Integer,
-                    application::CampaignValue{template_amount}, application::CampaignValue{std::int32_t{1}});
-            } else {
-                // Empty inventory saves have no row to clone. Construct the game's
-                // standard trinket object directly during the DSON write-back.
-                mutations.emplace_back(Kind::CreateObject, "TrinketInventory.Items", "persist.estate.json",
-                    target, std::string{}, key, core::dson::ValueKind::Object);
-                mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
-                    target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
-                    application::CampaignValue{std::string{}}, application::CampaignValue{definition.id});
-            }
+            // Trinket entries use the reverse-engineered built-in DSON schema
+            // for every add, so an empty inventory and populated inventory take
+            // the same path and never borrow an unrelated saved entry.
+            mutations.emplace_back(Kind::CreateObject, "TrinketInventory.Items", "persist.estate.json",
+                target, std::string{}, key, core::dson::ValueKind::Object);
+            mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
+                target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
+                application::CampaignValue{std::string{}}, application::CampaignValue{definition.id});
             existing_ids.insert(definition.id);
             ++added;
             if (action == "add") break;
@@ -1604,6 +2227,7 @@ nlohmann::json save_change_trace(const application::ChangeSet& changes) {
             std::string kind;
             switch (mutation.kind) {
             case application::CampaignDocumentMutationKind::AppendClone: kind = "append_clone"; break;
+            case application::CampaignDocumentMutationKind::AppendTemplate: kind = "append_builtin_template"; break;
             case application::CampaignDocumentMutationKind::InsertClone: kind = "insert_clone"; break;
             case application::CampaignDocumentMutationKind::CreateObject: kind = "create_object"; break;
             case application::CampaignDocumentMutationKind::Erase: kind = "erase"; break;
@@ -2361,6 +2985,16 @@ int run_drogon_http_server(
         "/api/campaign/resource", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign_resource(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/hero-classes", [context](const drogon::HttpRequestPtr& request,
+                                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_hero_classes(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/campaign/hero", [context](const drogon::HttpRequestPtr& request,
+                                            std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_hero(request, std::move(callback), context);
         }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/trinkets", [context](const drogon::HttpRequestPtr& request,

@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -74,7 +75,7 @@ struct DestroyTrinketOperation {
     std::string item_key;
 };
 
-enum class CampaignDocumentMutationKind { AppendClone, InsertClone, CreateObject, Erase, Rename, ClearChildren, SetValue };
+enum class CampaignDocumentMutationKind { AppendClone, AppendTemplate, InsertClone, CreateObject, Erase, Rename, ClearChildren, SetValue };
 
 // Structured, allowlisted DSON edits used by the larger verified slices whose
 // save representation is a collection rather than one scalar field. Paths are
@@ -102,6 +103,15 @@ struct CampaignDocumentMutation {
     std::optional<CampaignValue> before;
     std::optional<CampaignValue> after;
     std::optional<std::size_t> insertion_index;
+    // Immutable built-in template used only by the HeroFactory append path.
+    std::shared_ptr<core::dson::DsonDocument> template_document;
+    std::string template_hero_class;
+    std::string template_class_name;
+    std::string template_source_id;
+    std::string template_portrait_path;
+    float template_base_hit_points{};
+    std::vector<std::string> template_combat_skills;
+    std::vector<std::string> template_camping_skills;
 };
 
 struct CampaignDocumentMutationBatch {
@@ -239,6 +249,11 @@ struct ChangeSet {
         std::vector<domain::TrinketInventoryEntry> after;
     };
     std::optional<TrinketInventorySnapshot> trinket_inventory_snapshot;
+    struct HeroRosterSnapshot {
+        std::vector<domain::Hero> before;
+        std::vector<domain::Hero> after;
+    };
+    std::optional<HeroRosterSnapshot> hero_roster_snapshot;
 
     [[nodiscard]] bool empty() const noexcept {
         return changes.empty() && structural_changes.empty() && document_mutation_batches.empty();

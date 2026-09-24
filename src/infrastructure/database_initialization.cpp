@@ -63,7 +63,12 @@ bool has_base_schema(const std::filesystem::path& path) {
     if (!query) return false;
     auto statement = std::move(query.value());
     auto row = statement.step();
-    return row && row.value() && statement.column_int64(0) == 7;
+    if (!row || !row.value() || statement.column_int64(0) != 7) return false;
+    auto version = opened.value().prepare("SELECT value FROM schema_info WHERE key='scanner_version'");
+    if (!version) return false;
+    auto version_statement = std::move(version.value());
+    auto version_row = version_statement.step();
+    return version_row && version_row.value() && version_statement.column_text(0) == "stage9";
 }
 
 bool has_mod_schema(const std::filesystem::path& path) {
@@ -76,7 +81,12 @@ bool has_mod_schema(const std::filesystem::path& path) {
     if (!query) return false;
     auto statement = std::move(query.value());
     auto row = statement.step();
-    return row && row.value() && statement.column_int64(0) == 8;
+    if (!row || !row.value() || statement.column_int64(0) != 8) return false;
+    auto version = opened.value().prepare("SELECT value FROM environment_info WHERE key='scanner_version'");
+    if (!version) return false;
+    auto version_statement = std::move(version.value());
+    auto version_row = version_statement.step();
+    return version_row && version_row.value() && version_statement.column_text(0) == "stage9";
 }
 
 } // namespace

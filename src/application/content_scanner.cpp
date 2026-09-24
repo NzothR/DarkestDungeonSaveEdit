@@ -185,17 +185,35 @@ void collect_json_definitions(const Json& node, const ContentSourceRoot& source,
                        lower_path.find("trait_library") != std::string::npos && context_key == "traits") {
                 add_definition(result, "trait", id, source, virtual_path,
                                "trait_name_" + id, {}, json_dump(node));
-            } else if (lower_path.find("camping_skills") != std::string::npos &&
-                       !lower_path.ends_with("default.camping_skills.json")) {
-                const auto hero = parent_component(virtual_path, "heroes/");
-                const auto owner = hero.empty() ? std::string{"shared"} : hero;
+            } else if (lower_path.find("camping_skills") != std::string::npos) {
+                const bool shared_file = lower_path.ends_with("default.camping_skills.json");
+                auto hero = parent_component(virtual_path, "heroes/");
+                if (hero.empty() && !shared_file) {
+                    const auto slash = virtual_path.find_last_of("/\\");
+                    auto file_name = std::string{virtual_path.substr(
+                        slash == std::string_view::npos ? 0 : slash + 1)};
+                    constexpr std::string_view suffix{".camping_skills.json"};
+                    if (file_name.ends_with(suffix)) file_name.resize(file_name.size() - suffix.size());
+                    hero = std::move(file_name);
+                }
+                const auto owner = shared_file ? std::string{"shared"} : hero;
                 const auto skill_id = owner + ":" + id;
                 add_definition(result, "skill", skill_id, source, virtual_path,
-                               "camping_skill_name_" + owner + "_" + id,
+                               "camping_skill_name_" + id,
                                {}, json_dump(node));
-                if (!hero.empty())
+                add_asset_reference(result, source.id, "skill", skill_id, virtual_path,
+                                    "skill_icon", "file", "raid/camping/skill_icons/camp_skill_" + id + ".png",
+                                    "convention");
+                if (shared_file) {
+                    if (const auto classes = node.find("hero_classes"); classes != node.end() && classes->is_array())
+                        for (const auto& hero_class : *classes)
+                            if (hero_class.is_string())
+                                add_relationship(result, source.id, "hero_class", hero_class.get<std::string>(),
+                                                 "camping_skill", "skill", skill_id, virtual_path);
+                } else if (!hero.empty() && hero != "shared") {
                     add_relationship(result, source.id, "hero_class", hero, "camping_skill",
                                      "skill", skill_id, virtual_path);
+                }
             } else if ((lower_path.find("/inventory/") != std::string::npos ||
                         lower_path.find("estate_items") != std::string::npos) &&
                        (context_key == "items" || context_key == "entries")) {
@@ -784,6 +802,28 @@ BaseContentScanner::scan(const BaseContentScanConfig& config) const {
     std::sort(result.assets.begin(), result.assets.end(), [](const auto& a, const auto& b) {
         return std::tie(a.source_id, a.virtual_path) < std::tie(b.source_id, b.virtual_path);
     });
+    // Keep the idle Spine resources addressable by role in the content database.
+    // The class bundle still covers older databases until the next initialization.
+    std::map<std::pair<std::string, std::string>, std::pair<std::string, std::string>> hero_definition_paths;
+    for (const auto& definition : result.definitions)
+        if (definition.kind == "hero_class")
+            hero_definition_paths.emplace(std::make_pair(definition.source_id, lower_ascii(definition.id)),
+                                          std::make_pair(definition.id, definition.virtual_path));
+    for (const auto& asset : result.assets) {
+        const auto path = lower_ascii(asset.virtual_path);
+        if (!path.starts_with("heroes/")) continue;
+        const auto class_end = path.find('/', 7);
+        if (class_end == std::string::npos) continue;
+        const auto found = hero_definition_paths.find({asset.source_id, path.substr(7, class_end - 7)});
+        if (found == hero_definition_paths.end()) continue;
+        std::string_view role;
+        if (path.ends_with(".sprite.idle.png")) role = "idle_sprite";
+        else if (path.ends_with(".sprite.idle.atlas")) role = "idle_atlas";
+        else if (path.ends_with(".sprite.idle.skel")) role = "idle_skeleton";
+        if (!role.empty())
+            add_asset_reference(result, asset.source_id, "hero_class", found->second.first,
+                                found->second.second, role, "file", asset.virtual_path, "convention");
+    }
     std::sort(result.asset_references.begin(), result.asset_references.end(), [](const auto& a, const auto& b) {
         return std::tie(a.definition_type, a.content_id, a.source_id, a.definition_virtual_path,
                         a.asset_role, a.reference_type, a.virtual_path, a.reference_origin) <

@@ -166,6 +166,7 @@ add_library(ddse_application STATIC
     src/application/campaign_mappings.cpp
     src/application/campaign_model_builder.cpp
     src/application/campaign_edit_session.cpp
+    src/application/hero_template.cpp
     src/application/save_commit.cpp
 )
 add_library(ddse::application ALIAS ddse_application)

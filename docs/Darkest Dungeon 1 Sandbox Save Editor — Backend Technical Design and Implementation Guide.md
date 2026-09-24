@@ -755,6 +755,19 @@ schema_migration
 - `schema_version` 与 `parser_version` 分开记录；
 - 时间戳只用于诊断，不作为唯一缓存有效性依据。
 
+### Hero 内容定义的数据形状
+
+英雄创建和详情展示需要读取生效环境中的职业定义，而不是从存档猜测职业能力。数据库按以下职责保存这些数据：
+
+- `content_definitions` 的 `hero_class.payload_json` 保存职业 `.info.darkest` 的有序记录，包括基础属性、武器/防具阶段、战斗技能、移动技能和生成规则；原始记录与字段顺序保留，供模板初始化器读取已支持字段；
+- 战斗技能和生存技能各自保存为 `skill` 定义。`content_relationships` 通过 `combat_skill` / `camping_skill` 关系连接职业与技能；技能定义的 `payload_json` 保存等级、效果及其他原始字段；
+- `raid/camping/default.camping_skills.json` 的共享技能按 `hero_classes` 建立关联；`<class>.camping_skills.json` 的职业专属技能从文件名提取职业 ID 建立关联。扫描版本 stage8 修正此前把这类文件误归为 shared 的问题；
+- Base Catalog 保留原版和官方 DLC 的来源，Mod Catalog 保留 Mod 文件及来源；Effective Environment 按加载优先级解析覆盖后，HeroFactory 和详情界面只读当前生效的职业/技能定义；
+- `hero_class.payload_json`、技能定义和关系共同构成数据库中的职业详情，不在存档数据库里复制 Mod 定义，也不把 `.info.darkest` 当成存档 DSON；
+- 新增模板是随程序版本管理的空白 0 级（最低 resolve 等级）DSON 模板。职业内容数据库提供初始化所需的职业属性、技能和生成规则；模板文件提供经逆向与游戏验证的存档外壳和未知字段。模板版本与内容数据库版本分开记录。
+
+当前 Schema 的通用定义、关系和来源表已经承载这些数据，因此不再另建一份重复的英雄详情表。扫描器若未识别必需字段，必须在诊断中报告并阻止该职业生成，不能静默丢弃字段。
+
 ## 11.5 原子重建
 
 Base 重建：
@@ -998,8 +1011,11 @@ Invalid      → diagnostics only
 ## 13.6 Hero 创建与复制
 
 - Clone Hero：深复制已验证结构，生成新 persistent identity，并清理不能复制的 runtime 引用；
-- Add Hero：只能由 `HeroFactory` 根据环境定义和经过验证的模板构造；
-- 在最小合法模板未通过 `VERIFIED_GAME` 前，Add Hero 保持实验或关闭；
+- Add Hero：不得从当前存档中的英雄克隆模板。由 `HeroFactory` 使用程序内置、版本化的 0 级（最低 resolve 等级）空白英雄模板构造，因此英雄名单为空时也能新增；
+- 内置模板必须来自官方 Mod 指南中的英雄定义规则与真实存档结构逆向分析。模板描述存档序列化结构，官方 `.info.darkest` 定义用于补齐职业相关的初始数据；两者不能混为一种文件格式；
+- 新增时由 `HeroFactory` 分配 persistent identity，并按有效内容环境初始化职业字段、等级与装备阶段、技能/升级记录、状态字段及内嵌英雄数据。清除名字、压力、折磨、怪癖和已装备饰品等非空白状态；
+- 模板随程序维护明确版本和来源游戏版本。未知字段按已验证基准模板保留；不能确认必需职业字段时拒绝生成该职业并返回诊断，不得回退到存档克隆或写出猜测结构；
+- 内置模板及初始化规则通过空英雄名单、原版职业、Mod 职业、连续新增、保存重载和游戏内载入验证后，Add Hero 才标记为 `VERIFIED_GAME`；
 - Delete Hero 属于高风险 Operation，需检查队列、队伍、活动和跨文档引用。
 
 ---

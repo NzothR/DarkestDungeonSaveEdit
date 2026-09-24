@@ -517,7 +517,7 @@ CREATE INDEX idx_effective_vfs_winner ON effective_vfs(winner_mod_id,virtual_pat
         auto inserted = insert_rows("INSERT INTO environment_info(key,value) VALUES(?,?)", 5,
             [&](Statement& s, std::size_t i) {
                 static const std::vector<std::pair<std::string_view, std::string>> values{
-                    {"schema_version", "2"}, {"scanner_version", "stage6"},
+                    {"schema_version", "2"}, {"scanner_version", "stage9"},
                     {"effective_order_source", scan.effective_order_source},
                     {"installed_mods", std::to_string(summary.installed_mods)},
                     {"enabled_mods", std::to_string(summary.enabled_mods)}};
