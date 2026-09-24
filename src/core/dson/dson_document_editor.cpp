@@ -222,6 +222,9 @@ Result<std::size_t, Error> DsonDocumentEditor::append_object(
         field.kind = value_kind(value);
         field.type_evidence = TypeEvidence::KnownPath;
         field.value = value;
+        // These fields have no source offsets or raw bytes in the original
+        // document. Force the writer to serialize their typed values directly.
+        field.dirty = true;
         field.parent_index = insertion_index;
         appended.push_back(std::move(field));
     }
