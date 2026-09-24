@@ -74,7 +74,7 @@ struct DestroyTrinketOperation {
     std::string item_key;
 };
 
-enum class CampaignDocumentMutationKind { AppendClone, InsertClone, Erase, Rename, ClearChildren, SetValue };
+enum class CampaignDocumentMutationKind { AppendClone, InsertClone, CreateObject, Erase, Rename, ClearChildren, SetValue };
 
 // Structured, allowlisted DSON edits used by the larger verified slices whose
 // save representation is a collection rather than one scalar field. Paths are

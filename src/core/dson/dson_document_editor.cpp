@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace ddse::core::dson {
@@ -50,6 +51,23 @@ DsonDocument deep_clone(const DsonDocument& source) {
                 deep_clone(*source.fields[index].embedded_document));
     }
     return copy;
+}
+
+ValueKind value_kind(const Value& value) {
+    return std::visit([](const auto& item) {
+        using T = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<T, bool>) return ValueKind::Boolean;
+        else if constexpr (std::is_same_v<T, char>) return ValueKind::Character;
+        else if constexpr (std::is_same_v<T, std::array<bool, 2>>) return ValueKind::TwoBoolean;
+        else if constexpr (std::is_same_v<T, std::string>) return ValueKind::String;
+        else if constexpr (std::is_same_v<T, std::int32_t>) return ValueKind::Integer;
+        else if constexpr (std::is_same_v<T, float>) return ValueKind::Float;
+        else if constexpr (std::is_same_v<T, std::vector<std::int32_t>>) return ValueKind::IntegerVector;
+        else if constexpr (std::is_same_v<T, std::vector<std::string>>) return ValueKind::StringVector;
+        else if constexpr (std::is_same_v<T, std::vector<float>>) return ValueKind::FloatArray;
+        else if constexpr (std::is_same_v<T, std::array<std::int32_t, 2>>) return ValueKind::TwoInteger;
+        else return ValueKind::Unknown;
+    }, value);
 }
 
 } // namespace
@@ -158,6 +176,72 @@ Result<std::size_t, Error> DsonDocumentEditor::insert_clone_at(
                          std::make_move_iterator(cloned.begin()), std::make_move_iterator(cloned.end()));
     auto& inserted_children = target.fields[inserted_parent_index].children;
     inserted_children.insert(inserted_children.begin() + static_cast<std::ptrdiff_t>(child_position), insertion_index);
+    target.structural_dirty = true;
+    return Result<std::size_t, Error>::success(insertion_index);
+}
+
+Result<std::size_t, Error> DsonDocumentEditor::append_object(
+    DsonDocument& target, std::string_view parent_path, std::string_view child_name,
+    const std::vector<std::pair<std::string, Value>>& primitive_fields) {
+    if (child_name.empty() || child_name.find('/') != std::string_view::npos)
+        return Result<std::size_t, Error>::failure(edit_error("New object name is empty or contains a path separator"));
+    const auto parent_index = find_field(target, parent_path);
+    if (!parent_index || target.fields[*parent_index].kind != ValueKind::Object)
+        return Result<std::size_t, Error>::failure(edit_error("Destination path is not an object", std::string{parent_path}));
+    const auto& parent = target.fields[*parent_index];
+    if (std::any_of(parent.children.begin(), parent.children.end(), [&](std::size_t child) {
+            return child < target.fields.size() && target.fields[child].name == child_name;
+        }))
+        return Result<std::size_t, Error>::failure(edit_error("Destination object already has a child with that name",
+            std::string{parent_path} + "/" + std::string{child_name}));
+
+    std::set<std::string, std::less<>> names;
+    for (const auto& [name, value] : primitive_fields) {
+        if (name.empty() || name.find('/') != std::string::npos || !names.insert(name).second ||
+            value_kind(value) == ValueKind::Unknown)
+            return Result<std::size_t, Error>::failure(edit_error("New object contains an invalid primitive field", name));
+    }
+
+    const auto insertion_index = subtree_end(target, *parent_index);
+    const auto new_root_path = target.fields[*parent_index].path + "/" + std::string{child_name};
+    std::vector<DsonField> appended;
+    appended.reserve(primitive_fields.size() + 1);
+    DsonField root;
+    root.name = std::string{child_name};
+    root.path = new_root_path;
+    root.kind = ValueKind::Object;
+    root.type_evidence = TypeEvidence::Structure;
+    root.parent_index = *parent_index;
+    for (std::size_t index = 0; index < primitive_fields.size(); ++index)
+        root.children.push_back(insertion_index + 1 + index);
+    appended.push_back(std::move(root));
+    for (const auto& [name, value] : primitive_fields) {
+        DsonField field;
+        field.name = name;
+        field.path = new_root_path + "/" + name;
+        field.kind = value_kind(value);
+        field.type_evidence = TypeEvidence::KnownPath;
+        field.value = value;
+        field.parent_index = insertion_index;
+        appended.push_back(std::move(field));
+    }
+
+    const auto count = appended.size();
+    for (auto& field : target.fields) {
+        if (field.parent_index != DsonField::no_index && field.parent_index >= insertion_index)
+            field.parent_index += count;
+        for (auto& child : field.children)
+            if (child >= insertion_index) child += count;
+    }
+    for (auto& root_index : target.root_fields)
+        if (root_index >= insertion_index) root_index += count;
+    auto adjusted_parent_index = *parent_index;
+    if (adjusted_parent_index >= insertion_index) adjusted_parent_index += count;
+    appended.front().parent_index = adjusted_parent_index;
+    target.fields.insert(target.fields.begin() + static_cast<std::ptrdiff_t>(insertion_index),
+                         std::make_move_iterator(appended.begin()), std::make_move_iterator(appended.end()));
+    auto& children = target.fields[adjusted_parent_index].children;
+    children.push_back(insertion_index);
     target.structural_dirty = true;
     return Result<std::size_t, Error>::success(insertion_index);
 }

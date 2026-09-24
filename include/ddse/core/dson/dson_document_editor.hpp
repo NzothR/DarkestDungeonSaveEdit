@@ -5,7 +5,10 @@
 #include "ddse/core/result.hpp"
 
 #include <cstddef>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace ddse::core::dson {
 
@@ -23,6 +26,13 @@ public:
     insert_clone_at(DsonDocument& target, std::string_view parent_path,
                     const DsonDocument& source, std::string_view source_path,
                     std::string_view child_name, std::size_t child_position);
+
+    // Adds a new object with primitive child fields while preserving the
+    // destination's ordered-field layout. The writer rebuilds DSON metadata.
+    [[nodiscard]] static Result<std::size_t, Error>
+    append_object(DsonDocument& target, std::string_view parent_path,
+                  std::string_view child_name,
+                  const std::vector<std::pair<std::string, Value>>& primitive_fields);
 
     // Renames a field and all paths below it, preserving its value and children.
     [[nodiscard]] static Result<void, Error>

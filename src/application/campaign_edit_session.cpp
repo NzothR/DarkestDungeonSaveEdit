@@ -41,20 +41,6 @@ bool campaign_value_matches_kind(core::dson::ValueKind kind, const CampaignValue
            (kind == core::dson::ValueKind::Character && std::holds_alternative<char>(value));
 }
 
-bool trinket_template_source_allowed(const CampaignDocumentMutation& mutation) {
-    constexpr std::string_view prefix{"base_root/estate_items/items/"};
-    if (mutation.semantic_property != "TrinketInventory.Items" ||
-        mutation.kind != CampaignDocumentMutationKind::AppendClone ||
-        mutation.document_id != "persist.estate.json" ||
-        mutation.expected_kind != core::dson::ValueKind::Object ||
-        !mutation.source_path.starts_with(prefix)) return false;
-    const auto key = std::string_view{mutation.source_path}.substr(prefix.size());
-    std::size_t index{};
-    const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), index);
-    return !key.empty() && key.find('/') == std::string_view::npos && error == std::errc{} &&
-           end == key.data() + key.size();
-}
-
 bool is_editable_property(std::string_view property) {
     const auto* mapping = find_mapping(property);
     return mapping != nullptr && mapping->editable_in_session;
@@ -645,18 +631,24 @@ bool apply_trinket_inventory_mutations(CampaignModel& model,
             found->raw.display_path = renamed_path;
             found->raw_key = mutation.new_key;
             found->index = *index;
-        } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+        } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                   mutation.kind == CampaignDocumentMutationKind::CreateObject) {
             const auto index = parse_index(mutation.target_path);
             if (!index) return false;
             const auto source = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
                 [&](const auto& item) { return item.raw.display_path == mutation.source_path; });
             domain::TrinketInventoryEntry entry;
-            if (source != model.trinket_inventory.end()) entry = *source;
+            if (mutation.kind == CampaignDocumentMutationKind::AppendClone && source != model.trinket_inventory.end())
+                entry = *source;
             entry.index = *index;
             entry.raw_key = mutation.new_key;
             entry.raw = RawLocator{"persist.estate.json", {}, mutation.target_path};
             entry.id.raw = RawLocator{"persist.estate.json", {}, mutation.target_path + "/id"};
             entry.amount.raw = RawLocator{"persist.estate.json", {}, mutation.target_path + "/amount"};
+            if (mutation.kind == CampaignDocumentMutationKind::CreateObject) {
+                entry.item_type.value = "trinket";
+                entry.amount.value = 1;
+            }
             for (const auto& field : mutations) {
                 if (field.semantic_property != "TrinketInventory.Items" || !field.after ||
                     !field.target_path.starts_with(mutation.target_path + "/")) continue;
@@ -959,11 +951,9 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 mutation.kind == CampaignDocumentMutationKind::AppendClone &&
                 (mutation.source_path.starts_with("base_root/buildings/") ||
                  mutation.source_path.starts_with("base_root/"));
-            const bool trinket_template_source = trinket_template_source_allowed(mutation);
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
-                !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source &&
-                !trinket_template_source) {
+                !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source) {
                 add_issue(report, ValidationSeverity::Error, "mutation.source_mapping_mismatch",
                           "A cloned DSON template must come from the same registered mapping", target, true);
                 continue;
@@ -974,6 +964,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
                   mutation.semantic_property == "Town.DistrictSystem" || mutation.semantic_property == "Town.Districts" ||
                   mutation.semantic_property == "Upgrade.PurchaseNode.Entry")) ||
+                (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
+                 mutation.semantic_property == "TrinketInventory.Items") ||
                 (mutation.kind == CampaignDocumentMutationKind::InsertClone &&
                  mutation.semantic_property == "Hero.Quirks") ||
                 (mutation.kind == CampaignDocumentMutationKind::Erase &&
@@ -1042,6 +1034,10 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                   mutation.expected_kind == core::dson::ValueKind::Unknown ||
                   (mutation.kind == CampaignDocumentMutationKind::InsertClone && !mutation.insertion_index))) ||
                 (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key)) ||
+                (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
+                 (!safe_dson_key(mutation.new_key) || mutation.expected_kind != core::dson::ValueKind::Object ||
+                  mutation.document_id != "persist.estate.json" ||
+                  mutation.target_path != "base_root/trinkets/items/" + mutation.new_key)) ||
                 (mutation.kind == CampaignDocumentMutationKind::SetValue &&
                  (!mutation.before || !mutation.after ||
                   !campaign_value_matches_kind(mutation.expected_kind, *mutation.before) ||

@@ -524,20 +524,6 @@ bool district_system_clone_source_allowed(const CampaignDocumentMutation& mutati
     return false;
 }
 
-bool trinket_inventory_template_source_allowed(const CampaignDocumentMutation& mutation) {
-    constexpr std::string_view prefix{"base_root/estate_items/items/"};
-    if (mutation.semantic_property != "TrinketInventory.Items" ||
-        mutation.kind != CampaignDocumentMutationKind::AppendClone ||
-        mutation.document_id != "persist.estate.json" ||
-        mutation.expected_kind != ValueKind::Object ||
-        !mutation.source_path.starts_with(prefix)) return false;
-    const auto key = std::string_view{mutation.source_path}.substr(prefix.size());
-    std::size_t index{};
-    const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), index);
-    return !key.empty() && key.find('/') == std::string_view::npos && error == std::errc{} &&
-           end == key.data() + key.size();
-}
-
 bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
     constexpr std::string_view prefix{"base_root/purchases/"};
     if (mutation.semantic_property != "Upgrade.PurchaseNode.Entry" ||
@@ -590,6 +576,7 @@ bool path_is_removed(std::string_view field_path, const std::vector<CampaignDocu
 bool path_is_added(std::string_view field_path, const std::vector<CampaignDocumentMutation>& mutations) {
     return std::any_of(mutations.begin(), mutations.end(), [&](const auto& mutation) {
         if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+            mutation.kind == CampaignDocumentMutationKind::CreateObject ||
             mutation.kind == CampaignDocumentMutationKind::InsertClone)
             return field_path == mutation.target_path || field_path.starts_with(mutation.target_path + "/") ||
                    field_path.starts_with(mutation.target_path + " => ");
@@ -672,7 +659,8 @@ bool validate_decoded_candidate(const DsonDocument& original, const DsonDocument
         }
     }
     for (const auto& mutation : mutations) {
-        if (mutation.kind == CampaignDocumentMutationKind::SetValue) {
+        if (mutation.kind == CampaignDocumentMutationKind::SetValue &&
+            !path_is_removed(mutation.target_path, mutations)) {
             const auto value = locate_field_by_path(const_cast<DsonDocument&>(candidate), mutation.target_path, reason);
             if (!value || value->get().kind != mutation.expected_kind || !mutation.after ||
                 !value_matches(value->get(), *mutation.after)) {
@@ -922,8 +910,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                 !mutation_path_matches_mapping(*mapping, mutation.source_path) &&
-                !district_system_clone_source_allowed(mutation) &&
-                !trinket_inventory_template_source_allowed(mutation))
+                !district_system_clone_source_allowed(mutation))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Clone source is outside the registered mapping",
@@ -941,6 +928,13 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                  (mutation.kind == CampaignDocumentMutationKind::InsertClone && !mutation.insertion_index)))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed, "Append-clone mutation payload is invalid"));
+            if (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
+                (mutation.semantic_property != "TrinketInventory.Items" ||
+                 mutation.expected_kind != ValueKind::Object || !safe_dson_key(mutation.new_key) ||
+                 mutation.target_path != "base_root/trinkets/items/" + mutation.new_key))
+                return core::Result<SaveCandidate, core::Error>::failure(
+                    adapter_error(core::ErrorCode::ValidationFailed, "Create-object mutation payload is invalid",
+                                  {{"path", mutation.target_path}}));
             if (mutation.kind == CampaignDocumentMutationKind::Rename && !safe_dson_key(mutation.new_key))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed, "Rename mutation key is invalid"));
@@ -1098,6 +1092,26 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& cha
                     error.context["mutation_index"] = std::to_string(active_mutation_index);
                     error.context["target_path"] = mutation.target_path;
                     error.context["source_path"] = mutation.source_path;
+                    return core::Result<SaveCandidate, core::Error>::failure(std::move(error));
+                }
+            } else if (mutation.kind == CampaignDocumentMutationKind::CreateObject) {
+                const std::vector<std::pair<std::string, core::dson::Value>> fields{
+                    {"id", std::string{}},
+                    {"type", std::string{"trinket"}},
+                    {"amount", std::int32_t{1}},
+                    {"added_buffs", std::int32_t{0}},
+                    {"hero_name", std::string{}},
+                    {"previous_trinket_id", std::string{}},
+                    {"did_transform", false},
+                    {"trinkets_gained_count", std::int32_t{0}},
+                };
+                auto created = core::dson::DsonDocumentEditor::append_object(
+                    cloned, "base_root/trinkets/items", mutation.new_key, fields);
+                if (!created) {
+                    auto error = created.error();
+                    error.context["semantic_property"] = mutation.semantic_property;
+                    error.context["mutation_index"] = std::to_string(active_mutation_index);
+                    error.context["target_path"] = mutation.target_path;
                     return core::Result<SaveCandidate, core::Error>::failure(std::move(error));
                 }
             } else if (mutation.kind == CampaignDocumentMutationKind::Erase) {
