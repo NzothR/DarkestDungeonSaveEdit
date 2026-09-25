@@ -60,6 +60,24 @@ For a single-config CLion generator, CMAKE_BUILD_TYPE controls the build configu
 CLI smoke checking remains registered with CTest. Fixture data is independent of the
 current working directory.
 
+## Package the Windows Release build
+
+Configure a Release build, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/package_release.ps1
+```
+
+The script builds `ddse_http` and creates `dist/DarkestDungeonSaveEditor-win64.zip`.
+The archive contains the executable, browser frontend, SQLite runtime, and required
+compiler runtime DLLs. No database server or separate SQLite installation is needed.
+Extract the whole folder and run `Start Editor.cmd`. It sets the working directory
+so configuration, content databases, and backups are created beside the program.
+No existing databases or machine-specific configuration are packaged. On another
+computer, select the installed game and save profile paths in the first-launch UI;
+the application builds its databases from those files. Game, save, and Mod files
+are not included. Use `-SkipBuild` to package an already built Release target.
+
 ## Test structure
 
 - `tests/unit/`: isolated component contract tests.
