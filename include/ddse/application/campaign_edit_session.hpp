@@ -202,6 +202,11 @@ make_set_town_upgrade_rank_operation(const domain::CampaignModel& model,
                                      std::string_view tree_id,
                                      std::int32_t rank,
                                      std::int32_t effective_max_rank);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_maximize_town_upgrades_operation(
+    const domain::CampaignModel& model,
+    const std::vector<std::pair<std::string, std::int32_t>>& tree_max_ranks,
+    std::string_view label);
 
 enum class ValidationSeverity { Warning, Error };
 

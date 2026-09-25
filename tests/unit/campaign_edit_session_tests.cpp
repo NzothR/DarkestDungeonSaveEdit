@@ -1,9 +1,11 @@
 #include "ddse/application/campaign_edit_session.hpp"
+#include "ddse/core/dson/dson_document.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -252,6 +254,43 @@ TEST(CampaignEditSession, CompositeOperationChangesMultipleDocumentsWithOneUndo)
     EXPECT_EQ(session.model().resources.front().amount.value, 100);
     EXPECT_EQ(session.model().heroes.front().name.value, "Junia");
     EXPECT_EQ(session.model().heroes.front().stress.value, 15.0F);
+}
+
+TEST(CampaignEditSession, MaximizingSparseTownTreesReservesDistinctPurchaseRows) {
+    auto model = sample_model();
+    domain::UpgradePurchaseNode existing;
+    existing.index = 2939;
+    existing.instance_number = 0;
+    existing.tree_id = static_cast<std::int32_t>(core::dson::string_hash("stage_coach.rostersize"));
+    existing.requirement_code = 'a';
+    existing.row_raw = locator("persist.upgrades.json", "base_root/purchases/2939");
+    existing.is_purchased.value = true;
+    existing.is_purchased.raw = locator("persist.upgrades.json", "base_root/purchases/2939/is_purchased");
+    model.upgrade_purchase_nodes.push_back(std::move(existing));
+    application::CampaignEditSession session{std::move(model)};
+
+    const auto operation = application::make_maximize_town_upgrades_operation(session.model(),
+        {{"stage_coach.rostersize", 2}, {"nomad_wagon.cost", 2}}, "Max all town buildings");
+    ASSERT_TRUE(operation) << operation.error().message;
+    const auto* composite = std::get_if<application::CompositeCampaignOperation>(&operation.value());
+    ASSERT_NE(composite, nullptr);
+    std::set<std::string> append_paths;
+    for (const auto& mutation : composite->document_mutations) {
+        if (mutation.kind == application::CampaignDocumentMutationKind::AppendClone) {
+            EXPECT_TRUE(append_paths.insert(mutation.target_path).second);
+        }
+    }
+    EXPECT_EQ(append_paths, (std::set<std::string>{"base_root/purchases/2940",
+                                                    "base_root/purchases/2941",
+                                                    "base_root/purchases/2942"}));
+
+    const auto applied = session.apply(operation.value(), 0);
+    ASSERT_TRUE(applied) << applied.error().message;
+    EXPECT_EQ(session.model().upgrade_purchase_nodes.size(), 4U);
+    ASSERT_TRUE(session.undo(1));
+    EXPECT_EQ(session.model().upgrade_purchase_nodes.size(), 1U);
+    ASSERT_TRUE(session.redo(2));
+    EXPECT_EQ(session.model().upgrade_purchase_nodes.size(), 4U);
 }
 
 TEST(CampaignEditSession, InvalidTargetAndMissingMappingLeaveModelUntouched) {

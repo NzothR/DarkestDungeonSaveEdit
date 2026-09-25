@@ -1913,6 +1913,27 @@ make_set_town_upgrade_rank_operation(const domain::CampaignModel& model, std::st
     return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
 }
 
+core::Result<CampaignOperation, core::Error>
+make_maximize_town_upgrades_operation(
+    const domain::CampaignModel& model,
+    const std::vector<std::pair<std::string, std::int32_t>>& tree_max_ranks,
+    std::string_view label) {
+    CompositeCampaignOperation operation{std::string{label}, {}, "campaign.town.set_upgrade_rank", {}};
+    std::set<std::string, std::less<>> seen_trees;
+    for (const auto& [tree_id, maximum] : tree_max_ranks) {
+        if (!seen_trees.insert(tree_id).second ||
+            !append_purchase_rank_changes(model, operation, 0, tree_id, maximum, maximum, 'a'))
+            return core::Result<CampaignOperation, core::Error>::failure(
+                progression_mapping_error("Town upgrade rank does not match its effective mapped purchase tree: " + tree_id,
+                                          "campaign.town.set_upgrade_rank"));
+    }
+    if (operation.operations.empty() && operation.document_mutations.empty())
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Town upgrades are already at their effective maximum ranks",
+                                      "campaign.town.set_upgrade_rank"));
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
+}
+
 CampaignEditSession::CampaignEditSession(CampaignModel initial_model)
     : working_model_(std::move(initial_model)) {}
 

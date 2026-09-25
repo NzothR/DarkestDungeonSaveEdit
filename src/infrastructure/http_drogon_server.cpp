@@ -2985,9 +2985,7 @@ void handle_campaign_building_rank(const drogon::HttpRequestPtr& request,
                                 "The requested building has no active upgrade tree."));
             return;
         }
-        application::CompositeCampaignOperation maximum{selected_building.empty()
-                ? "Max all town buildings" : "Max one town building", {},
-            "campaign.town.set_upgrade_rank", {}};
+        std::vector<std::pair<std::string, std::int32_t>> missing_trees;
         for (const auto& tree : context->campaign->building_upgrade_trees) {
             if (!selected_building.empty() && tree.building_id != selected_building) continue;
             const auto hash = static_cast<std::int32_t>(core::dson::string_hash(tree.id));
@@ -2998,20 +2996,20 @@ void handle_campaign_building_rank(const drogon::HttpRequestPtr& request,
                            node.is_purchased.value.value_or(false);
                 });
             if (purchased == static_cast<std::ptrdiff_t>(tree.codes.size())) continue;
-            auto built = application::make_set_town_upgrade_rank_operation(model, tree.id,
-                static_cast<std::int32_t>(tree.codes.size()), static_cast<std::int32_t>(tree.codes.size()));
-            if (!built) continue;
-            const auto* composite = std::get_if<application::CompositeCampaignOperation>(&built.value());
-            if (!composite) continue;
-            maximum.operations.insert(maximum.operations.end(), composite->operations.begin(), composite->operations.end());
-            maximum.document_mutations.insert(maximum.document_mutations.end(),
-                composite->document_mutations.begin(), composite->document_mutations.end());
+            missing_trees.emplace_back(tree.id, static_cast<std::int32_t>(tree.codes.size()));
         }
-        if (maximum.operations.empty() && maximum.document_mutations.empty()) {
+        if (missing_trees.empty()) {
             callback(json_ok(campaign_value(*context->campaign)));
             return;
         }
-        operation = std::move(maximum);
+        auto built = application::make_maximize_town_upgrades_operation(model, missing_trees,
+            selected_building.empty() ? "Max all town buildings" : "Max one town building");
+        if (!built) {
+            callback(json_error(drogon::k400BadRequest, std::string{core::to_string(built.error().code)},
+                                built.error().message));
+            return;
+        }
+        operation = std::move(built.value());
     }
     auto applied = context->campaign->edits->apply(operation, (*body)["revision"].asUInt64());
     if (!applied) {
