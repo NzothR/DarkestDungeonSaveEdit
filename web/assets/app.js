@@ -73,6 +73,8 @@ const elements = {
   heroDetailIdle: document.querySelector("#hero-detail-idle"),
   heroDetailPositive: document.querySelector("#hero-detail-positive"),
   heroDetailNegative: document.querySelector("#hero-detail-negative"),
+  heroPositiveQuirkLimit: document.querySelector("#hero-positive-quirk-limit"),
+  heroNegativeQuirkLimit: document.querySelector("#hero-negative-quirk-limit"),
   heroDetailUnknownWrap: document.querySelector("#hero-detail-unknown-wrap"),
   heroDetailUnknown: document.querySelector("#hero-detail-unknown"),
   heroDetailWeapon: document.querySelector("#hero-detail-weapon"),
@@ -104,6 +106,13 @@ const elements = {
   trinketClearSelection: document.querySelector("#trinket-clear-selection"),
   trinketSelectionCount: document.querySelector("#trinket-selection-count"),
   trinketOnlyNew: document.querySelector("#trinket-only-new"),
+  quirkSelector: document.querySelector("#quirk-selector"),
+  quirkSelectorTitle: document.querySelector("#quirk-selector-title"),
+  quirkSelectorClose: document.querySelector("#quirk-selector-close"),
+  quirkSearch: document.querySelector("#quirk-search"),
+  quirkModFilter: document.querySelector("#quirk-mod-filter"),
+  quirkSelectorMessage: document.querySelector("#quirk-selector-message"),
+  quirkSelectorList: document.querySelector("#quirk-selector-list"),
   resourceGrid: document.querySelector("#resource-grid"),
   townUndo: document.querySelector("#town-undo"),
   townRedo: document.querySelector("#town-redo"),
@@ -138,6 +147,8 @@ let heroEditBusy = false;
 let heroIdleKey = "";
 let heroIdleStop = null;
 let heroIdleController = null;
+let quirkDefinitions = [];
+let quirkSelection = null;
 
 function t(key, variables = {}) {
   let value = strings[key] ?? key;
@@ -444,7 +455,7 @@ function possibleLinkedTrinketName(trinket, inventory, links) {
 
 function attachTrinketTooltip(owner, tooltip) {
   tooltip.classList.add("trinket-tooltip-portal");
-  tooltip.dataset.scope = owner.closest("#trinket-selector") ? "selector"
+  tooltip.dataset.scope = owner.closest("#trinket-selector, #quirk-selector") ? "selector"
     : owner.closest("#hero-detail") ? "hero" : "inventory";
   const usePopover = typeof tooltip.showPopover === "function";
   if (usePopover) {
@@ -488,6 +499,30 @@ function attachTrinketTooltip(owner, tooltip) {
     tooltip.scrollTop += event.deltaY || event.deltaX;
   }, { passive: false });
   owner._hideTrinketTooltip = hide;
+}
+
+function quirkTooltip(quirk) {
+  const tooltip = document.createElement("div");
+  tooltip.className = "trinket-tooltip";
+  tooltip.append(Object.assign(document.createElement("strong"), {
+    textContent: cleanGameText(quirk.name || quirk.id),
+  }));
+  const effects = Array.isArray(quirk.effects) ? quirk.effects : [];
+  const description = document.createElement("div");
+  description.className = "trinket-description";
+  for (const line of effects) {
+    const effect = document.createElement("div");
+    effect.className = "trinket-effect";
+    effect.append(gameMarkup(line));
+    description.append(effect);
+  }
+  if (!effects.length) description.textContent = t("hero.quirkNoEffects");
+  tooltip.append(description);
+  tooltip.append(Object.assign(document.createElement("div"), {
+    className: "trinket-source",
+    textContent: `${t("trinket.source")}: ${quirk.modName || quirk.sourceId || t("trinket.vanilla")}`,
+  }));
+  return tooltip;
 }
 
 function heroDetailImage(path, assets, roles, fallback) {
@@ -547,9 +582,60 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
   }
 }
 
+function renderHeroQuirks(hero, polarity) {
+  const positive = polarity === "positive";
+  const container = positive ? elements.heroDetailPositive : elements.heroDetailNegative;
+  const limitInput = positive ? elements.heroPositiveQuirkLimit : elements.heroNegativeQuirkLimit;
+  const limit = Number(latestCampaign?.[positive ? "heroPositiveQuirkLimit" : "heroNegativeQuirkLimit"] ?? 0);
+  const entries = (hero.quirks || []).filter((quirk) => !quirk.isDisease && quirk.polarity === polarity);
+  limitInput.value = String(limit);
+  container.replaceChildren();
+  for (const quirk of entries) {
+    const row = document.createElement("div");
+    row.className = `hero-quirk-row${positive ? "" : " hero-detail-item-negative"}`;
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "hero-quirk-name";
+    main.textContent = cleanGameText(quirk.name || quirk.id);
+    main.addEventListener("click", () => openQuirkSelector(polarity, quirk.id));
+    main.addEventListener("contextmenu", async (event) => {
+      event.preventDefault();
+      if (!event.shiftKey && !window.confirm(t("hero.quirkRemoveConfirm", { name: quirk.name || quirk.id }))) return;
+      try {
+        renderCampaign(await editorGateway.editHeroQuirks("remove", latestCampaign.revision,
+          { heroId: hero.id, polarity, oldId: quirk.id }));
+      } catch (error) { elements.heroDetailMessage.textContent = displayError(error); }
+    });
+    row.append(main);
+    container.append(row);
+    attachTrinketTooltip(main, quirkTooltip(quirk));
+    if (positive && quirk.canLock) {
+      const lock = document.createElement("button");
+      lock.type = "button";
+      lock.className = `hero-quirk-lock${quirk.isLocked ? " locked" : ""}`;
+      lock.textContent = quirk.isLocked ? "🔒" : "🔓";
+      lock.title = t(quirk.isLocked ? "hero.quirkUnlock" : "hero.quirkLock");
+      lock.addEventListener("click", async () => {
+        try {
+          renderCampaign(await editorGateway.editHeroQuirks("lock", latestCampaign.revision,
+            { heroId: hero.id, polarity, oldId: quirk.id }));
+        } catch (error) { elements.heroDetailMessage.textContent = displayError(error); }
+      });
+      row.prepend(lock);
+    }
+  }
+  if (entries.length < limit) {
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "hero-quirk-add";
+    add.textContent = `+ ${t("hero.quirkAdd")}`;
+    add.addEventListener("click", () => openQuirkSelector(polarity, null));
+    container.append(add);
+  }
+}
+
 function renderHeroTrinketSlots(hero) {
   const container = elements.heroDetailTrinkets;
-  document.querySelectorAll('.trinket-tooltip-portal[data-scope="hero"]').forEach((tooltip) => tooltip.remove());
   container.replaceChildren();
   const equipped = hero.trinkets || [];
   const slotCount = Math.max(Number(latestCampaign?.heroTrinketSlotLimit) || 0, equipped.length);
@@ -699,9 +785,10 @@ function renderHeroDetail() {
     ? t("hero.xpUnresolved", { xp: hero.resolveXp }) : "";
   elements.heroDetailStress.textContent = hero.stress == null ? "—" : String(Math.round(hero.stress));
   elements.heroDetailStressBar.value = Math.max(0, Math.min(200, Number(hero.stress) || 0));
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="hero"]').forEach((tooltip) => tooltip.remove());
   const quirks = (hero.quirks || []).filter((entry) => !entry.isDisease);
-  renderHeroDetailEntries(elements.heroDetailPositive, quirks.filter((entry) => entry.polarity === "positive"), "quirk", "hero.noQuirks");
-  renderHeroDetailEntries(elements.heroDetailNegative, quirks.filter((entry) => entry.polarity === "negative"), "quirk", "hero.noQuirks");
+  renderHeroQuirks(hero, "positive");
+  renderHeroQuirks(hero, "negative");
   const unknownQuirks = quirks.filter((entry) => entry.polarity !== "positive" && entry.polarity !== "negative");
   elements.heroDetailUnknownWrap.hidden = !unknownQuirks.length;
   if (unknownQuirks.length) renderHeroDetailEntries(elements.heroDetailUnknown, unknownQuirks, "quirk", "hero.noQuirks");
@@ -1117,6 +1204,8 @@ async function openTrinketSelector(mode) {
   selectedTrinketRawKeys.clear();
   elements.trinketSelectorTitle.textContent = t(mode === "hero" ? "hero.trinketPickerTitle" : `trinket.title.${mode}`);
   elements.trinketSourceWrap.hidden = mode !== "hero";
+  elements.trinketClassFilter.hidden = mode === "hero";
+  elements.trinketClassFilter.parentElement.classList.toggle("hero-trinket-search-controls", mode === "hero");
   elements.trinketSource.value = "inventory";
   elements.trinketBatchFooter.hidden = mode !== "batchAdd" && mode !== "batchDelete";
   elements.trinketOnlyNew.parentElement.hidden = mode !== "batchAdd";
@@ -1150,6 +1239,63 @@ async function openTrinketSelector(mode) {
     for (const [id, name] of rarities) elements.trinketRarityFilter.add(new Option(name, id));
     renderTrinketSelector();
   } catch (error) { elements.trinketSelectorMessage.textContent = displayError(error); }
+}
+
+function renderQuirkSelector() {
+  if (!quirkSelection) return;
+  const hero = activeHero();
+  const needle = elements.quirkSearch.value.trim().toLocaleLowerCase();
+  const mod = elements.quirkModFilter.value;
+  const existing = new Set((hero?.quirks || []).map((entry) => entry.id));
+  const candidates = quirkDefinitions.filter((entry) => entry.polarity === quirkSelection.polarity &&
+    !existing.has(entry.id) && (!mod || entry.sourceId === mod) &&
+    (!needle || `${entry.id} ${entry.name} ${entry.modName} ${(entry.effects || []).join(" ")}`
+      .toLocaleLowerCase().includes(needle)));
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
+  elements.quirkSelectorList.replaceChildren();
+  elements.quirkSelectorMessage.textContent = t("hero.quirkResults", { count: candidates.length });
+  for (const entry of candidates) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "trinket-selector-item quirk-selector-item";
+    const info = document.createElement("span");
+    info.className = "trinket-selector-info";
+    info.append(Object.assign(document.createElement("strong"), {
+      textContent: cleanGameText(entry.name || entry.id),
+    }), Object.assign(document.createElement("small"), {
+      textContent: entry.modName || entry.sourceId || t("trinket.vanilla"),
+    }));
+    row.append(info);
+    elements.quirkSelectorList.append(row);
+    attachTrinketTooltip(row, quirkTooltip(entry));
+    row.addEventListener("click", async () => {
+      try {
+        renderCampaign(await editorGateway.editHeroQuirks(quirkSelection.oldId ? "replace" : "add",
+          latestCampaign.revision, { heroId: activeHeroId, polarity: quirkSelection.polarity,
+            oldId: quirkSelection.oldId, quirkId: entry.id }));
+        elements.quirkSelector.close();
+      } catch (error) { elements.quirkSelectorMessage.textContent = displayError(error); }
+    });
+  }
+}
+
+async function openQuirkSelector(polarity, oldId) {
+  quirkSelection = { polarity, oldId };
+  elements.quirkSelectorTitle.textContent = t(oldId ? "hero.quirkReplace" : "hero.quirkAddTitle",
+    { polarity: t(polarity === "positive" ? "hero.positiveQuirks" : "hero.negativeQuirks") });
+  elements.quirkSearch.value = "";
+  elements.quirkModFilter.replaceChildren(new Option(t("trinket.allMods"), ""));
+  elements.quirkSelectorList.replaceChildren();
+  elements.quirkSelectorMessage.textContent = t("hero.quirkLoading");
+  if (!elements.quirkSelector.open) elements.quirkSelector.showModal();
+  try {
+    if (!quirkDefinitions.length) quirkDefinitions = await editorGateway.listQuirks();
+    const mods = new Map();
+    for (const item of quirkDefinitions) if (item.sourceId)
+      mods.set(item.sourceId, item.modName || item.sourceId);
+    for (const [id, name] of mods) elements.quirkModFilter.add(new Option(name, id));
+    renderQuirkSelector();
+  } catch (error) { elements.quirkSelectorMessage.textContent = displayError(error); }
 }
 
 const BUILDING_LOCALE_KEYS = Object.freeze({
@@ -1476,6 +1622,7 @@ elements.form.addEventListener("submit", async (event) => {
       localModRoots: elements.localModRoots.value.trim() ? [elements.localModRoots.value.trim()] : [],
     });
     trinketDefinitions = [];
+    quirkDefinitions = [];
     showConfiguration(configuration);
     await setLocale(configuration.language);
     elements.configurationMessage.textContent = t("settings.saved");
@@ -1685,6 +1832,32 @@ elements.heroTrinketSlotLimit.addEventListener("change", async () => {
     elements.heroTrinketSlotLimit.value = String(latestCampaign.heroTrinketSlotLimit);
   }
 });
+for (const [polarity, input] of [["positive", elements.heroPositiveQuirkLimit],
+                                 ["negative", elements.heroNegativeQuirkLimit]]) {
+  input.addEventListener("change", async () => {
+    const limit = Number(input.value);
+    const key = polarity === "positive" ? "heroPositiveQuirkLimit" : "heroNegativeQuirkLimit";
+    if (!latestCampaign || !Number.isInteger(limit) || limit < 0 || limit > 1000) {
+      input.value = String(latestCampaign?.[key] ?? 0);
+      return;
+    }
+    try {
+      renderCampaign(await editorGateway.editHeroQuirks("set_limit", latestCampaign.revision,
+        { polarity, limit }));
+      elements.heroDetailMessage.textContent = "";
+    } catch (error) {
+      elements.heroDetailMessage.textContent = displayError(error);
+      input.value = String(latestCampaign[key]);
+    }
+  });
+}
+elements.quirkSelectorClose.addEventListener("click", () => elements.quirkSelector.close());
+elements.quirkSelector.addEventListener("close", () => {
+  quirkSelection = null;
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
+});
+elements.quirkSearch.addEventListener("input", renderQuirkSelector);
+elements.quirkModFilter.addEventListener("change", renderQuirkSelector);
 elements.heroDetailTrinkets.addEventListener("wheel", (event) => {
   if (elements.heroDetailTrinkets.scrollWidth <= elements.heroDetailTrinkets.clientWidth || !event.deltaY) return;
   event.preventDefault();

@@ -799,6 +799,124 @@ bool apply_hero_trinket_mutations(CampaignModel& model,
     return true;
 }
 
+bool apply_hero_quirk_mutations(CampaignModel& model,
+                               const std::vector<CampaignDocumentMutation>& mutations) {
+    std::map<std::string, domain::HeroQuirk, std::less<>> erased_quirks;
+    for (const auto& mutation : mutations) {
+        if (mutation.semantic_property != "Hero.Quirks") continue;
+        const auto start = mutation.target_path.find("/heroes/");
+        if (start == std::string::npos) return false;
+        const auto id_start = start + std::string_view{"/heroes/"}.size();
+        const auto id_end = mutation.target_path.find('/', id_start);
+        if (id_end == std::string::npos) return false;
+        const auto hero_id = mutation.target_path.substr(id_start, id_end - id_start);
+        auto hero = std::find_if(model.heroes.begin(), model.heroes.end(),
+            [&](const auto& item) { return item.persistent_id == hero_id; });
+        if (hero == model.heroes.end()) return false;
+        const auto found = std::find_if(hero->quirks.begin(), hero->quirks.end(),
+            [&](const auto& item) { return item.raw.display_path == mutation.target_path; });
+        if (mutation.kind == CampaignDocumentMutationKind::Erase) {
+            if (found == hero->quirks.end()) return false;
+            erased_quirks.insert_or_assign(mutation.target_path, *found);
+            hero->quirks.erase(found);
+        } else if (mutation.kind == CampaignDocumentMutationKind::CreateObject ||
+                   mutation.kind == CampaignDocumentMutationKind::Rename ||
+                   mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                   mutation.kind == CampaignDocumentMutationKind::InsertClone) {
+            domain::HeroQuirk added;
+            if (mutation.kind == CampaignDocumentMutationKind::Rename) {
+                if (found == hero->quirks.end()) return false;
+                added = *found;
+                hero->quirks.erase(found);
+            } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
+                       mutation.kind == CampaignDocumentMutationKind::InsertClone) {
+                const auto source = std::find_if(hero->quirks.begin(), hero->quirks.end(),
+                    [&](const auto& item) { return item.raw.display_path == mutation.source_path; });
+                if (source != hero->quirks.end()) added = *source;
+                else if (const auto erased = erased_quirks.find(mutation.source_path);
+                         erased != erased_quirks.end()) added = erased->second;
+                else return false;
+            } else if (!mutation.quirk_positive) return false;
+            if (std::any_of(hero->quirks.begin(), hero->quirks.end(), [&](const auto& item) {
+                    return item.id == mutation.new_key;
+                })) return false;
+            const auto old_path = added.raw.display_path;
+            const auto new_path = mutation.target_path.substr(0,
+                mutation.target_path.find_last_of('/') + 1) + mutation.new_key;
+            const auto rewrite_field = [&](auto& field, std::string_view name) {
+                if (field.raw) {
+                    field.raw->steps.clear();
+                    field.raw->display_path = new_path + "/" + std::string{name};
+                }
+            };
+            if (!old_path.empty()) {
+                rewrite_field(added.is_new, "is_new");
+                rewrite_field(added.is_locked, "is_locked");
+                rewrite_field(added.trinket_id, "trinketId");
+                rewrite_field(added.mission_count, "mission_count");
+                rewrite_field(added.replaces_quirk, "replaces_quirk");
+                rewrite_field(added.replaces_quirk_viewed, "replaces_quirk_viewed");
+                rewrite_field(added.evolution_duration_remaining, "evolution_duration_remaining");
+            }
+            added.id = mutation.new_key;
+            added.raw = {"persist.roster.json", {}, new_path};
+            added.definition.raw_id = mutation.new_key;
+            if (mutation.quirk_positive) {
+                added.is_disease = false;
+                added.read_only = false;
+                added.state = EntityState::Resolved;
+                added.polarity = *mutation.quirk_positive
+                    ? domain::QuirkPolarity::Positive : domain::QuirkPolarity::Negative;
+                added.definition.display_name = mutation.quirk_name;
+                added.definition.source_id = mutation.quirk_source_id;
+                added.definition.definition_payload_json = mutation.quirk_payload_json;
+                added.definition.state = EntityState::Resolved;
+                const auto field = [&](std::string_view name) {
+                    return RawLocator{"persist.roster.json", {}, new_path + "/" + std::string{name}};
+                };
+                added.is_new = {true, field("is_new")};
+                added.is_locked = {false, field("is_locked")};
+                added.trinket_id = {0, field("trinketId")};
+                added.mission_count = {0, field("mission_count")};
+                added.replaces_quirk = {0, field("replaces_quirk")};
+                added.replaces_quirk_viewed = {false, field("replaces_quirk_viewed")};
+                added.evolution_duration_remaining = {0, field("evolution_duration_remaining")};
+            } else {
+                added.definition.display_name = mutation.new_key;
+                added.definition.state = EntityState::Unresolved;
+            }
+            if (mutation.kind == CampaignDocumentMutationKind::InsertClone) {
+                if (!mutation.insertion_index || *mutation.insertion_index > hero->quirks.size()) return false;
+                hero->quirks.insert(hero->quirks.begin() + static_cast<std::ptrdiff_t>(*mutation.insertion_index),
+                    std::move(added));
+            } else hero->quirks.push_back(std::move(added));
+        } else if (mutation.kind == CampaignDocumentMutationKind::SetValue && mutation.after) {
+            const auto slash = mutation.target_path.find_last_of('/');
+            if (slash == std::string::npos) return false;
+            const auto parent = mutation.target_path.substr(0, slash);
+            const auto field = std::string_view{mutation.target_path}.substr(slash + 1);
+            const auto entry = std::find_if(hero->quirks.begin(), hero->quirks.end(),
+                [&](const auto& item) { return item.raw.display_path == parent; });
+            if (entry == hero->quirks.end()) return false;
+            const auto set = [&](auto& target) {
+                using Value = typename std::decay_t<decltype(target.value)>::value_type;
+                if (const auto* value = std::get_if<Value>(&*mutation.after)) { target.value = *value; return true; }
+                return false;
+            };
+            if (field == "is_new") { if (!set(entry->is_new)) return false; }
+            else if (field == "is_locked") { if (!set(entry->is_locked)) return false; }
+            else if (field == "trinketId") { if (!set(entry->trinket_id)) return false; }
+            else if (field == "mission_count") { if (!set(entry->mission_count)) return false; }
+            else if (field == "replaces_quirk") { if (!set(entry->replaces_quirk)) return false; }
+            else if (field == "replaces_quirk_viewed") { if (!set(entry->replaces_quirk_viewed)) return false; }
+            else if (field == "evolution_duration_remaining") {
+                if (!set(entry->evolution_duration_remaining)) return false;
+            } else return false;
+        } else return false;
+    }
+    return true;
+}
+
 bool apply_hero_roster_mutations(CampaignModel& model,
                                  const std::vector<CampaignDocumentMutation>& mutations) {
     const auto rewrite = [](std::string& path, std::string_view old_id, std::string_view new_id) {
@@ -1264,7 +1382,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                   mutation.semantic_property == "Upgrade.PurchaseNode.Entry" ||
                   mutation.semantic_property == "Hero.SelectedCampingSkills")) ||
                 (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
-                 (mutation.semantic_property == "TrinketInventory.Items" || mutation.semantic_property == "Hero.Trinkets")) ||
+                 (mutation.semantic_property == "TrinketInventory.Items" || mutation.semantic_property == "Hero.Trinkets" ||
+                  mutation.semantic_property == "Hero.Quirks")) ||
                 (mutation.kind == CampaignDocumentMutationKind::InsertClone &&
                  mutation.semantic_property == "Hero.Quirks") ||
                 (mutation.kind == CampaignDocumentMutationKind::Erase &&
@@ -1342,7 +1461,10 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                      mutation.target_path == "base_root/trinkets/items/" + mutation.new_key) ||
                     (mutation.semantic_property == "Hero.Trinkets" &&
                      mutation.document_id == "persist.roster.json" &&
-                     mutation.target_path.ends_with(" => base_root/trinkets/items/" + mutation.new_key))))) ||
+                     mutation.target_path.ends_with(" => base_root/trinkets/items/" + mutation.new_key)) ||
+                    (mutation.semantic_property == "Hero.Quirks" &&
+                     mutation.document_id == "persist.roster.json" &&
+                     mutation.target_path.ends_with(" => base_root/quirks/" + mutation.new_key))))) ||
                 (mutation.kind == CampaignDocumentMutationKind::SetValue &&
                  (!mutation.before || !mutation.after ||
                   !campaign_value_matches_kind(mutation.expected_kind, *mutation.before) ||
@@ -1900,8 +2022,11 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
             [](const auto& mutation) { return mutation.semantic_property == "Hero.SelectedCampingSkills"; });
         const bool projects_hero_trinkets = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) { return mutation.semantic_property == "Hero.Trinkets"; });
+        const bool projects_hero_quirks = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
+            [](const auto& mutation) { return mutation.semantic_property == "Hero.Quirks"; });
         ChangeSet::HeroRosterSnapshot hero_snapshot;
-        if (projects_hero_roster || projects_camping_skills || projects_hero_trinkets) hero_snapshot.before = candidate.heroes;
+        if (projects_hero_roster || projects_camping_skills || projects_hero_trinkets || projects_hero_quirks)
+            hero_snapshot.before = candidate.heroes;
         const bool projects_trinket_inventory = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) { return mutation.semantic_property == "TrinketInventory.Items"; });
         ChangeSet::TrinketInventorySnapshot trinket_snapshot;
@@ -1946,7 +2071,10 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
         if (projects_hero_trinkets && !apply_hero_trinket_mutations(candidate, *mapped_mutations))
             return core::Result<CampaignEditResult, core::Error>::failure(
                 {core::ErrorCode::ValidationFailed, "The hero trinket mutation could not be projected into the campaign session", "CampaignEditSession"});
-        if (projects_hero_roster || projects_camping_skills || projects_hero_trinkets) {
+        if (projects_hero_quirks && !apply_hero_quirk_mutations(candidate, *mapped_mutations))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed, "The hero quirk mutation could not be projected into the campaign session", "CampaignEditSession"});
+        if (projects_hero_roster || projects_camping_skills || projects_hero_trinkets || projects_hero_quirks) {
             hero_snapshot.after = candidate.heroes;
             change_set.hero_roster_snapshot = std::move(hero_snapshot);
         }

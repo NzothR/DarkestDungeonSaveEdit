@@ -112,6 +112,11 @@ struct CampaignDocumentMutation {
     float template_base_hit_points{};
     std::vector<std::string> template_combat_skills;
     std::vector<std::string> template_camping_skills;
+    // Projection hints for a quirk created or renamed from a content definition.
+    std::optional<bool> quirk_positive;
+    std::string quirk_name;
+    std::string quirk_source_id;
+    std::string quirk_payload_json;
 };
 
 struct CampaignDocumentMutationBatch {

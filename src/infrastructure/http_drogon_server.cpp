@@ -108,6 +108,11 @@ struct ServerContext {
         std::set<std::string, std::less<>> reserved_trinket_keys;
         std::map<std::string, std::set<std::string, std::less<>>, std::less<>> reserved_hero_trinket_keys;
         std::uint32_t hero_trinket_slot_limit{0};
+        std::uint32_t hero_positive_quirk_limit{0};
+        std::uint32_t hero_negative_quirk_limit{0};
+        std::vector<application::ContentDefinition> quirk_definitions;
+        std::vector<Json::Value> cached_quirk_catalog;
+        std::map<std::string, nlohmann::json, std::less<>> cached_buff_definitions;
         mutable std::optional<std::vector<DatabaseModRecord>> cached_mod_records;
         mutable std::map<std::string, Json::Value, std::less<>> cached_trinket_details;
         std::vector<Json::Value> cached_trinket_catalog;
@@ -287,6 +292,10 @@ Json::Value configuration_value(const application::AppConfiguration& config) {
     value["autoEditSaveIntervalSeconds"] = static_cast<Json::UInt>(config.auto_edit_save_interval_seconds);
     value["heroTrinketSlotLimit"] = config.hero_trinket_slot_limit
         ? Json::Value(*config.hero_trinket_slot_limit) : Json::Value(Json::nullValue);
+    value["heroPositiveQuirkLimit"] = config.hero_positive_quirk_limit
+        ? Json::Value(*config.hero_positive_quirk_limit) : Json::Value(Json::nullValue);
+    value["heroNegativeQuirkLimit"] = config.hero_negative_quirk_limit
+        ? Json::Value(*config.hero_negative_quirk_limit) : Json::Value(Json::nullValue);
     Json::Value workshop(Json::arrayValue);
     for (const auto& path : config.workshop_roots) workshop.append(path.string());
     value["workshopRoots"] = std::move(workshop);
@@ -315,6 +324,7 @@ std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
 std::vector<std::string> load_official_district_ids(application::IFileSystem& file_system,
                                                     const std::filesystem::path& game_root);
 void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession& campaign);
+void warm_quirk_catalog(ServerContext::CampaignSession& campaign);
 void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& campaign);
 
 std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
@@ -353,11 +363,20 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     }
     auto content = std::make_unique<SqliteContentEnvironment>(std::move(environment_config));
     auto model = application::CampaignModelBuilder{}.build(profile.value(), *content);
-    if (!configuration.hero_trinket_slot_limit) {
+    if (!configuration.hero_trinket_slot_limit || !configuration.hero_positive_quirk_limit ||
+        !configuration.hero_negative_quirk_limit) {
         auto initialized = configuration;
-        std::size_t maximum = 0;
-        for (const auto& hero : model.heroes) maximum = std::max(maximum, hero.trinkets.size());
-        initialized.hero_trinket_slot_limit = static_cast<std::uint32_t>(maximum);
+        std::size_t trinkets = 0, positive = 0, negative = 0;
+        for (const auto& hero : model.heroes) {
+            trinkets = std::max(trinkets, hero.trinkets.size());
+            positive = std::max(positive, static_cast<std::size_t>(std::count_if(hero.quirks.begin(), hero.quirks.end(),
+                [](const auto& quirk) { return !quirk.is_disease && quirk.polarity == domain::QuirkPolarity::Positive; })));
+            negative = std::max(negative, static_cast<std::size_t>(std::count_if(hero.quirks.begin(), hero.quirks.end(),
+                [](const auto& quirk) { return !quirk.is_disease && quirk.polarity == domain::QuirkPolarity::Negative; })));
+        }
+        if (!initialized.hero_trinket_slot_limit) initialized.hero_trinket_slot_limit = static_cast<std::uint32_t>(trinkets);
+        if (!initialized.hero_positive_quirk_limit) initialized.hero_positive_quirk_limit = static_cast<std::uint32_t>(positive);
+        if (!initialized.hero_negative_quirk_limit) initialized.hero_negative_quirk_limit = static_cast<std::uint32_t>(negative);
         if (const auto saved = context.configuration_store.save(initialized); !saved) return saved.error();
     }
 
@@ -378,6 +397,8 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     }
     session->mod_database_path = context.initialization.mod_database_path();
     session->hero_trinket_slot_limit = *context.configuration_store.current().hero_trinket_slot_limit;
+    session->hero_positive_quirk_limit = *context.configuration_store.current().hero_positive_quirk_limit;
+    session->hero_negative_quirk_limit = *context.configuration_store.current().hero_negative_quirk_limit;
     if (const auto roster_rules = context.file_system.read_file(
             context.configuration_store.current().game_root / "campaign/roster/roster.variables.json")) {
         try {
@@ -405,6 +426,7 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
     warm_trinket_catalog(context, *session);
+    warm_quirk_catalog(*session);
     warm_hero_catalog(context, *session);
     context.campaign = std::move(session);
     return std::nullopt;
@@ -734,7 +756,7 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
     if (!definitions) return;
     campaign.trinket_definitions = definitions.value();
 
-    TrinketBuffMap buffs;
+    auto& buffs = campaign.cached_buff_definitions;
     TrinketSetMap sets;
     const auto& config = context.configuration_store.current();
     std::vector<std::filesystem::path> roots{config.game_root};
@@ -825,6 +847,61 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
                 missing_localizations, unsupported_stats, hidden_buff_count);
         campaign.cached_trinket_details.insert_or_assign(definition.id, item);
         campaign.cached_trinket_catalog.push_back(std::move(item));
+    }
+}
+
+void warm_quirk_catalog(ServerContext::CampaignSession& campaign) {
+    const auto listed = campaign.content->list_content("quirk");
+    if (!listed) return;
+    campaign.quirk_definitions = listed.value();
+    for (const auto& definition : campaign.quirk_definitions) {
+        const auto payload = nlohmann::json::parse(definition.payload_json, nullptr, false);
+        if (!payload.is_object() || !payload.contains("is_positive") ||
+            !payload["is_positive"].is_boolean() ||
+            (payload.contains("is_disease") && payload["is_disease"].is_boolean() &&
+             payload["is_disease"].get<bool>())) continue;
+        Json::Value item(Json::objectValue);
+        item["id"] = definition.id;
+        item["name"] = strip_game_markup(definition.localized_name.empty()
+            ? (definition.display_name.empty() ? definition.id : definition.display_name)
+            : definition.localized_name);
+        item["polarity"] = payload["is_positive"].get<bool>() ? "positive" : "negative";
+        item["canLock"] = payload["is_positive"].get<bool>() &&
+            payload.contains("can_modify_in_activity") &&
+            payload["can_modify_in_activity"].is_boolean() &&
+            payload["can_modify_in_activity"].get<bool>();
+        item["sourceId"] = definition.provenance.source_id;
+        item["modName"] = "";
+        for (const auto& mod : *campaign.cached_mod_records)
+            if (mod.matched_mod_id == definition.provenance.source_id) {
+                item["modName"] = mod.display_name.empty() ? mod.fallback_name : mod.display_name;
+                break;
+            }
+        Json::Value effects(Json::arrayValue);
+        const auto description = campaign.content->resolve_localization("str_quirk_description_" + definition.id);
+        if (description && description.value() && !description.value()->value.empty())
+            effects.append(strip_game_markup(description.value()->value));
+        if (payload.contains("buffs") && payload["buffs"].is_array())
+            for (const auto& buff_id : payload["buffs"]) {
+                if (!buff_id.is_string()) continue;
+                const auto found = campaign.cached_buff_definitions.find(buff_id.get<std::string>());
+                if (found == campaign.cached_buff_definitions.end()) continue;
+                const auto& buff = found->second;
+                if ((buff.contains("has_description") && buff["has_description"].is_boolean() &&
+                     !buff["has_description"].get<bool>()) || !buff.contains("stat_type") ||
+                    !buff["stat_type"].is_string() || !buff.contains("stat_sub_type") ||
+                    !buff["stat_sub_type"].is_string() || !buff.contains("amount") ||
+                    !buff["amount"].is_number()) continue;
+                const auto subtype = buff["stat_sub_type"].get<std::string>();
+                const auto key = "buff_stat_tooltip_" + buff["stat_type"].get<std::string>() +
+                    (subtype.empty() ? std::string{} : "_" + subtype);
+                const auto format = campaign.content->resolve_localization(key);
+                if (format && format.value() && !format.value()->value.empty())
+                    effects.append(strip_game_markup(format_trinket_effect(
+                        format.value()->value, buff["amount"].get<double>())));
+            }
+        item["effects"] = std::move(effects);
+        campaign.cached_quirk_catalog.push_back(std::move(item));
     }
 }
 
@@ -923,6 +1000,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     value["canUndo"] = campaign.edits->can_undo();
     value["canRedo"] = campaign.edits->can_redo();
     value["heroTrinketSlotLimit"] = campaign.hero_trinket_slot_limit;
+    value["heroPositiveQuirkLimit"] = campaign.hero_positive_quirk_limit;
+    value["heroNegativeQuirkLimit"] = campaign.hero_negative_quirk_limit;
 
     Json::Value resources(Json::arrayValue);
     for (const auto& resource : model.resources) {
@@ -1021,6 +1100,16 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             entry["polarity"] = quirk.polarity == domain::QuirkPolarity::Positive ? "positive" :
                 quirk.polarity == domain::QuirkPolarity::Negative ? "negative" : "unknown";
             entry["assets"] = definition_assets(quirk.definition);
+            const auto details = std::find_if(campaign.cached_quirk_catalog.begin(), campaign.cached_quirk_catalog.end(),
+                [&](const Json::Value& value) { return value["id"].asString() == quirk.id; });
+            if (details != campaign.cached_quirk_catalog.end()) {
+                entry["name"] = (*details)["name"];
+                entry["effects"] = (*details)["effects"];
+                entry["sourceId"] = (*details)["sourceId"];
+                entry["modName"] = (*details)["modName"];
+                entry["canLock"] = (*details)["canLock"];
+                entry["polarity"] = (*details)["polarity"];
+            }
             quirks.append(std::move(entry));
         }
         item["quirks"] = std::move(quirks);
@@ -2327,6 +2416,213 @@ void handle_campaign_hero_trinket(const drogon::HttpRequestPtr& request,
     if (new_limit) campaign.hero_trinket_slot_limit = *new_limit;
     if (reserved_hero_key) campaign.reserved_hero_trinket_keys[reserved_hero_key->first].insert(reserved_hero_key->second);
     if (reserved_chest_key) campaign.reserved_trinket_keys.insert(*reserved_chest_key);
+    callback(json_ok(campaign_value(campaign)));
+}
+
+void handle_campaign_quirk_catalog(const drogon::HttpRequestPtr& request,
+                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                   const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    Json::Value result(Json::arrayValue);
+    for (const auto& quirk : context->campaign->cached_quirk_catalog) result.append(quirk);
+    callback(json_ok(std::move(result)));
+}
+
+void handle_campaign_hero_quirk(const drogon::HttpRequestPtr& request,
+                                std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !(*body)["action"].isString() ||
+        !((*body)["revision"].isUInt() || (*body)["revision"].isUInt64())) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_HERO_QUIRK", "Action and revision are required."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    auto& campaign = *context->campaign;
+    const auto revision = (*body)["revision"].asUInt64();
+    if (revision != campaign.edits->revision()) {
+        callback(json_error(drogon::k409Conflict, "STALE_SESSION_REVISION", "Campaign revision has changed."));
+        return;
+    }
+    const auto action = (*body)["action"].asString();
+    const auto polarity = (*body)["polarity"].asString();
+    if (polarity != "positive" && polarity != "negative") {
+        callback(json_error(drogon::k400BadRequest, "INVALID_HERO_QUIRK", "Positive or negative polarity is required."));
+        return;
+    }
+    const bool positive = polarity == "positive";
+    const auto matches = [&](const domain::HeroQuirk& quirk) {
+        return !quirk.is_disease && quirk.polarity == (positive
+            ? domain::QuirkPolarity::Positive : domain::QuirkPolarity::Negative);
+    };
+    const auto& model = campaign.edits->model();
+    using Kind = application::CampaignDocumentMutationKind;
+    using Mutation = application::CampaignDocumentMutation;
+    std::vector<Mutation> mutations;
+    std::optional<std::uint32_t> new_limit;
+    if (action == "set_limit") {
+        const auto& requested = (*body)["limit"];
+        if (!request_nonnegative_integer(requested) || requested.asUInt64() > 1000) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_QUIRK_LIMIT", "Quirk limit must be between 0 and 1000."));
+            return;
+        }
+        new_limit = requested.asUInt();
+        for (const auto& hero : model.heroes) {
+            std::size_t count = static_cast<std::size_t>(std::count_if(hero.quirks.begin(), hero.quirks.end(), matches));
+            for (auto it = hero.quirks.rbegin(); it != hero.quirks.rend() && count > *new_limit; ++it)
+                if (matches(*it)) {
+                    mutations.emplace_back(Kind::Erase, "Hero.Quirks", "persist.roster.json",
+                        it->raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+                    --count;
+                }
+        }
+    } else {
+        const auto hero_id = (*body)["heroId"].asString();
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(),
+            [&](const auto& item) { return item.persistent_id == hero_id; });
+        if (hero == model.heroes.end()) {
+            callback(json_error(drogon::k404NotFound, "HERO_NOT_FOUND", "Hero is unavailable."));
+            return;
+        }
+        const auto old_id = (*body)["oldId"].asString();
+        const auto existing = std::find_if(hero->quirks.begin(), hero->quirks.end(),
+            [&](const auto& item) { return item.id == old_id && matches(item); });
+        if (action == "remove" || action == "lock") {
+            if (existing == hero->quirks.end()) {
+                callback(json_error(drogon::k404NotFound, "QUIRK_NOT_FOUND", "Quirk is unavailable in this category."));
+                return;
+            }
+            if (action == "lock" && !positive) {
+                callback(json_error(drogon::k400BadRequest, "QUIRK_NOT_LOCKABLE", "Only eligible positive quirks can be locked."));
+                return;
+            }
+            if (action == "remove") {
+                mutations.emplace_back(Kind::Erase, "Hero.Quirks", "persist.roster.json",
+                    existing->raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+            } else {
+                const auto catalog = std::find_if(campaign.cached_quirk_catalog.begin(), campaign.cached_quirk_catalog.end(),
+                    [&](const auto& item) { return item["id"].asString() == old_id; });
+                if (catalog == campaign.cached_quirk_catalog.end() || !(*catalog)["canLock"].asBool() ||
+                    !existing->is_locked.value) {
+                    callback(json_error(drogon::k400BadRequest, "QUIRK_NOT_LOCKABLE", "The quirk cannot be locked."));
+                    return;
+                }
+                mutations.emplace_back(Kind::SetValue, "Hero.Quirks", "persist.roster.json",
+                    existing->raw.display_path + "/is_locked", std::string{}, std::string{},
+                    core::dson::ValueKind::Boolean, *existing->is_locked.value,
+                    !*existing->is_locked.value);
+            }
+        }
+        if (action != "add" && action != "replace" && action != "lock" && action != "remove") {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_QUIRK", "Unknown quirk action."));
+            return;
+        }
+        if (action == "add" || action == "replace") {
+        if (action == "replace" && existing == hero->quirks.end()) {
+            callback(json_error(drogon::k404NotFound, "QUIRK_NOT_FOUND", "Replacement target is unavailable."));
+            return;
+        }
+        const auto new_id = (*body)["quirkId"].asString();
+        const auto definition = std::find_if(campaign.quirk_definitions.begin(), campaign.quirk_definitions.end(),
+            [&](const auto& item) { return item.id == new_id; });
+        const auto catalog = std::find_if(campaign.cached_quirk_catalog.begin(), campaign.cached_quirk_catalog.end(),
+            [&](const auto& item) { return item["id"].asString() == new_id &&
+                item["polarity"].asString() == polarity; });
+        if (definition == campaign.quirk_definitions.end() || catalog == campaign.cached_quirk_catalog.end() ||
+            std::any_of(hero->quirks.begin(), hero->quirks.end(),
+                [&](const auto& item) { return item.id == new_id; })) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_QUIRK_SELECTION", "Quirk is unavailable, has the wrong polarity, or is already present."));
+            return;
+        }
+        const auto count = std::count_if(hero->quirks.begin(), hero->quirks.end(), matches);
+        const auto limit = positive ? campaign.hero_positive_quirk_limit : campaign.hero_negative_quirk_limit;
+        if (action == "add" && static_cast<std::uint32_t>(count) >= limit) {
+            callback(json_error(drogon::k400BadRequest, "HERO_QUIRK_LIMIT", "The configured quirk limit has been reached."));
+            return;
+        }
+        const auto target = hero->raw.display_path +
+            "/hero_file_data/raw_data => base_root/quirks/" + new_id;
+        if (positive && action == "replace") {
+            Mutation renamed{Kind::Rename, "Hero.Quirks", "persist.roster.json",
+                existing->raw.display_path, {}, new_id, core::dson::ValueKind::Object};
+            renamed.quirk_positive = true;
+            renamed.quirk_name = (*catalog)["name"].asString();
+            renamed.quirk_source_id = definition->provenance.source_id;
+            renamed.quirk_payload_json = definition->payload_json;
+            mutations.push_back(std::move(renamed));
+            const auto reset = [&](std::string_view name, core::dson::ValueKind kind,
+                                   std::optional<application::CampaignValue> before,
+                                   application::CampaignValue after) {
+                if (!before || *before == after) return;
+                mutations.emplace_back(Kind::SetValue, "Hero.Quirks", "persist.roster.json",
+                    target + "/" + std::string{name}, std::string{}, std::string{}, kind, *before, std::move(after));
+            };
+            reset("is_new", core::dson::ValueKind::Boolean, existing->is_new.value, true);
+            reset("is_locked", core::dson::ValueKind::Boolean, existing->is_locked.value, false);
+            reset("trinketId", core::dson::ValueKind::Integer, existing->trinket_id.value, std::int32_t{0});
+            reset("mission_count", core::dson::ValueKind::Integer, existing->mission_count.value, std::int32_t{0});
+            reset("replaces_quirk", core::dson::ValueKind::Integer, existing->replaces_quirk.value, std::int32_t{0});
+            reset("replaces_quirk_viewed", core::dson::ValueKind::Boolean, existing->replaces_quirk_viewed.value, false);
+            reset("evolution_duration_remaining", core::dson::ValueKind::Integer,
+                existing->evolution_duration_remaining.value, std::int32_t{0});
+        } else {
+            if (action == "replace")
+                mutations.emplace_back(Kind::Erase, "Hero.Quirks", "persist.roster.json",
+                    existing->raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+            Mutation created{Kind::CreateObject, "Hero.Quirks", "persist.roster.json",
+                target, {}, new_id, core::dson::ValueKind::Object};
+            created.quirk_positive = positive;
+            created.quirk_name = (*catalog)["name"].asString();
+            created.quirk_source_id = definition->provenance.source_id;
+            created.quirk_payload_json = definition->payload_json;
+            mutations.push_back(std::move(created));
+        }
+        }
+    }
+    if (new_limit) {
+        auto configuration = context->configuration_store.current();
+        if (positive) configuration.hero_positive_quirk_limit = *new_limit;
+        else configuration.hero_negative_quirk_limit = *new_limit;
+        const auto saved = context->configuration_store.save(configuration);
+        if (!saved) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", saved.error().message));
+            return;
+        }
+    }
+    if (!mutations.empty()) {
+        auto applied = campaign.edits->apply(application::CampaignOperation{
+            application::ApplyCampaignDocumentMutationsOperation{
+                "campaign.hero.add_or_replace_quirk", std::move(mutations)}}, revision);
+        if (!applied) {
+            if (new_limit) {
+                auto previous = context->configuration_store.current();
+                if (positive) previous.hero_positive_quirk_limit = campaign.hero_positive_quirk_limit;
+                else previous.hero_negative_quirk_limit = campaign.hero_negative_quirk_limit;
+                (void)context->configuration_store.save(previous);
+            }
+            callback(json_error(drogon::k400BadRequest,
+                std::string{core::to_string(applied.error().code)}, applied.error().message));
+            return;
+        }
+    }
+    if (new_limit) {
+        if (positive) campaign.hero_positive_quirk_limit = *new_limit;
+        else campaign.hero_negative_quirk_limit = *new_limit;
+    }
     callback(json_ok(campaign_value(campaign)));
 }
 
@@ -3648,6 +3944,16 @@ int run_drogon_http_server(
         "/api/campaign/hero-trinket", [context](const drogon::HttpRequestPtr& request,
                                                std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign_hero_trinket(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/quirks", [context](const drogon::HttpRequestPtr& request,
+                                         std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_quirk_catalog(request, std::move(callback), context);
+        }, {drogon::Get});
+    server.registerHandler(
+        "/api/campaign/hero-quirk", [context](const drogon::HttpRequestPtr& request,
+                                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_hero_quirk(request, std::move(callback), context);
         }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/trinkets", [context](const drogon::HttpRequestPtr& request,

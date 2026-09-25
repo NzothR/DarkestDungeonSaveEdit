@@ -369,6 +369,71 @@ TEST(SaveAdapter, ErasesOnlyTheMappedQuirkSubtreeAndPreservesTheLoadedSource) {
     EXPECT_EQ(absent, embedded->embedded_document->fields.end());
 }
 
+TEST(SaveAdapter, CreatesAQuirkInAnEmptySlotAndSkipsANetNoOpWrite) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    TempDirectory temp;
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto hero_name = hero_name_change(profile);
+    ASSERT_TRUE(hero_name);
+    const auto hero_id = hero_name->target.entity_id;
+    const auto target = "base_root/heroes/" + hero_id +
+        "/hero_file_data/raw_data => base_root/quirks/ddse_regression_quirk";
+    const auto make_changes = [&](bool erase_after_create) {
+        application::ChangeSet changes;
+        application::CampaignDocumentMutationBatch batch;
+        batch.operation_id = "campaign.hero.add_or_replace_quirk";
+        batch.transaction_id = "test-quirk-create";
+        batch.mutations.emplace_back(application::CampaignDocumentMutationKind::CreateObject,
+            "Hero.Quirks", "persist.roster.json", target, std::string{},
+            "ddse_regression_quirk", core::dson::ValueKind::Object);
+        if (erase_after_create)
+            batch.mutations.emplace_back(application::CampaignDocumentMutationKind::Erase,
+                "Hero.Quirks", "persist.roster.json", target, std::string{},
+                std::string{}, core::dson::ValueKind::Object);
+        changes.document_mutation_batches.push_back(std::move(batch));
+        changes.affected_documents = {"persist.roster.json"};
+        return changes;
+    };
+    const auto created = application::SaveAdapter{}.build_candidate(profile, make_changes(false));
+    ASSERT_TRUE(created) << created.error().message;
+    ASSERT_EQ(created.value().documents.size(), 1U);
+    const auto bytes = created.value().documents.front().bytes;
+    core::dson::DsonReader reader;
+    const auto* data = reinterpret_cast<const std::byte*>(bytes.data());
+    const auto decoded = reader.parse(std::span<const std::byte>{data, bytes.size()}, "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    const auto hero_file = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(),
+        [&](const auto& field) {
+            return field.path == "base_root/heroes/" + hero_id + "/hero_file_data/raw_data" &&
+                field.embedded_document != nullptr;
+        });
+    ASSERT_NE(hero_file, decoded.value().fields.end());
+    const auto& inner = hero_file->embedded_document->fields;
+    for (const auto& leaf : {"is_new", "is_locked", "trinketId", "mission_count",
+                             "replaces_quirk", "replaces_quirk_viewed", "evolution_duration_remaining"})
+        EXPECT_NE(std::find_if(inner.begin(), inner.end(), [&](const auto& field) {
+            return field.path == "base_root/quirks/ddse_regression_quirk/" + std::string{leaf};
+        }), inner.end());
+
+    const auto unchanged = application::SaveAdapter{}.build_candidate(profile, make_changes(true));
+    ASSERT_TRUE(unchanged) << unchanged.error().message;
+    EXPECT_TRUE(unchanged.value().documents.empty());
+    const auto target_root = temp.path / "output" / "profile_0";
+    copy_profile(source_root, target_root);
+    const auto backup_root = temp.path / "backups" / "net-no-op";
+    const auto committed = application::SafeSaveCommitter{fs}.commit(
+        profile, make_changes(true), target_root, backup_root);
+    ASSERT_TRUE(committed) << committed.error().message;
+    EXPECT_TRUE(committed.value().committed_documents.empty());
+    EXPECT_FALSE(std::filesystem::exists(backup_root));
+    EXPECT_EQ(read_bytes(target_root / "persist.roster.json"),
+              profile.documents.at("persist.roster.json").bytes);
+}
+
 TEST(SaveAdapter, RejectsAnUnmappedOrUnverifiedStructuralTarget) {
     application::ChangeSet changes;
     domain::HeroQuirk removed;

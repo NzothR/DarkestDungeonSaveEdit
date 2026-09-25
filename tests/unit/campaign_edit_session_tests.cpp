@@ -408,6 +408,33 @@ TEST(CampaignEditSession, QuirkRemovalIsStructuralAndReversibleInTheWorkingModel
     ASSERT_EQ(session.pending_changes().structural_changes.size(), 1U);
 }
 
+TEST(CampaignEditSession, LegacyQuirkCloneAndRenameMutationsRemainProjectable) {
+    using Kind = application::CampaignDocumentMutationKind;
+    const auto old_path = sample_model().heroes.front().quirks.front().raw.display_path;
+    application::CampaignEditSession session{sample_model()};
+    application::ApplyCampaignDocumentMutationsOperation rename{"campaign.hero.add_or_replace_quirk", {
+        {Kind::Rename, "Hero.Quirks", "persist.roster.json", old_path, {}, "replacement_quirk",
+            core::dson::ValueKind::Object}
+    }};
+    const auto renamed = session.apply(rename, 0);
+    ASSERT_TRUE(renamed) << renamed.error().message;
+    ASSERT_EQ(session.model().heroes.front().quirks.size(), 1U);
+    EXPECT_EQ(session.model().heroes.front().quirks.front().id, "replacement_quirk");
+
+    const auto renamed_path = old_path.substr(0, old_path.find_last_of('/') + 1) + "replacement_quirk";
+    application::CampaignDocumentMutation erased{Kind::Erase, "Hero.Quirks", "persist.roster.json",
+        renamed_path, {}, {}, core::dson::ValueKind::Object};
+    application::CampaignDocumentMutation inserted{Kind::InsertClone, "Hero.Quirks", "persist.roster.json",
+        old_path, renamed_path, "mod_positive_quirk", core::dson::ValueKind::Object,
+        std::nullopt, std::nullopt, 0};
+    const auto recloned = session.apply(application::ApplyCampaignDocumentMutationsOperation{
+        "campaign.hero.add_or_replace_quirk", {erased, inserted}}, 1);
+    ASSERT_TRUE(recloned) << recloned.error().message;
+    ASSERT_EQ(session.model().heroes.front().quirks.size(), 1U);
+    EXPECT_EQ(session.model().heroes.front().quirks.front().id, "mod_positive_quirk");
+    EXPECT_EQ(session.model().heroes.front().quirks.front().raw.display_path, old_path);
+}
+
 TEST(CampaignEditSession, DistrictStateUsesAnExplicitSemanticOperation) {
     application::CampaignEditSession session{sample_model()};
     const auto result = session.apply(application::SetDistrictBuiltOperation{"test_district", true}, 0);

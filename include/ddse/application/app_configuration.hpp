@@ -25,6 +25,9 @@ struct AppConfiguration {
     std::uint32_t auto_edit_save_interval_seconds{30};
     // Initialized once from the selected save's largest equipped trinket list.
     std::optional<std::uint32_t> hero_trinket_slot_limit;
+    // Initialized once from the largest positive/negative quirk counts.
+    std::optional<std::uint32_t> hero_positive_quirk_limit;
+    std::optional<std::uint32_t> hero_negative_quirk_limit;
 };
 
 } // namespace ddse::application

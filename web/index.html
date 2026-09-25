@@ -184,8 +184,8 @@
             <section class="hero-detail-panel hero-detail-quirks">
               <h3 data-i18n="hero.quirks">特质</h3>
               <div class="hero-detail-quirk-columns">
-                <div><h4 data-i18n="hero.positiveQuirks">正面怪癖</h4><div id="hero-detail-positive" class="hero-detail-trait-list"></div></div>
-                <div><h4 data-i18n="hero.negativeQuirks">负面怪癖</h4><div id="hero-detail-negative" class="hero-detail-trait-list"></div></div>
+                <div><div class="hero-detail-quirk-heading"><h4 data-i18n="hero.positiveQuirks">正面怪癖</h4><label><span data-i18n="hero.quirkMax">上限</span><input id="hero-positive-quirk-limit" type="number" min="0" max="1000" step="1" inputmode="numeric"></label></div><div id="hero-detail-positive" class="hero-detail-trait-list"></div></div>
+                <div><div class="hero-detail-quirk-heading"><h4 data-i18n="hero.negativeQuirks">负面怪癖</h4><label><span data-i18n="hero.quirkMax">上限</span><input id="hero-negative-quirk-limit" type="number" min="0" max="1000" step="1" inputmode="numeric"></label></div><div id="hero-detail-negative" class="hero-detail-trait-list"></div></div>
               </div>
               <div id="hero-detail-unknown-wrap" class="hero-detail-unknown" hidden><h4 data-i18n="hero.unknownQuirks">未分类怪癖</h4><div id="hero-detail-unknown" class="hero-detail-trait-list"></div></div>
             </section>
@@ -237,6 +237,21 @@
             <label><input id="trinket-only-new" type="checkbox"><span data-i18n="trinket.onlyNew">只添加库存中尚未存在的饰品</span></label>
             <button id="trinket-batch-confirm" type="button" data-i18n="trinket.applyBatch">执行</button>
           </footer>
+        </div>
+      </dialog>
+
+      <dialog id="quirk-selector" class="building-editor quirk-selector">
+        <div class="building-editor-shell">
+          <header class="building-editor-heading">
+            <div><small class="eyebrow left" data-i18n="trinket.selectorKicker">内容数据库</small><h2 id="quirk-selector-title"></h2></div>
+            <button id="quirk-selector-close" class="secondary" type="button" data-i18n="town.close">关闭</button>
+          </header>
+          <div class="quirk-search-controls">
+            <input id="quirk-search" type="search" data-i18n-placeholder="hero.quirkSearch" placeholder="搜索怪癖名称、ID、效果或 Mod">
+            <select id="quirk-mod-filter" aria-label="Mod filter"><option value="" data-i18n="trinket.allMods">所有 Mod</option></select>
+          </div>
+          <p id="quirk-selector-message" class="building-editor-hint"></p>
+          <div id="quirk-selector-list" class="trinket-selector-list"></div>
         </div>
       </dialog>
 
