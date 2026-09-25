@@ -196,7 +196,12 @@
                 <div id="hero-detail-armour" class="hero-detail-gear-item"></div>
               </div>
             </section>
-            <section class="hero-detail-panel hero-detail-equipment"><h3 data-i18n="hero.trinkets">饰品</h3><div id="hero-detail-trinkets" class="hero-detail-trinket-list"></div></section>
+            <section class="hero-detail-panel hero-detail-equipment">
+              <div class="hero-detail-trinket-heading"><h3 data-i18n="hero.trinkets">饰品</h3>
+                <label><span data-i18n="hero.trinketSlots">最大槽位</span><input id="hero-trinket-slot-limit" type="number" min="0" max="1000" step="1" inputmode="numeric"></label>
+              </div>
+              <div id="hero-detail-trinkets" class="hero-detail-trinket-list"></div>
+            </section>
           </main>
           <aside class="hero-detail-right">
             <section class="hero-detail-panel hero-detail-combat-panel"><h3 data-i18n="hero.combatSkills">战斗技能</h3><button id="hero-detail-maximize" class="hero-detail-maximize" type="button" data-i18n="hero.maximize">一键升级至满级</button><div id="hero-detail-combat" class="hero-detail-skill-grid"></div></section>
@@ -213,6 +218,9 @@
             <button id="trinket-selector-close" class="secondary" type="button" data-i18n="town.close">关闭</button>
           </header>
           <div class="trinket-search-controls">
+            <label id="trinket-source-wrap" class="trinket-source-control" hidden><span data-i18n="hero.trinketSource">饰品来源</span>
+              <select id="trinket-source"><option value="inventory" data-i18n="hero.trinketSourceInventory">饰品箱</option><option value="catalog" data-i18n="hero.trinketSourceCatalog">内容数据库</option></select>
+            </label>
             <input id="trinket-search" type="search" data-i18n-placeholder="trinket.searchPlaceholder" placeholder="搜索 ID、名称、描述或 Mod">
             <select id="trinket-mod-filter" aria-label="Mod filter"><option value="" data-i18n="trinket.allMods">所有 Mod</option></select>
             <select id="trinket-class-filter" aria-label="Class filter"><option value="" data-i18n="trinket.allClasses">所有职业</option></select>

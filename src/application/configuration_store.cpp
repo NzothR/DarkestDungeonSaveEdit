@@ -61,6 +61,8 @@ json configuration_json(const AppConfiguration& value) {
     result["workshopRoots"] = path_array(value.workshop_roots);
     result["localModRoots"] = path_array(value.local_mod_roots);
     result["saveRoots"] = path_array(value.save_roots);
+    if (value.hero_trinket_slot_limit)
+        result["heroTrinketSlotLimit"] = *value.hero_trinket_slot_limit;
     return result;
 }
 
@@ -83,6 +85,13 @@ core::Result<AppConfiguration, core::Error> parse_configuration(const std::strin
         if (object.contains("maxBackupCount") && object.at("maxBackupCount").is_number_unsigned()) result.max_backup_count = object.at("maxBackupCount").get<std::uint32_t>();
         if (object.contains("autoEditSaveEnabled") && object.at("autoEditSaveEnabled").is_boolean()) result.auto_edit_save_enabled = object.at("autoEditSaveEnabled").get<bool>();
         if (object.contains("autoEditSaveIntervalSeconds") && object.at("autoEditSaveIntervalSeconds").is_number_unsigned()) result.auto_edit_save_interval_seconds = object.at("autoEditSaveIntervalSeconds").get<std::uint32_t>();
+        if (object.contains("heroTrinketSlotLimit")) {
+            if (!object.at("heroTrinketSlotLimit").is_number_unsigned() ||
+                object.at("heroTrinketSlotLimit").get<std::uint64_t>() > 1000)
+                return core::Result<AppConfiguration, core::Error>::failure(
+                    config_error(core::ErrorCode::InvalidConfiguration, "Hero trinket slot limit is out of range", path));
+            result.hero_trinket_slot_limit = object.at("heroTrinketSlotLimit").get<std::uint32_t>();
+        }
         if (result.language != "en_us" && result.language != "zh_cn")
             return core::Result<AppConfiguration, core::Error>::failure(
                 config_error(core::ErrorCode::InvalidConfiguration, "language must be en_us or zh_cn", path));
@@ -134,7 +143,7 @@ core::Result<AppConfiguration, core::Error> AppConfigurationStore::load() const 
 
 core::Result<void, core::Error> AppConfigurationStore::save(const AppConfiguration& configuration) {
     if (configuration.game_root.empty() || configuration.backup_root.empty() || configuration.data_root.empty() || configuration.max_backup_count == 0 ||
-        configuration.max_backup_count > 10000 || configuration.auto_edit_save_interval_seconds == 0 ||
+        configuration.max_backup_count > 10000 || (configuration.hero_trinket_slot_limit && *configuration.hero_trinket_slot_limit > 1000) || configuration.auto_edit_save_interval_seconds == 0 ||
         configuration.auto_edit_save_interval_seconds > 86400)
         return core::Result<void, core::Error>::failure(
             config_error(core::ErrorCode::InvalidConfiguration, "Configuration contains an empty path or invalid limit", configuration_file_));

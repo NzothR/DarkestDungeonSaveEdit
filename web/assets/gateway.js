@@ -59,6 +59,7 @@ export const editorGateway = Object.freeze({
   getCampaign: () => request("/api/campaign"),
   listHeroClasses: () => request("/api/campaign/hero-classes"),
   editHeroes: (action, revision, options = {}) => request("/api/campaign/hero", "POST", { action, revision, ...options }),
+  editHeroTrinkets: (action, revision, options = {}) => request("/api/campaign/hero-trinket", "POST", { action, revision, ...options }),
   listTrinkets: (search = "", mod = "", heroClass = "") => request(`/api/campaign/trinkets?search=${encodeURIComponent(search)}&mod=${encodeURIComponent(mod)}&class=${encodeURIComponent(heroClass)}`),
   editTrinkets: (action, revision, options = {}) => request("/api/campaign/trinket", "POST", { action, revision, ...options }),
   reloadCampaign: () => request("/api/campaign/reload", "POST", {}),

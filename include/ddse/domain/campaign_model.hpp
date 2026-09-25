@@ -96,8 +96,19 @@ struct HeroSkillSelection {
     DefinitionReference definition;
 };
 
+struct TrinketRecordMetadata {
+    std::string type{"trinket"};
+    std::int32_t amount{1};
+    std::int32_t added_buffs{0};
+    std::string hero_name;
+    std::string previous_trinket_id;
+    bool did_transform{false};
+    std::int32_t trinkets_gained_count{0};
+};
+
 struct HeroTrinket {
     std::string id;
+    TrinketRecordMetadata metadata;
     bool read_only{true};
     RawLocator raw;
     DefinitionReference definition;
@@ -138,6 +149,7 @@ struct TrinketInventoryEntry {
     LocatedValue<std::string> id;
     LocatedValue<std::string> item_type;
     LocatedValue<std::int32_t> amount;
+    TrinketRecordMetadata metadata;
     DefinitionReference definition;
 };
 

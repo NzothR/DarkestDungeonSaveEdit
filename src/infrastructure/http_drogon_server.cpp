@@ -106,6 +106,8 @@ struct ServerContext {
         std::unique_ptr<application::CampaignEditSession> edits;
         std::filesystem::path mod_database_path;
         std::set<std::string, std::less<>> reserved_trinket_keys;
+        std::map<std::string, std::set<std::string, std::less<>>, std::less<>> reserved_hero_trinket_keys;
+        std::uint32_t hero_trinket_slot_limit{0};
         mutable std::optional<std::vector<DatabaseModRecord>> cached_mod_records;
         mutable std::map<std::string, Json::Value, std::less<>> cached_trinket_details;
         std::vector<Json::Value> cached_trinket_catalog;
@@ -283,6 +285,8 @@ Json::Value configuration_value(const application::AppConfiguration& config) {
     value["maxBackupCount"] = static_cast<Json::UInt>(config.max_backup_count);
     value["autoEditSaveEnabled"] = config.auto_edit_save_enabled;
     value["autoEditSaveIntervalSeconds"] = static_cast<Json::UInt>(config.auto_edit_save_interval_seconds);
+    value["heroTrinketSlotLimit"] = config.hero_trinket_slot_limit
+        ? Json::Value(*config.hero_trinket_slot_limit) : Json::Value(Json::nullValue);
     Json::Value workshop(Json::arrayValue);
     for (const auto& path : config.workshop_roots) workshop.append(path.string());
     value["workshopRoots"] = std::move(workshop);
@@ -349,6 +353,13 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     }
     auto content = std::make_unique<SqliteContentEnvironment>(std::move(environment_config));
     auto model = application::CampaignModelBuilder{}.build(profile.value(), *content);
+    if (!configuration.hero_trinket_slot_limit) {
+        auto initialized = configuration;
+        std::size_t maximum = 0;
+        for (const auto& hero : model.heroes) maximum = std::max(maximum, hero.trinkets.size());
+        initialized.hero_trinket_slot_limit = static_cast<std::uint32_t>(maximum);
+        if (const auto saved = context.configuration_store.save(initialized); !saved) return saved.error();
+    }
 
     auto session = std::make_unique<ServerContext::CampaignSession>();
     session->building_upgrade_trees = load_building_upgrade_trees(*content, context.file_system);
@@ -366,6 +377,7 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
         }
     }
     session->mod_database_path = context.initialization.mod_database_path();
+    session->hero_trinket_slot_limit = *context.configuration_store.current().hero_trinket_slot_limit;
     if (const auto roster_rules = context.file_system.read_file(
             context.configuration_store.current().game_root / "campaign/roster/roster.variables.json")) {
         try {
@@ -386,6 +398,10 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
         }
     }
     for (const auto& item : model.trinket_inventory) session->reserved_trinket_keys.insert(item.raw_key);
+    for (const auto& hero : model.heroes)
+        for (const auto& item : hero.trinkets)
+            session->reserved_hero_trinket_keys[hero.persistent_id].insert(
+                item.raw.display_path.substr(item.raw.display_path.find_last_of('/') + 1));
     session->content = std::move(content);
     session->edits = std::make_unique<application::CampaignEditSession>(std::move(model));
     warm_trinket_catalog(context, *session);
@@ -906,6 +922,7 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     value["dirty"] = !campaign.edits->pending_changes().empty();
     value["canUndo"] = campaign.edits->can_undo();
     value["canRedo"] = campaign.edits->can_redo();
+    value["heroTrinketSlotLimit"] = campaign.hero_trinket_slot_limit;
 
     Json::Value resources(Json::arrayValue);
     for (const auto& resource : model.resources) {
@@ -921,6 +938,19 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         resources.append(std::move(item));
     }
     value["resources"] = std::move(resources);
+
+    if (!campaign.cached_mod_records) {
+        const auto queried = read_enabled_mods(campaign.mod_database_path);
+        campaign.cached_mod_records = queried ? queried.value() : std::vector<DatabaseModRecord>{};
+    }
+    const auto& mods = *campaign.cached_mod_records;
+    const auto trinket_details = [&](const std::string& id) -> const Json::Value& {
+        auto found = campaign.cached_trinket_details.find(id);
+        if (found == campaign.cached_trinket_details.end())
+            found = campaign.cached_trinket_details.emplace(id,
+                trinket_definition_json(*campaign.content, id, mods)).first;
+        return found->second;
+    };
 
     Json::Value heroes(Json::arrayValue);
     for (const auto& hero : model.heroes) {
@@ -1068,11 +1098,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["campingSkills"] = std::move(camping_skills);
         Json::Value equipped(Json::arrayValue);
         for (const auto& trinket : hero.trinkets) {
-            Json::Value entry(Json::objectValue);
-            entry["id"] = trinket.id;
-            entry["name"] = strip_game_markup(trinket.definition.display_name.empty()
-                ? trinket.id : trinket.definition.display_name);
-            entry["assets"] = definition_assets(trinket.definition);
+            auto entry = trinket_details(trinket.id);
+            entry["rawKey"] = trinket.raw.display_path.substr(trinket.raw.display_path.find_last_of('/') + 1);
             equipped.append(std::move(entry));
         }
         item["trinkets"] = std::move(equipped);
@@ -1080,23 +1107,13 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     }
     value["heroes"] = std::move(heroes);
 
-    if (!campaign.cached_mod_records) {
-        const auto queried = read_enabled_mods(campaign.mod_database_path);
-        campaign.cached_mod_records = queried ? queried.value() : std::vector<DatabaseModRecord>{};
-    }
-    const auto& mods = *campaign.cached_mod_records;
     Json::Value trinkets(Json::arrayValue);
     for (const auto& trinket : model.trinket_inventory) {
         Json::Value item(Json::objectValue);
         item["index"] = static_cast<Json::UInt64>(trinket.index);
         const auto id = trinket.id.value ? *trinket.id.value : trinket.definition.raw_id;
         item["rawKey"] = trinket.raw_key;
-        auto details_found = campaign.cached_trinket_details.find(id);
-        if (details_found == campaign.cached_trinket_details.end()) {
-            auto details = trinket_definition_json(*campaign.content, id, mods);
-            details_found = campaign.cached_trinket_details.emplace(id, std::move(details)).first;
-        }
-        const auto& details = details_found->second;
+        const auto& details = trinket_details(id);
         item["id"] = id;
         item["name"] = details["name"];
         item["restriction"] = details["restriction"];
@@ -2035,6 +2052,283 @@ void handle_campaign_hero(const drogon::HttpRequestPtr& request,
 }
 
 bool request_nonnegative_integer(const Json::Value& value);
+
+void handle_campaign_hero_trinket(const drogon::HttpRequestPtr& request,
+                                 std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+                                 const std::shared_ptr<ServerContext>& context) {
+    std::function<void(const drogon::HttpResponsePtr&)> callback_ref =
+        [&](const drogon::HttpResponsePtr& response) { callback(response); };
+    if (!authorized_api_request(request, *context, callback_ref)) return;
+    const auto body = request->getJsonObject();
+    if (!body || !body->isObject() || !(*body)["action"].isString() ||
+        !((*body)["revision"].isUInt() || (*body)["revision"].isUInt64())) {
+        callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET", "Action and revision are required."));
+        return;
+    }
+    std::lock_guard lock(context->campaign_mutex);
+    if (const auto error = ensure_campaign_locked(*context)) {
+        callback(json_error(drogon::k409Conflict, std::string{core::to_string(error->code)}, error->message));
+        return;
+    }
+    auto& campaign = *context->campaign;
+    const auto& model = campaign.edits->model();
+    const auto action = (*body)["action"].asString();
+    const auto revision = (*body)["revision"].asUInt64();
+    if (revision != campaign.edits->revision()) {
+        callback(json_error(drogon::k409Conflict, "STALE_SESSION_REVISION", "Campaign revision has changed."));
+        return;
+    }
+    using Kind = application::CampaignDocumentMutationKind;
+    using Mutation = application::CampaignDocumentMutation;
+    std::vector<Mutation> mutations;
+    const auto erase_hero = [&](const domain::HeroTrinket& item) {
+        mutations.emplace_back(Kind::Erase, "Hero.Trinkets", "persist.roster.json",
+            item.raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+    };
+    const auto append_metadata = [&](const std::string& property, const std::string& document,
+                                     const std::string& target,
+                                     const domain::TrinketRecordMetadata& metadata) {
+        const auto add = [&](const char* field, core::dson::ValueKind kind,
+                             application::CampaignValue before, application::CampaignValue after) {
+            if (before == after) return;
+            mutations.emplace_back(Kind::SetValue, property, document, target + "/" + field,
+                std::string{}, std::string{}, kind, std::move(before), std::move(after));
+        };
+        add("type", core::dson::ValueKind::String, std::string{"trinket"}, metadata.type);
+        add("amount", core::dson::ValueKind::Integer, std::int32_t{1}, metadata.amount);
+        add("added_buffs", core::dson::ValueKind::Integer, std::int32_t{0}, metadata.added_buffs);
+        add("hero_name", core::dson::ValueKind::String, std::string{}, metadata.hero_name);
+        add("previous_trinket_id", core::dson::ValueKind::String, std::string{}, metadata.previous_trinket_id);
+        add("did_transform", core::dson::ValueKind::Boolean, false, metadata.did_transform);
+        add("trinkets_gained_count", core::dson::ValueKind::Integer,
+            std::int32_t{0}, metadata.trinkets_gained_count);
+    };
+    std::optional<std::uint32_t> new_limit;
+    std::optional<std::pair<std::string, std::string>> reserved_hero_key;
+    std::optional<std::string> reserved_chest_key;
+    if (action == "set_limit") {
+        const auto& requested = (*body)["limit"];
+        if (!request_nonnegative_integer(requested) || requested.asUInt64() > 1000) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET_LIMIT", "Slot limit must be between 0 and 1000."));
+            return;
+        }
+        new_limit = requested.asUInt();
+        for (const auto& hero : model.heroes)
+            for (std::size_t i = hero.trinkets.size(); i > *new_limit; --i)
+                erase_hero(hero.trinkets[i - 1]);
+    } else {
+        const auto hero_id = (*body)["heroId"].isString() ? (*body)["heroId"].asString() : std::string{};
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(),
+            [&](const auto& item) { return item.persistent_id == hero_id; });
+        if (hero == model.heroes.end()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET", "Hero is required."));
+            return;
+        }
+        if (action == "reorder") {
+            const auto& keys = (*body)["rawKeys"];
+            std::vector<std::string> desired;
+            std::set<std::string, std::less<>> unique;
+            if (!keys.isArray() || keys.size() != hero->trinkets.size()) {
+                callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET_ORDER", "A complete trinket order is required."));
+                return;
+            }
+            for (const auto& key : keys) {
+                if (!key.isString() || !unique.insert(key.asString()).second) {
+                    callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET_ORDER", "Trinket keys must be unique."));
+                    return;
+                }
+                desired.push_back(key.asString());
+            }
+            std::set<std::string, std::less<>> current;
+            auto& reserved = campaign.reserved_hero_trinket_keys[hero_id];
+            std::size_t temporary = 0;
+            for (const auto& item : hero->trinkets) {
+                const auto key = item.raw.display_path.substr(item.raw.display_path.find_last_of('/') + 1);
+                current.insert(key);
+            }
+            if (current != unique) {
+                callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET_ORDER", "Trinket order does not match the hero."));
+                return;
+            }
+            bool unchanged = true;
+            for (std::size_t i = 0; i < desired.size(); ++i)
+                if (desired[i] != hero->trinkets[i].raw.display_path.substr(
+                    hero->trinkets[i].raw.display_path.find_last_of('/') + 1)) unchanged = false;
+            if (unchanged) { callback(json_ok(campaign_value(campaign))); return; }
+            for (const auto& key : reserved) {
+                std::size_t parsed{};
+                const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), parsed);
+                if (error == std::errc{} && end == key.data() + key.size()) temporary = std::max(temporary, parsed + 1);
+            }
+            std::map<std::string, std::string, std::less<>> temporary_by_original;
+            for (const auto& item : hero->trinkets) {
+                const auto original = item.raw.display_path.substr(item.raw.display_path.find_last_of('/') + 1);
+                const auto key = std::to_string(temporary++);
+                temporary_by_original[original] = key;
+                mutations.emplace_back(Kind::Rename, "Hero.Trinkets", "persist.roster.json",
+                    item.raw.display_path, std::string{}, key, core::dson::ValueKind::Object);
+            }
+            const auto base = "base_root/heroes/" + hero_id +
+                "/hero_file_data/raw_data => base_root/trinkets/items/";
+            for (std::size_t i = 0; i < desired.size(); ++i)
+                mutations.emplace_back(Kind::Rename, "Hero.Trinkets", "persist.roster.json",
+                    base + temporary_by_original.at(desired[i]), std::string{}, std::to_string(i),
+                    core::dson::ValueKind::Object);
+        } else {
+        if (!(*body)["slotIndex"].isUInt()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET", "Slot is required."));
+            return;
+        }
+        const auto slot = static_cast<std::size_t>((*body)["slotIndex"].asUInt());
+        const bool occupied = slot < hero->trinkets.size();
+        if (slot >= campaign.hero_trinket_slot_limit && (action == "equip" || !occupied)) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET_SLOT", "Slot is outside the configured limit."));
+            return;
+        }
+        if (action == "return" || action == "destroy") {
+            if (!occupied) {
+                callback(json_error(drogon::k400BadRequest, "EMPTY_HERO_TRINKET_SLOT", "The selected slot is empty."));
+                return;
+            }
+            if (action == "return") {
+                std::set<std::string, std::less<>> keys = campaign.reserved_trinket_keys;
+                for (const auto& item : model.trinket_inventory) keys.insert(item.raw_key);
+                std::size_t next = 0;
+                for (const auto& key : keys) {
+                    std::size_t parsed{};
+                    const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), parsed);
+                    if (error == std::errc{} && end == key.data() + key.size()) next = std::max(next, parsed + 1);
+                }
+                while (keys.contains(std::to_string(next))) ++next;
+                const auto key = std::to_string(next);
+                reserved_chest_key = key;
+                const auto target = "base_root/trinkets/items/" + key;
+                mutations.emplace_back(Kind::CreateObject, "TrinketInventory.Items", "persist.estate.json",
+                    target, std::string{}, key, core::dson::ValueKind::Object);
+                mutations.emplace_back(Kind::SetValue, "TrinketInventory.Items", "persist.estate.json",
+                    target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
+                    application::CampaignValue{std::string{}}, application::CampaignValue{hero->trinkets[slot].id});
+                append_metadata("TrinketInventory.Items", "persist.estate.json", target,
+                    hero->trinkets[slot].metadata);
+            }
+            erase_hero(hero->trinkets[slot]);
+        } else if (action == "equip") {
+            const auto source = (*body).get("source", "inventory").asString();
+            std::string id;
+            std::optional<domain::TrinketInventoryEntry> inventory_item;
+            if (source == "inventory") {
+                const auto key = (*body)["rawKey"].isString() ? (*body)["rawKey"].asString() : std::string{};
+                const auto found = std::find_if(model.trinket_inventory.begin(), model.trinket_inventory.end(),
+                    [&](const auto& item) { return item.raw_key == key; });
+                if (found == model.trinket_inventory.end() || !found->id.value) {
+                    callback(json_error(drogon::k404NotFound, "TRINKET_NOT_FOUND", "Inventory trinket is unavailable."));
+                    return;
+                }
+                inventory_item = *found;
+                id = *found->id.value;
+            } else if (source == "catalog") {
+                id = (*body)["trinketId"].isString() ? (*body)["trinketId"].asString() : std::string{};
+            } else {
+                callback(json_error(drogon::k400BadRequest, "INVALID_TRINKET_SOURCE", "Unknown trinket source."));
+                return;
+            }
+            const auto definition = std::find_if(campaign.trinket_definitions.begin(), campaign.trinket_definitions.end(),
+                [&](const auto& item) { return item.id == id; });
+            if (id.empty() || (source == "catalog" && definition == campaign.trinket_definitions.end())) {
+                callback(json_error(drogon::k404NotFound, "TRINKET_NOT_FOUND", "Effective trinket definition is unavailable."));
+                return;
+            }
+            if (definition != campaign.trinket_definitions.end()) {
+                std::vector<std::string> required_classes;
+                for (const auto& relation : definition->relationships)
+                    if (relation.relationship_type == "restricted_to" && relation.type == "hero_class")
+                        required_classes.push_back(relation.id);
+                if (!required_classes.empty() && (!hero->class_id.value ||
+                    std::find(required_classes.begin(), required_classes.end(), *hero->class_id.value) == required_classes.end())) {
+                    callback(json_error(drogon::k400BadRequest, "TRINKET_CLASS_RESTRICTED", "This trinket cannot be equipped by the hero class."));
+                    return;
+                }
+            }
+            if (std::any_of(hero->trinkets.begin(), hero->trinkets.end(),
+                [&](const auto& item) { return item.id == id; })) {
+                callback(json_error(drogon::k400BadRequest, "DUPLICATE_HERO_TRINKET", "The hero already has this trinket equipped."));
+                return;
+            }
+            std::string target;
+            if (occupied) {
+                target = hero->trinkets[slot].raw.display_path;
+                const auto key = target.substr(target.find_last_of('/') + 1);
+                erase_hero(hero->trinkets[slot]);
+                mutations.emplace_back(Kind::CreateObject, "Hero.Trinkets", "persist.roster.json",
+                    target, std::string{}, key, core::dson::ValueKind::Object);
+                mutations.emplace_back(Kind::SetValue, "Hero.Trinkets", "persist.roster.json",
+                    target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
+                    application::CampaignValue{std::string{}}, application::CampaignValue{id});
+            } else {
+                auto& keys = campaign.reserved_hero_trinket_keys[hero_id];
+                std::size_t next = 0;
+                for (const auto& item : hero->trinkets) {
+                    const auto key = item.raw.display_path.substr(item.raw.display_path.find_last_of('/') + 1);
+                    keys.insert(key);
+                }
+                for (const auto& key : keys) {
+                    std::size_t parsed{};
+                    const auto [end, error] = std::from_chars(key.data(), key.data() + key.size(), parsed);
+                    if (error == std::errc{} && end == key.data() + key.size()) next = std::max(next, parsed + 1);
+                }
+                while (keys.contains(std::to_string(next))) ++next;
+                const auto key = std::to_string(next);
+                reserved_hero_key = std::pair{hero_id, key};
+                target = "base_root/heroes/" + hero_id +
+                    "/hero_file_data/raw_data => base_root/trinkets/items/" + key;
+                mutations.emplace_back(Kind::CreateObject, "Hero.Trinkets", "persist.roster.json",
+                    target, std::string{}, key, core::dson::ValueKind::Object);
+                mutations.emplace_back(Kind::SetValue, "Hero.Trinkets", "persist.roster.json",
+                    target + "/id", std::string{}, std::string{}, core::dson::ValueKind::String,
+                    application::CampaignValue{std::string{}}, application::CampaignValue{id});
+            }
+            if (inventory_item) {
+                append_metadata("Hero.Trinkets", "persist.roster.json", target,
+                    inventory_item->metadata);
+                mutations.emplace_back(Kind::Erase, "TrinketInventory.Items", "persist.estate.json",
+                    inventory_item->raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
+            }
+        } else {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_TRINKET", "Unknown trinket action."));
+            return;
+        }
+        }
+    }
+    if (new_limit) {
+        auto configuration = context->configuration_store.current();
+        configuration.hero_trinket_slot_limit = *new_limit;
+        const auto saved = context->configuration_store.save(configuration);
+        if (!saved) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", saved.error().message));
+            return;
+        }
+    }
+    if (!mutations.empty()) {
+        application::ApplyCampaignDocumentMutationsOperation operation{
+            "campaign.hero.edit_trinkets", std::move(mutations)};
+        const auto applied = campaign.edits->apply(application::CampaignOperation{std::move(operation)}, revision);
+        if (!applied) {
+            if (new_limit) {
+                auto previous = context->configuration_store.current();
+                previous.hero_trinket_slot_limit = campaign.hero_trinket_slot_limit;
+                (void)context->configuration_store.save(previous);
+            }
+            const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision
+                ? drogon::k409Conflict : drogon::k400BadRequest;
+            callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+            return;
+        }
+    }
+    if (new_limit) campaign.hero_trinket_slot_limit = *new_limit;
+    if (reserved_hero_key) campaign.reserved_hero_trinket_keys[reserved_hero_key->first].insert(reserved_hero_key->second);
+    if (reserved_chest_key) campaign.reserved_trinket_keys.insert(*reserved_chest_key);
+    callback(json_ok(campaign_value(campaign)));
+}
 
 void handle_campaign_trinket_catalog(const drogon::HttpRequestPtr& request,
                                      std::function<void(const drogon::HttpResponsePtr&)>&& callback,
@@ -3349,6 +3643,11 @@ int run_drogon_http_server(
         "/api/campaign/hero", [context](const drogon::HttpRequestPtr& request,
                                             std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
             handle_campaign_hero(request, std::move(callback), context);
+        }, {drogon::Post});
+    server.registerHandler(
+        "/api/campaign/hero-trinket", [context](const drogon::HttpRequestPtr& request,
+                                               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+            handle_campaign_hero_trinket(request, std::move(callback), context);
         }, {drogon::Post});
     server.registerHandler(
         "/api/campaign/trinkets", [context](const drogon::HttpRequestPtr& request,

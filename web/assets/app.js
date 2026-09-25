@@ -78,6 +78,7 @@ const elements = {
   heroDetailWeapon: document.querySelector("#hero-detail-weapon"),
   heroDetailArmour: document.querySelector("#hero-detail-armour"),
   heroDetailTrinkets: document.querySelector("#hero-detail-trinkets"),
+  heroTrinketSlotLimit: document.querySelector("#hero-trinket-slot-limit"),
   heroDetailCombat: document.querySelector("#hero-detail-combat"),
   heroDetailMaximize: document.querySelector("#hero-detail-maximize"),
   heroDetailCamping: document.querySelector("#hero-detail-camping"),
@@ -95,6 +96,8 @@ const elements = {
   trinketRarityFilter: document.querySelector("#trinket-rarity-filter"),
   trinketSelectorMessage: document.querySelector("#trinket-selector-message"),
   trinketSelectorList: document.querySelector("#trinket-selector-list"),
+  trinketSourceWrap: document.querySelector("#trinket-source-wrap"),
+  trinketSource: document.querySelector("#trinket-source"),
   trinketBatchFooter: document.querySelector("#trinket-batch-footer"),
   trinketBatchConfirm: document.querySelector("#trinket-batch-confirm"),
   trinketBatchHint: document.querySelector("#trinket-batch-hint"),
@@ -124,6 +127,8 @@ let currentConfiguration = null;
 let settingsMode = false;
 let trinketDefinitions = [];
 let trinketSelectorMode = "add";
+let heroTrinketSlotIndex = null;
+let suppressHeroTrinketClick = false;
 let selectedTrinketIds = new Set();
 let selectedTrinketRawKeys = new Set();
 let heroClassDefinitions = [];
@@ -439,7 +444,8 @@ function possibleLinkedTrinketName(trinket, inventory, links) {
 
 function attachTrinketTooltip(owner, tooltip) {
   tooltip.classList.add("trinket-tooltip-portal");
-  tooltip.dataset.scope = owner.closest("#trinket-selector") ? "selector" : "inventory";
+  tooltip.dataset.scope = owner.closest("#trinket-selector") ? "selector"
+    : owner.closest("#hero-detail") ? "hero" : "inventory";
   const usePopover = typeof tooltip.showPopover === "function";
   if (usePopover) {
     // Native popovers enter the browser top layer above dialogs and scrolling
@@ -541,6 +547,83 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
   }
 }
 
+function renderHeroTrinketSlots(hero) {
+  const container = elements.heroDetailTrinkets;
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="hero"]').forEach((tooltip) => tooltip.remove());
+  container.replaceChildren();
+  const equipped = hero.trinkets || [];
+  const slotCount = Math.max(Number(latestCampaign?.heroTrinketSlotLimit) || 0, equipped.length);
+  elements.heroTrinketSlotLimit.value = String(latestCampaign?.heroTrinketSlotLimit ?? 0);
+  const inventory = latestCampaign?.trinkets || [];
+  const links = pairTrinketInstances(inventory).links;
+  for (let index = 0; index < slotCount; index += 1) {
+    const item = equipped[index];
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `hero-detail-item hero-detail-item-trinket editable${item ? "" : " empty"}`;
+    card.title = item ? t("hero.trinketEditHint") : t("hero.trinketEmptyHint");
+    if (item) {
+      card.draggable = true;
+      const art = document.createElement("span");
+      art.className = "hero-detail-trinket-art";
+      const image = heroDetailImage(null, item.assets, ["trinket", "icon"], null);
+      if (image) art.append(image);
+      else art.append(Object.assign(document.createElement("span"),
+        { className: "hero-detail-item-symbol", textContent: "✦" }));
+      card.append(art, Object.assign(document.createElement("span"),
+        { textContent: cleanGameText(item.name || item.id) }));
+      container.append(card);
+      attachTrinketTooltip(card, trinketTooltip(item,
+        possibleLinkedTrinketName(item, inventory, links)));
+      card.addEventListener("contextmenu", async (event) => {
+        event.preventDefault();
+        try { renderCampaign(await editorGateway.editHeroTrinkets(event.shiftKey ? "destroy" : "return",
+          latestCampaign.revision, { heroId: hero.id, slotIndex: index })); }
+        catch (error) { elements.heroDetailMessage.textContent = displayError(error); }
+      });
+      card.addEventListener("dragstart", (event) => {
+        suppressHeroTrinketClick = true;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-ddse-hero-trinket", JSON.stringify({ heroId: hero.id, index }));
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", () => {
+        card.classList.remove("dragging");
+        window.setTimeout(() => { suppressHeroTrinketClick = false; }, 0);
+      });
+      card.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer.types.includes("application/x-ddse-hero-trinket")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      });
+      card.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        suppressHeroTrinketClick = true;
+        try {
+          const source = JSON.parse(event.dataTransfer.getData("application/x-ddse-hero-trinket"));
+          if (source.heroId !== hero.id || source.index === index) return;
+          const order = equipped.map((entry) => entry.rawKey);
+          order.splice(index, 0, order.splice(source.index, 1)[0]);
+          renderCampaign(await editorGateway.editHeroTrinkets("reorder", latestCampaign.revision,
+            { heroId: hero.id, rawKeys: order }));
+        } catch (error) { elements.heroDetailMessage.textContent = displayError(error); }
+        finally { window.setTimeout(() => { suppressHeroTrinketClick = false; }, 0); }
+      });
+    } else {
+      card.append(Object.assign(document.createElement("span"),
+        { className: "hero-detail-item-symbol", textContent: "+" }));
+      card.append(Object.assign(document.createElement("span"),
+        { textContent: t("hero.trinketAdd") }));
+    }
+    card.addEventListener("click", () => {
+      if (suppressHeroTrinketClick) return;
+      heroTrinketSlotIndex = index;
+      openTrinketSelector("hero");
+    });
+    if (!item) container.append(card);
+  }
+}
+
 function renderHeroEquipment(container, equipment, kind) {
   container.replaceChildren();
   container.classList.toggle("editable", equipment?.rank != null && equipment?.maxRank != null);
@@ -629,7 +712,7 @@ function renderHeroDetail() {
   renderHeroDetailEntries(elements.heroDetailCombat, hero.combatSkills || [], "combat", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailCamping, hero.campingSkills || [], "camping", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailDiseases, (hero.quirks || []).filter((entry) => entry.isDisease), "disease", "hero.noDiseases");
-  renderHeroDetailEntries(elements.heroDetailTrinkets, hero.trinkets || [], "trinket", "hero.noTrinkets");
+  renderHeroTrinketSlots(hero);
   renderHeroIdle(hero);
 }
 
@@ -857,6 +940,10 @@ function renderTrinketSelector() {
   const heroClass = elements.trinketClassFilter.value;
   const rarity = elements.trinketRarityFilter.value;
   const inventory = latestCampaign?.trinkets || [];
+  const heroMode = trinketSelectorMode === "hero";
+  const sourceMode = heroMode ? elements.trinketSource.value : "catalog";
+  const hero = heroMode ? (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId) : null;
+  const equippedIds = new Set((hero?.trinkets || []).map((entry) => entry.id));
   const isBatch = trinketSelectorMode === "batchAdd" || trinketSelectorMode === "batchDelete";
   const matchesFilters = (item, definition = item) => {
     if (mod && definition.sourceId !== mod) return false;
@@ -865,10 +952,14 @@ function renderTrinketSelector() {
     return trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER ||
       (definition !== item && trinketSearchRank(definition, query) !== Number.MAX_SAFE_INTEGER);
   };
-  const candidates = trinketSelectorMode === "batchDelete"
+  const candidates = trinketSelectorMode === "batchDelete" || (heroMode && sourceMode === "inventory")
     ? inventory.map((item) => ({ item, definition: trinketDefinitions.find((entry) => entry.id === item.id) }))
-      .filter(({ item, definition }) => matchesFilters(item, definition || item))
+      .filter(({ item, definition }) => matchesFilters(item, definition || item) &&
+        (!heroMode || (!equippedIds.has(item.id) &&
+          (!(definition?.heroClasses?.length) || definition.heroClasses.includes(hero?.classId)))))
     : trinketDefinitions.filter((definition) => matchesFilters(definition, definition))
+      .filter((definition) => !heroMode || (!equippedIds.has(definition.id) &&
+        (!(definition.heroClasses || []).length || definition.heroClasses.includes(hero?.classId))))
       .sort((a, b) => trinketSearchRank(a, query) - trinketSearchRank(b, query) || a.name.localeCompare(b.name));
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
   elements.trinketSelectorList.replaceChildren();
@@ -896,9 +987,10 @@ function renderTrinketSelector() {
   }
   const inventoryPairs = pairTrinketInstances(inventory);
   for (const candidate of candidates) {
-    const item = trinketSelectorMode === "batchDelete" ? candidate.item : candidate;
-    const definition = trinketSelectorMode === "batchDelete" ? candidate.definition || item : candidate;
-    const selectionKey = trinketSelectorMode === "batchDelete" ? item.rawKey : definition.id;
+    const inventoryCandidate = trinketSelectorMode === "batchDelete" || (heroMode && sourceMode === "inventory");
+    const item = inventoryCandidate ? candidate.item : candidate;
+    const definition = inventoryCandidate ? candidate.definition || item : candidate;
+    const selectionKey = inventoryCandidate ? item.rawKey : definition.id;
     const selected = trinketSelectorMode === "batchDelete"
       ? selectedTrinketRawKeys.has(selectionKey) : selectedTrinketIds.has(selectionKey);
     const row = document.createElement("button");
@@ -932,6 +1024,7 @@ function renderTrinketSelector() {
     source.textContent = `${item.modName || definition.modName || t("trinket.vanilla")} · ${item.sourceId || definition.sourceId || "vanilla"}`;
     info.append(source);
     row.append(info);
+    elements.trinketSelectorList.append(row);
     attachTrinketTooltip(row, trinketTooltip(item,
       possibleLinkedTrinketName(item, inventory, inventoryPairs.links)));
     row.addEventListener("click", async () => {
@@ -943,6 +1036,13 @@ function renderTrinketSelector() {
         return;
       }
       try {
+        if (heroMode) {
+          renderCampaign(await editorGateway.editHeroTrinkets("equip", latestCampaign.revision,
+            { heroId: activeHeroId, slotIndex: heroTrinketSlotIndex, source: sourceMode,
+              ...(sourceMode === "inventory" ? { rawKey: item.rawKey } : { trinketId: definition.id }) }));
+          elements.trinketSelector.close();
+          return;
+        }
         renderCampaign(await editorGateway.editTrinkets(trinketSelectorMode === "add" ? "add" : "delete", latestCampaign.revision,
           trinketSelectorMode === "add" ? { trinketId: definition.id } : { trinketId: definition.id }));
         if (trinketSelectorMode === "add") elements.trinketSelector.close();
@@ -953,7 +1053,6 @@ function renderTrinketSelector() {
       selectedTrinketRawKeys.delete(selectionKey);
       renderTrinketSelector();
     });
-    elements.trinketSelectorList.append(row);
   }
 }
 
@@ -1016,7 +1115,9 @@ async function openTrinketSelector(mode) {
   trinketSelectorMode = mode;
   selectedTrinketIds.clear();
   selectedTrinketRawKeys.clear();
-  elements.trinketSelectorTitle.textContent = t(`trinket.title.${mode}`);
+  elements.trinketSelectorTitle.textContent = t(mode === "hero" ? "hero.trinketPickerTitle" : `trinket.title.${mode}`);
+  elements.trinketSourceWrap.hidden = mode !== "hero";
+  elements.trinketSource.value = "inventory";
   elements.trinketBatchFooter.hidden = mode !== "batchAdd" && mode !== "batchDelete";
   elements.trinketOnlyNew.parentElement.hidden = mode !== "batchAdd";
   elements.trinketClearSelection.hidden = mode !== "batchAdd" && mode !== "batchDelete";
@@ -1496,7 +1597,11 @@ elements.language.addEventListener("change", async () => {
 
 elements.heroAdd.addEventListener("click", openHeroSelector);
 elements.heroDetailClose.addEventListener("click", () => elements.heroDetail.close());
-elements.heroDetail.addEventListener("close", () => { activeHeroId = null; stopHeroIdle(); });
+elements.heroDetail.addEventListener("close", () => {
+  activeHeroId = null;
+  stopHeroIdle();
+  document.querySelectorAll('.trinket-tooltip-portal[data-scope="hero"]').forEach((tooltip) => tooltip.remove());
+});
 elements.heroDetailRename.addEventListener("click", () => {
   const hero = (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId);
   if (hero && hero.nameEditable !== false) renameHero(hero);
@@ -1566,6 +1671,20 @@ function editCampingSkill(event, equip) {
 elements.heroDetailCamping.addEventListener("click", (event) => editCampingSkill(event, true));
 elements.heroDetailCamping.addEventListener("contextmenu", (event) => editCampingSkill(event, false));
 elements.heroDetailMaximize.addEventListener("click", () => editActiveHero("maximize"));
+elements.heroTrinketSlotLimit.addEventListener("change", async () => {
+  const limit = Number(elements.heroTrinketSlotLimit.value);
+  if (!Number.isInteger(limit) || limit < 0 || limit > 1000 || !latestCampaign) {
+    elements.heroTrinketSlotLimit.value = String(latestCampaign?.heroTrinketSlotLimit ?? 0);
+    return;
+  }
+  try {
+    renderCampaign(await editorGateway.editHeroTrinkets("set_limit", latestCampaign.revision, { limit }));
+    elements.heroDetailMessage.textContent = "";
+  } catch (error) {
+    elements.heroDetailMessage.textContent = displayError(error);
+    elements.heroTrinketSlotLimit.value = String(latestCampaign.heroTrinketSlotLimit);
+  }
+});
 elements.heroDetailTrinkets.addEventListener("wheel", (event) => {
   if (elements.heroDetailTrinkets.scrollWidth <= elements.heroDetailTrinkets.clientWidth || !event.deltaY) return;
   event.preventDefault();
@@ -1619,6 +1738,7 @@ elements.trinketSelector.addEventListener("close", () => {
   document.querySelectorAll('.trinket-tooltip-portal[data-scope="selector"]').forEach((tooltip) => tooltip.remove());
 });
 elements.trinketSearch.addEventListener("input", renderTrinketSelector);
+elements.trinketSource.addEventListener("change", renderTrinketSelector);
 for (const control of [elements.trinketModFilter, elements.trinketClassFilter, elements.trinketRarityFilter]) {
   control.addEventListener("change", () => {
     selectedTrinketIds.clear();

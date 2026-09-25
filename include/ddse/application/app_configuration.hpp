@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,8 @@ struct AppConfiguration {
     std::uint32_t max_backup_count{20};
     bool auto_edit_save_enabled{true};
     std::uint32_t auto_edit_save_interval_seconds{30};
+    // Initialized once from the selected save's largest equipped trinket list.
+    std::optional<std::uint32_t> hero_trinket_slot_limit;
 };
 
 } // namespace ddse::application

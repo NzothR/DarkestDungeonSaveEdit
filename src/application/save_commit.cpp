@@ -1088,9 +1088,11 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed, "Append-clone mutation payload is invalid"));
             if (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
-                (mutation.semantic_property != "TrinketInventory.Items" ||
+                ((mutation.semantic_property != "TrinketInventory.Items" && mutation.semantic_property != "Hero.Trinkets") ||
                  mutation.expected_kind != ValueKind::Object || !safe_dson_key(mutation.new_key) ||
-                 mutation.target_path != "base_root/trinkets/items/" + mutation.new_key))
+                 (mutation.semantic_property == "TrinketInventory.Items"
+                     ? mutation.target_path != "base_root/trinkets/items/" + mutation.new_key
+                     : !mutation.target_path.ends_with(" => base_root/trinkets/items/" + mutation.new_key))))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed, "Create-object mutation payload is invalid",
                                   {{"path", mutation.target_path}}));
@@ -1120,7 +1122,6 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                           "ChangeSet affected_documents does not exactly match its value and structural changes"));
 
     SaveCandidate candidate;
-    candidate.affected_documents.assign(expected_documents.begin(), expected_documents.end());
     core::dson::DsonWriter writer;
     core::dson::DsonReader reader;
     for (const auto& document_id : expected_documents) {
@@ -1319,8 +1320,14 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                     {"did_transform", false},
                     {"trinkets_gained_count", std::int32_t{0}},
                 };
+                const auto parent_path = mutation.target_path.substr(0, mutation.target_path.find_last_of('/'));
+                auto destination = locate_document_for_path(cloned, parent_path, reason);
+                if (!destination)
+                    return core::Result<SaveCandidate, core::Error>::failure(
+                        adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
+                                      {{"path", parent_path}}));
                 auto created = core::dson::DsonDocumentEditor::append_object(
-                    cloned, "base_root/trinkets/items", mutation.new_key, fields);
+                    destination->first.get(), destination->second, mutation.new_key, fields);
                 if (!created) {
                     auto error = created.error();
                     error.context["semantic_property"] = mutation.semantic_property;
@@ -1448,10 +1455,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
 
         auto diff = writer.compare_binary(original, encoded.value());
         if (diff.binary_identical)
-            return core::Result<SaveCandidate, core::Error>::failure(
-                adapter_error(core::ErrorCode::ValidationFailed,
-                              "Candidate bytes are unchanged despite a non-empty ChangeSet",
-                              {{"document", document_id}}));
+            continue;
         CandidateDocument output;
         output.id = document_id;
         output.bytes = bytes;
@@ -1466,7 +1470,12 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                 [](const auto& mutation) { return mutation.kind == CampaignDocumentMutationKind::AppendTemplate; }))
             output.expected_field_paths.push_back("base_root/nextGuid");
         candidate.documents.push_back(std::move(output));
+        candidate.affected_documents.push_back(document_id);
     }
+    if (candidate.documents.empty())
+        return core::Result<SaveCandidate, core::Error>::failure(
+            adapter_error(core::ErrorCode::ValidationFailed,
+                          "Candidate bytes are unchanged despite a non-empty ChangeSet"));
     return core::Result<SaveCandidate, core::Error>::success(std::move(candidate));
 }
 

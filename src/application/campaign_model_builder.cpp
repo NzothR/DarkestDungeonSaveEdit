@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <charconv>
 #include <map>
+#include <limits>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -303,6 +305,23 @@ void read_hero_quirks(const FieldView& base, std::string_view document_id,
     }
 }
 
+domain::TrinketRecordMetadata read_trinket_metadata(const FieldView& item) {
+    domain::TrinketRecordMetadata metadata;
+    const auto read = [&](std::string_view name, auto& target) {
+        if (const auto field = child_named(item, name))
+            if (const auto* value = std::get_if<std::decay_t<decltype(target)>>(&field->field().value))
+                target = *value;
+    };
+    read("type", metadata.type);
+    read("amount", metadata.amount);
+    read("added_buffs", metadata.added_buffs);
+    read("hero_name", metadata.hero_name);
+    read("previous_trinket_id", metadata.previous_trinket_id);
+    read("did_transform", metadata.did_transform);
+    read("trinkets_gained_count", metadata.trinkets_gained_count);
+    return metadata;
+}
+
 void read_hero_trinkets(const FieldView& base, std::string_view document_id,
                        ContentLookupCache& cache, CampaignModel& model, Hero& hero) {
     auto trinkets = child_named(base, "trinkets");
@@ -319,11 +338,22 @@ void read_hero_trinkets(const FieldView& base, std::string_view document_id,
         }
         HeroTrinket trinket;
         trinket.id = id;
+        trinket.metadata = read_trinket_metadata(item);
         trinket.raw = item.locator(document_id);
         trinket.definition = resolve_reference(cache, model, "trinket", id,
             document_id, item.display_path, hero.persistent_id, &hero.diagnostics);
         hero.trinkets.push_back(std::move(trinket));
     }
+    const auto key = [](const HeroTrinket& item) {
+        const auto& path = item.raw.display_path;
+        const auto text = std::string_view{path}.substr(path.find_last_of('/') + 1);
+        std::size_t index{};
+        const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), index);
+        return error == std::errc{} && end == text.data() + text.size()
+            ? index : std::numeric_limits<std::size_t>::max();
+    };
+    std::stable_sort(hero.trinkets.begin(), hero.trinkets.end(),
+        [&](const HeroTrinket& left, const HeroTrinket& right) { return key(left) < key(right); });
 }
 
 Hero read_hero(const FieldView& outer, std::size_t position, std::string_view document_id,
@@ -449,6 +479,7 @@ void read_trinket_inventory(const RawSaveProfile& profile, ContentLookupCache& c
             item.field().name, "trinket.type", model);
         entry.amount = read_value<std::int32_t>(child_named(item, "amount"), document_id,
             item.field().name, "trinket.amount", model);
+        entry.metadata = read_trinket_metadata(item);
         if (entry.id.value) {
             entry.definition = resolve_reference(cache, model, "trinket", *entry.id.value,
                 document_id, item.display_path, item.field().name);
