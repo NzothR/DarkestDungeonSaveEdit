@@ -112,6 +112,7 @@ struct ServerContext {
         std::vector<Json::Value> cached_hero_catalog;
         std::map<std::string, std::string, std::less<>> cached_combat_skill_icons;
         std::map<std::string, Json::Value, std::less<>> cached_hero_equipment;
+        std::map<std::string, std::map<std::string, std::int32_t, std::less<>>, std::less<>> cached_hero_upgrade_max;
         std::vector<std::int32_t> resolve_level_thresholds;
         std::uint64_t next_hero_guid{1};
         std::vector<application::ContentDefinition> trinket_definitions;
@@ -862,6 +863,39 @@ std::string strip_game_markup(std::string value) {
     return value;
 }
 
+std::optional<std::int32_t> hero_upgrade_instance(std::string_view hero_id) {
+    std::int32_t instance{};
+    const auto [end, error] = std::from_chars(hero_id.data(), hero_id.data() + hero_id.size(), instance);
+    if (hero_id.empty() || error != std::errc{} || end != hero_id.data() + hero_id.size() || instance <= 0)
+        return std::nullopt;
+    return instance;
+}
+
+std::optional<std::int32_t> hero_upgrade_limit(const ServerContext::CampaignSession& campaign,
+                                               std::string_view class_id, std::string_view suffix) {
+    const auto found = campaign.cached_hero_upgrade_max.find(class_id);
+    if (found == campaign.cached_hero_upgrade_max.end()) return std::nullopt;
+    const auto limit = found->second.find(suffix);
+    if (limit == found->second.end()) return std::nullopt;
+    return limit->second;
+}
+
+std::int32_t hero_purchased_rank(const domain::CampaignModel& model, std::int32_t instance,
+                                 std::string_view tree_id, std::int32_t maximum) {
+    if (maximum <= 0) return 0;
+    std::vector<bool> purchased(static_cast<std::size_t>(maximum), false);
+    const auto tree_hash = static_cast<std::int32_t>(core::dson::string_hash(tree_id));
+    for (const auto& node : model.upgrade_purchase_nodes) {
+        const auto offset = static_cast<std::int32_t>(node.requirement_code - '0');
+        if (node.instance_number == instance && node.tree_id == tree_hash &&
+            offset >= 0 && offset < maximum && node.is_purchased.value.value_or(false))
+            purchased[static_cast<std::size_t>(offset)] = true;
+    }
+    std::int32_t rank = 0;
+    while (rank < maximum && purchased[static_cast<std::size_t>(rank)]) ++rank;
+    return rank;
+}
+
 Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     const auto& model = campaign.edits->model();
     Json::Value value(Json::objectValue);
@@ -896,6 +930,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         item["nameEditable"] = hero.name.value.has_value() && hero.name.raw.has_value();
         item["rosterPosition"] = static_cast<Json::UInt64>(hero.roster_position);
         item["classId"] = hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id;
+        const auto class_id = item["classId"].asString();
+        const auto purchase_instance = hero_upgrade_instance(hero.persistent_id);
         item["className"] = strip_game_markup(hero.definition.display_name.empty()
             ? (hero.class_id.value ? *hero.class_id.value : hero.definition.raw_id)
             : hero.definition.display_name);
@@ -910,6 +946,9 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                 level = static_cast<std::int32_t>(found - campaign.resolve_level_thresholds.begin() - 1);
         }
         item["level"] = level ? Json::Value(*level) : Json::Value(Json::nullValue);
+        item["maxLevel"] = campaign.resolve_level_thresholds.empty()
+            ? Json::Value(Json::nullValue)
+            : Json::Value(static_cast<Json::Int>(campaign.resolve_level_thresholds.size() - 1));
         item["resolveXp"] = hero.resolve_xp.value ? Json::Value(*hero.resolve_xp.value) : Json::Value(Json::nullValue);
         item["stress"] = hero.stress.value ? Json::Value(*hero.stress.value) : Json::Value(Json::nullValue);
         const auto catalog = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
@@ -927,9 +966,10 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                  std::pair{"armour", hero.armour_rank.value}}) {
             Json::Value entry(Json::objectValue);
             entry["rank"] = rank ? Json::Value(*rank) : Json::Value(Json::nullValue);
+            if (const auto maximum = hero_upgrade_limit(campaign, class_id, kind))
+                entry["maxRank"] = *maximum;
             if (art != campaign.cached_hero_equipment.end() && art->second.isMember(kind)) {
                 const auto& levels = art->second[kind];
-                entry["maxRank"] = static_cast<Json::Int>(levels.size()) - 1;
                 if (rank && *rank >= 0 && static_cast<Json::ArrayIndex>(*rank) < levels.size() &&
                     levels[static_cast<Json::ArrayIndex>(*rank)].isObject()) {
                     const auto& level = levels[static_cast<Json::ArrayIndex>(*rank)];
@@ -979,6 +1019,14 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                         if (resolved && resolved.value()) entry["iconPath"] = path;
                     }
                 } else {
+                    const auto separator = skill.id.find(':');
+                    const auto suffix = separator == std::string::npos ? skill.id : skill.id.substr(separator + 1);
+                    if (const auto maximum = hero_upgrade_limit(campaign, class_id, suffix)) {
+                        entry["maxRank"] = *maximum;
+                        entry["rank"] = purchase_instance
+                            ? std::max(1, hero_purchased_rank(model, *purchase_instance,
+                                class_id + "." + suffix, *maximum)) : 1;
+                    }
                     const auto found = campaign.cached_combat_skill_icons.find(item["classId"].asString() + ":" + skill.id);
                     if (found != campaign.cached_combat_skill_icons.end()) entry["iconPath"] = found->second;
                 }
@@ -991,11 +1039,13 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         if (catalog != campaign.cached_hero_catalog.end() && (*catalog).isMember("availableCampingSkills"))
             camping_skills = (*catalog)["availableCampingSkills"];
         const auto selected_camping = skills_value(hero.camping_skills, true);
-        for (const auto& selected : selected_camping) {
+        for (Json::ArrayIndex selected_index = 0; selected_index < selected_camping.size(); ++selected_index) {
+            const auto& selected = selected_camping[selected_index];
             bool found = false;
             for (auto& available : camping_skills) {
                 if (available["id"].asString() != selected["id"].asString()) continue;
                 available["selected"] = true;
+                available["selectedOrder"] = selected_index;
                 if (!available.isMember("iconPath") && selected.isMember("iconPath"))
                     available["iconPath"] = selected["iconPath"];
                 found = true;
@@ -1004,23 +1054,14 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             if (!found) {
                 auto entry = selected;
                 entry["selected"] = true;
+                entry["selectedOrder"] = selected_index;
                 camping_skills.append(std::move(entry));
             }
         }
-        std::set<std::int32_t> purchase_instances;
-        const auto class_id = item["classId"].asString();
-        const auto weapon_tree = static_cast<std::int32_t>(core::dson::string_hash(class_id + ".weapon"));
-        for (const auto& node : model.upgrade_purchase_nodes)
-            if (node.tree_id == weapon_tree) purchase_instances.insert(node.instance_number);
         for (auto& skill : camping_skills) {
             bool learned = skill.get("selected", false).asBool();
-            if (purchase_instances.size() == 1) {
-                const auto skill_tree = static_cast<std::int32_t>(
-                    core::dson::string_hash(class_id + "." + skill["id"].asString()));
-                for (const auto& node : model.upgrade_purchase_nodes)
-                    if (node.instance_number == *purchase_instances.begin() && node.tree_id == skill_tree &&
-                        node.requirement_code == '0' && node.is_purchased.value.value_or(false)) learned = true;
-            }
+            if (purchase_instance && hero_purchased_rank(model, *purchase_instance,
+                class_id + "." + skill["id"].asString(), 1) > 0) learned = true;
             skill["learned"] = learned;
             if (!skill.isMember("selected")) skill["selected"] = false;
         }
@@ -1485,6 +1526,42 @@ void cache_hero_art(ServerContext& context, ServerContext::CampaignSession& camp
     }
 }
 
+void cache_hero_upgrade_limits(ServerContext& context, ServerContext::CampaignSession& campaign,
+                               const application::ContentDefinition& definition) {
+    const auto path = "upgrades/heroes/" + definition.id + ".upgrades.json";
+    const auto asset = campaign.content->resolve_asset(path);
+    if (!asset || !asset.value()) return;
+    const auto bytes = context.file_system.read_file(asset.value()->physical_path);
+    if (!bytes) return;
+    try {
+        const auto document = nlohmann::json::parse(bytes.value());
+        if (!document.is_object() || !document.contains("trees") || !document["trees"].is_array()) return;
+        const auto prefix = definition.id + ".";
+        auto& limits = campaign.cached_hero_upgrade_max[definition.id];
+        for (const auto& tree : document["trees"]) {
+            if (!tree.is_object() || !tree.contains("id") || !tree["id"].is_string() ||
+                !tree.contains("requirements") || !tree["requirements"].is_array()) continue;
+            const auto id = tree["id"].get<std::string>();
+            if (!id.starts_with(prefix)) continue;
+            const auto& requirements = tree["requirements"];
+            if (requirements.empty() || requirements.size() > 32) continue;
+            bool contiguous = true;
+            for (std::size_t index = 0; index < requirements.size(); ++index) {
+                const auto& requirement = requirements[index];
+                if (!requirement.is_object() || !requirement.contains("code") ||
+                    !requirement["code"].is_string() ||
+                    requirement["code"].get<std::string>() != std::string(1, static_cast<char>('0' + index))) {
+                    contiguous = false;
+                    break;
+                }
+            }
+            if (contiguous) limits[id.substr(prefix.size())] = static_cast<std::int32_t>(requirements.size());
+        }
+    } catch (const nlohmann::json::exception&) {
+        return;
+    }
+}
+
 Json::Value available_camping_skills(const application::ContentDefinition& hero_class,
                                      const std::vector<application::ContentDefinition>& skills,
                                      const application::IContentEnvironment& content) {
@@ -1556,6 +1633,7 @@ void warm_hero_catalog(ServerContext& context, ServerContext::CampaignSession& c
     std::size_t rejected_count{};
     for (const auto& definition : listed.value()) {
         cache_hero_art(context, campaign, definition);
+        cache_hero_upgrade_limits(context, campaign, definition);
         const auto starter = hero_starter_data(definition, skills.value());
         if (!starter) {
             ++rejected_count;
@@ -1653,6 +1731,142 @@ void handle_campaign_hero(const drogon::HttpRequestPtr& request,
     auto& campaign = *context->campaign;
     const auto& model = campaign.edits->model();
     const auto action = (*body)["action"].asString();
+    const auto apply_progression = [&](application::CampaignOperation operation) {
+        auto applied = campaign.edits->apply(operation, (*body)["revision"].asUInt64());
+        if (!applied) {
+            const auto status = applied.error().code == core::ErrorCode::StaleSessionRevision
+                ? drogon::k409Conflict : drogon::k400BadRequest;
+            callback(json_error(status, std::string{core::to_string(applied.error().code)}, applied.error().message));
+        } else callback(json_ok(campaign_value(campaign)));
+    };
+    if (action == "level" || action == "equipment" || action == "combat" ||
+        action == "camping_learn" || action == "camping_equip" || action == "maximize") {
+        if (!(*body)["heroId"].isString()) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Hero progression requires a hero ID."));
+            return;
+        }
+        const auto hero_id = (*body)["heroId"].asString();
+        const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+            return item.persistent_id == hero_id;
+        });
+        if (hero == model.heroes.end() || !hero->class_id.value) {
+            callback(json_error(drogon::k404NotFound, "HERO_NOT_FOUND", "The hero or class is unavailable."));
+            return;
+        }
+        const auto class_id = *hero->class_id.value;
+        const auto reject = [&](std::string message) {
+            callback(json_error(drogon::k400BadRequest, "INVALID_HERO_PROGRESSION", std::move(message)));
+        };
+        const auto apply_planned = [&](core::Result<application::CampaignOperation, core::Error> planned) {
+            if (!planned) {
+                callback(json_error(drogon::k400BadRequest,
+                    std::string{core::to_string(planned.error().code)}, planned.error().message));
+            } else apply_progression(std::move(planned.value()));
+        };
+        if (action == "level") {
+            const auto& requested = (*body)["level"];
+            if (!requested.isInt() || requested.asInt() < 0 ||
+                static_cast<std::size_t>(requested.asInt()) >= campaign.resolve_level_thresholds.size() ||
+                !hero->resolve_xp.raw) {
+                reject("Resolve level is outside the effective progression thresholds.");
+                return;
+            }
+            apply_progression(application::SetCampaignValueOperation{
+                {"Hero.ResolveXp", hero_id}, campaign.resolve_level_thresholds[requested.asInt()]});
+            return;
+        }
+        if (action == "equipment") {
+            const auto kind = (*body)["kind"].asString();
+            const auto& requested = (*body)["rank"];
+            const auto weapon_max = hero_upgrade_limit(campaign, class_id, "weapon");
+            const auto armour_max = hero_upgrade_limit(campaign, class_id, "armour");
+            if ((kind != "weapon" && kind != "armour") || !requested.isInt() || !weapon_max || !armour_max ||
+                requested.asInt() < 0 || requested.asInt() > (kind == "weapon" ? *weapon_max : *armour_max) ||
+                !hero->weapon_rank.value || !hero->armour_rank.value) {
+                reject("Equipment rank is outside the effective hero upgrade trees.");
+                return;
+            }
+            apply_planned(application::make_set_hero_equipment_ranks_operation(model, hero_id,
+                kind == "weapon" ? requested.asInt() : *hero->weapon_rank.value,
+                kind == "armour" ? requested.asInt() : *hero->armour_rank.value,
+                *weapon_max, *armour_max));
+            return;
+        }
+        if (action == "combat") {
+            const auto skill_id = (*body)["skillId"].asString();
+            const auto separator = skill_id.find(':');
+            const auto suffix = separator == std::string::npos ? skill_id : skill_id.substr(separator + 1);
+            const auto maximum = hero_upgrade_limit(campaign, class_id, suffix);
+            const auto& requested = (*body)["rank"];
+            if (skill_id.empty() || !requested.isInt() || !maximum || requested.asInt() < 1 ||
+                requested.asInt() > *maximum ||
+                std::none_of(hero->combat_skills.begin(), hero->combat_skills.end(),
+                    [&](const auto& skill) { return skill.id == skill_id; })) {
+                reject("Combat skill rank is outside its effective class upgrade tree.");
+                return;
+            }
+            apply_planned(application::make_set_hero_combat_skill_rank_operation(
+                model, hero_id, skill_id, requested.asInt(), *maximum));
+            return;
+        }
+        if (action == "camping_learn" || action == "camping_equip") {
+            const auto skill_id = (*body)["skillId"].asString();
+            const auto catalog = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
+                [&](const auto& item) { return item["id"].asString() == class_id; });
+            const bool available = catalog != campaign.cached_hero_catalog.end() &&
+                std::any_of((*catalog)["availableCampingSkills"].begin(),
+                    (*catalog)["availableCampingSkills"].end(),
+                    [&](const auto& skill) { return skill["id"].asString() == skill_id; });
+            if (!available) {
+                reject("Camping skill is not available to this hero class.");
+                return;
+            }
+            if (action == "camping_learn") {
+                apply_planned(application::make_set_hero_camping_skill_learned_operation(
+                    model, hero_id, skill_id, true));
+                return;
+            }
+            if (!(*body)["equipped"].isBool()) {
+                reject("Camping equipment requires an equipped state.");
+                return;
+            }
+            const bool equipped = (*body)["equipped"].asBool();
+            const bool selected = std::any_of(hero->camping_skills.begin(), hero->camping_skills.end(),
+                [&](const auto& skill) { return skill.id == skill_id; });
+            const auto instance = hero_upgrade_instance(hero_id);
+            const bool learned = selected || (instance && hero_purchased_rank(model, *instance,
+                class_id + "." + skill_id, 1) > 0);
+            if (equipped && !learned) {
+                reject("Learn the camping skill before equipping it.");
+                return;
+            }
+            if (equipped == selected) { callback(json_ok(campaign_value(campaign))); return; }
+            apply_planned(application::make_set_hero_camping_skill_equipped_operation(
+                model, hero_id, skill_id, equipped));
+            return;
+        }
+        const auto weapon_max = hero_upgrade_limit(campaign, class_id, "weapon");
+        const auto armour_max = hero_upgrade_limit(campaign, class_id, "armour");
+        const auto catalog = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
+            [&](const auto& item) { return item["id"].asString() == class_id; });
+        if (!weapon_max || !armour_max || catalog == campaign.cached_hero_catalog.end()) {
+            reject("Effective hero progression definitions are unavailable.");
+            return;
+        }
+        std::vector<std::pair<std::string, std::int32_t>> combat_maxima;
+        for (const auto& skill : hero->combat_skills) {
+            const auto separator = skill.id.find(':');
+            const auto suffix = separator == std::string::npos ? skill.id : skill.id.substr(separator + 1);
+            const auto maximum = hero_upgrade_limit(campaign, class_id, suffix);
+            if (maximum) combat_maxima.emplace_back(skill.id, *maximum);
+        }
+        std::vector<std::string> camping_ids;
+        for (const auto& skill : (*catalog)["availableCampingSkills"])
+            if (skill["id"].isString()) camping_ids.push_back(skill["id"].asString());
+        apply_planned(application::make_maximize_hero_progression_operation(
+            model, hero_id, *weapon_max, *armour_max, combat_maxima, camping_ids));
+        return;
+    }
     if (action == "rename") {
         if (!(*body)["heroId"].isString() || !(*body)["name"].isString()) {
             callback(json_error(drogon::k400BadRequest, "INVALID_HERO_OPERATION", "Rename requires a hero ID and name."));

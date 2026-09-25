@@ -182,6 +182,17 @@ make_set_hero_camping_skill_learned_operation(const domain::CampaignModel& model
                                               std::string_view skill_id,
                                               bool learned);
 [[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_maximize_hero_progression_operation(
+    const domain::CampaignModel& model, std::string_view hero_id,
+    std::int32_t weapon_max_rank, std::int32_t armour_max_rank,
+    const std::vector<std::pair<std::string, std::int32_t>>& combat_skill_max_ranks,
+    const std::vector<std::string>& camping_skill_ids);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
+make_set_hero_camping_skill_equipped_operation(const domain::CampaignModel& model,
+                                               std::string_view hero_id,
+                                               std::string_view skill_id,
+                                               bool equipped);
+[[nodiscard]] core::Result<CampaignOperation, core::Error>
 make_set_town_upgrade_rank_operation(const domain::CampaignModel& model,
                                      std::string_view tree_id,
                                      std::int32_t rank,

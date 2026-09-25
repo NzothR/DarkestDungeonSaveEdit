@@ -168,13 +168,14 @@
       <dialog id="hero-detail" class="hero-detail" aria-labelledby="hero-detail-name">
         <div class="hero-detail-shell">
           <button id="hero-detail-close" class="hero-detail-close" type="button" data-i18n-aria="town.close" aria-label="关闭">×</button>
+          <p id="hero-detail-message" class="hero-detail-message" role="status"></p>
           <section class="hero-detail-identity">
             <div class="hero-detail-heading">
               <div><h2 id="hero-detail-name"></h2><p id="hero-detail-class"></p></div>
               <button id="hero-detail-rename" class="hero-detail-rename" type="button" data-i18n-title="hero.editName" data-i18n-aria="hero.editName" aria-label="修改英雄名称">✎</button>
             </div>
             <div class="hero-detail-progress">
-              <div class="hero-detail-level"><span data-i18n="hero.level">等级</span><strong id="hero-detail-level"></strong><small id="hero-detail-xp"></small></div>
+              <div id="hero-detail-level-control" class="hero-detail-level"><span data-i18n="hero.level">等级</span><strong id="hero-detail-level"></strong><small id="hero-detail-xp"></small></div>
               <div class="hero-detail-stress"><div><span data-i18n="hero.stress">压力</span><strong id="hero-detail-stress"></strong></div><progress id="hero-detail-stress-bar" max="200" value="0"></progress></div>
             </div>
             <div id="hero-detail-idle" class="hero-detail-idle"></div>
@@ -198,7 +199,7 @@
             <section class="hero-detail-panel hero-detail-equipment"><h3 data-i18n="hero.trinkets">饰品</h3><div id="hero-detail-trinkets" class="hero-detail-trinket-list"></div></section>
           </main>
           <aside class="hero-detail-right">
-            <section class="hero-detail-panel hero-detail-combat-panel"><h3 data-i18n="hero.combatSkills">战斗技能</h3><div id="hero-detail-combat" class="hero-detail-skill-grid"></div></section>
+            <section class="hero-detail-panel hero-detail-combat-panel"><h3 data-i18n="hero.combatSkills">战斗技能</h3><button id="hero-detail-maximize" class="hero-detail-maximize" type="button" data-i18n="hero.maximize">一键升级至满级</button><div id="hero-detail-combat" class="hero-detail-skill-grid"></div></section>
             <section class="hero-detail-panel hero-detail-camping-panel"><h3 data-i18n="hero.campingSkills">扎营技能</h3><div id="hero-detail-camping" class="hero-detail-skill-grid"></div></section>
             <section class="hero-detail-panel hero-detail-diseases"><h3 data-i18n="hero.diseases">疾病</h3><div id="hero-detail-diseases" class="hero-detail-trait-list"></div></section>
           </aside>

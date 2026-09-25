@@ -128,6 +128,15 @@ bool path_is_within_mapping(const CampaignMappingDescriptor& mapping, std::strin
     return true;
 }
 
+bool camping_scalar_clone_source_allowed(const CampaignDocumentMutation& mutation) {
+    if (mutation.semantic_property != "Hero.SelectedCampingSkills" ||
+        mutation.kind != CampaignDocumentMutationKind::AppendClone ||
+        mutation.expected_kind != core::dson::ValueKind::Integer ||
+        mutation.document_id != "persist.roster.json") return false;
+    const auto* combat = find_mapping("Hero.SelectedCombatSkills");
+    return combat != nullptr && path_is_within_mapping(*combat, mutation.source_path);
+}
+
 bool safe_dson_key(std::string_view key) {
     return !key.empty() && std::all_of(key.begin(), key.end(), [](unsigned char value) {
         return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
@@ -599,6 +608,42 @@ bool apply_purchase_row_mutations(CampaignModel& model,
     return true;
 }
 
+bool apply_camping_skill_mutations(CampaignModel& model,
+                                   const std::vector<CampaignDocumentMutation>& mutations) {
+    for (const auto& mutation : mutations) {
+        if (mutation.semantic_property != "Hero.SelectedCampingSkills") continue;
+        const auto owner = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& hero) {
+            return mutation.target_path.starts_with(hero.raw.display_path +
+                "/hero_file_data/raw_data => base_root/skills/selected_camping_skills/");
+        });
+        if (owner == model.heroes.end()) return false;
+        if (mutation.kind == CampaignDocumentMutationKind::AppendClone) {
+            std::optional<domain::HeroSkillSelection> source;
+            for (const auto& hero : model.heroes) {
+                for (const auto& skill : hero.camping_skills)
+                    if (skill.raw.display_path == mutation.source_path) source = skill;
+                for (const auto& skill : hero.combat_skills)
+                    if (skill.raw.display_path == mutation.source_path) source = skill;
+            }
+            if (!source || std::any_of(owner->camping_skills.begin(), owner->camping_skills.end(),
+                [&](const auto& skill) { return skill.id == mutation.new_key; })) return false;
+            source->id = mutation.new_key;
+            source->camping = true;
+            source->read_only = false;
+            source->raw = {"persist.roster.json", {}, mutation.target_path};
+            source->raw_value.raw = source->raw;
+            source->definition = {};
+            owner->camping_skills.push_back(std::move(*source));
+        } else if (mutation.kind == CampaignDocumentMutationKind::Erase) {
+            const auto found = std::find_if(owner->camping_skills.begin(), owner->camping_skills.end(),
+                [&](const auto& skill) { return skill.raw.display_path == mutation.target_path; });
+            if (found == owner->camping_skills.end()) return false;
+            owner->camping_skills.erase(found);
+        } else return false;
+    }
+    return true;
+}
+
 bool apply_trinket_inventory_mutations(CampaignModel& model,
                                       const std::vector<CampaignDocumentMutation>& mutations,
                                       bool forward) {
@@ -867,6 +912,12 @@ std::int32_t tree_hash(std::string_view tree_id) {
 
 std::optional<std::int32_t> hero_purchase_instance(const CampaignModel& model, const domain::Hero& hero) {
     if (!hero.class_id.value) return std::nullopt;
+    std::int32_t hero_id{};
+    const auto [end, error] = std::from_chars(hero.persistent_id.data(),
+        hero.persistent_id.data() + hero.persistent_id.size(), hero_id);
+    if (!hero.persistent_id.empty() && error == std::errc{} &&
+        end == hero.persistent_id.data() + hero.persistent_id.size() && hero_id > 0)
+        return hero_id;
     const auto wanted = tree_hash(*hero.class_id.value + ".weapon");
     std::set<std::int32_t> instances;
     for (const auto& node : model.upgrade_purchase_nodes)
@@ -906,6 +957,12 @@ bool append_purchase_rank_changes(const CampaignModel& model, CompositeCampaignO
             !node.is_purchased.value || !node.is_purchased.raw ||
             !matching.emplace(node.requirement_code, &node).second) return false;
     }
+    if (template_node == nullptr)
+        for (const auto& node : model.upgrade_purchase_nodes)
+            if (node.is_purchased.value && !node.row_raw.display_path.empty()) {
+                template_node = &node;
+                break;
+            }
     if (template_node == nullptr || template_node->row_raw.display_path.empty()) return false;
 
     for (std::int32_t offset = 0; offset < maximum; ++offset) {
@@ -987,6 +1044,11 @@ const std::vector<CampaignOperationCapabilityDescriptor>& campaign_operation_cap
          {"Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "调用方必须传入有效内容环境解析出的技能节点上限。"},
         {"campaign.hero.set_camping_skill_learned", "学习生存技能", CampaignOperationAvailability::Available,
          {"Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"}, "训练营学习状态独立于 selected_camping_skills 装备集合。"},
+        {"campaign.hero.maximize_progression", "升满英雄装备与技能", CampaignOperationAvailability::Available,
+         {"Hero.WeaponRank", "Hero.ArmourRank", "Upgrade.PurchaseNode", "Upgrade.PurchaseNode.Entry"},
+         "在一次操作中升满装备与当前战斗技能，并学习全部生存技能；不改变英雄等级。"},
+        {"campaign.hero.set_camping_skill_equipped", "装备或取消装备生存技能", CampaignOperationAvailability::Available,
+         {"Hero.SelectedCampingSkills"}, "按已装备技能的先后顺序轮换四个位置，训练解锁状态保持独立。"},
         {"campaign.hero.unequip_camping_skill", "取消装备生存技能", CampaignOperationAvailability::Available,
          {"Hero.SelectedCampingSkills"}, "从已装备集合移除技能，不影响训练营解锁状态。"},
         {"campaign.hero.lock_camping_skill", "锁定生存技能", CampaignOperationAvailability::Deferred,
@@ -1057,6 +1119,22 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                       "The mapped document operation contains no DSON mutations", summary_target, true);
             return report;
         }
+        if (document_operation->operation_id == "campaign.hero.set_camping_skill_equipped") {
+            const auto& mutations = document_operation->mutations;
+            const bool valid_shape = mutations.size() <= 2 &&
+                mutations.front().semantic_property == "Hero.SelectedCampingSkills" &&
+                (mutations.front().kind == CampaignDocumentMutationKind::AppendClone ||
+                 (mutations.size() == 1 && mutations.front().kind == CampaignDocumentMutationKind::Erase)) &&
+                (mutations.size() == 1 ||
+                 (mutations[1].semantic_property == "Hero.SelectedCampingSkills" &&
+                  mutations[1].kind == CampaignDocumentMutationKind::Erase));
+            if (!valid_shape) {
+                add_issue(report, ValidationSeverity::Error, "camping.equipment_shape_invalid",
+                          "Camping skill equipment changes must append one skill and optionally remove the oldest",
+                          CampaignOperationTarget{"Hero.SelectedCampingSkills"}, true);
+                return report;
+            }
+        }
         for (const auto& mutation : document_operation->mutations) {
             CampaignOperationTarget target{mutation.semantic_property};
             if (document_operation->operation_id == "campaign.hero.add" &&
@@ -1088,7 +1166,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 mutation.template_base_hit_points > 0.0F;
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
-                !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source) {
+                !path_is_within_mapping(*mapping, mutation.source_path) && !district_template_source &&
+                !camping_scalar_clone_source_allowed(mutation)) {
                 add_issue(report, ValidationSeverity::Error, "mutation.source_mapping_mismatch",
                           "A cloned DSON template must come from the same registered mapping", target, true);
                 continue;
@@ -1099,7 +1178,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
                   mutation.semantic_property == "Town.DistrictSystem" || mutation.semantic_property == "Town.Districts" ||
-                  mutation.semantic_property == "Upgrade.PurchaseNode.Entry")) ||
+                  mutation.semantic_property == "Upgrade.PurchaseNode.Entry" ||
+                  mutation.semantic_property == "Hero.SelectedCampingSkills")) ||
                 (mutation.kind == CampaignDocumentMutationKind::CreateObject &&
                  mutation.semantic_property == "TrinketInventory.Items") ||
                 (mutation.kind == CampaignDocumentMutationKind::InsertClone &&
@@ -1107,7 +1187,8 @@ ValidationReport CampaignOperationValidator::validate(const CampaignModel& model
                 (mutation.kind == CampaignDocumentMutationKind::Erase &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "Hero.Trinkets" || mutation.semantic_property == "TrinketInventory.Items" ||
-                  mutation.semantic_property == "Town.DistrictSystem")) ||
+                  mutation.semantic_property == "Town.DistrictSystem" ||
+                  mutation.semantic_property == "Hero.SelectedCampingSkills")) ||
                 (mutation.kind == CampaignDocumentMutationKind::Rename &&
                  (mutation.semantic_property == "Hero.PersistentId" || mutation.semantic_property == "Hero.Quirks" ||
                   mutation.semantic_property == "TrinketInventory.Items")) ||
@@ -1506,6 +1587,108 @@ make_set_hero_camping_skill_learned_operation(const domain::CampaignModel& model
 }
 
 core::Result<CampaignOperation, core::Error>
+make_maximize_hero_progression_operation(
+    const domain::CampaignModel& model, std::string_view hero_id,
+    std::int32_t weapon_max_rank, std::int32_t armour_max_rank,
+    const std::vector<std::pair<std::string, std::int32_t>>& combat_skill_max_ranks,
+    const std::vector<std::string>& camping_skill_ids) {
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    if (hero == model.heroes.end() || !hero->class_id.value || !hero->weapon_rank.raw ||
+        !hero->armour_rank.raw || weapon_max_rank <= 0 || armour_max_rank <= 0)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero equipment or effective upgrade limits are unavailable",
+                                      "campaign.hero.maximize_progression"));
+    const auto instance = hero_purchase_instance(model, *hero);
+    if (!instance)
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero purchase instance is unavailable", "campaign.hero.maximize_progression"));
+    CompositeCampaignOperation operation{"Maximize hero equipment and skills", {}, {}, {}};
+    operation.mapped_operation_id = "campaign.hero.maximize_progression";
+    operation.operations.push_back({{"Hero.WeaponRank", hero->persistent_id}, weapon_max_rank});
+    operation.operations.push_back({{"Hero.ArmourRank", hero->persistent_id}, armour_max_rank});
+    const auto class_id = *hero->class_id.value;
+    const auto append_max = [&](std::string_view suffix, std::int32_t rank) {
+        return append_purchase_rank_changes(model, operation, *instance,
+            class_id + "." + std::string{suffix}, rank, rank, '0');
+    };
+    if (!append_max("weapon", weapon_max_rank) || !append_max("armour", armour_max_rank))
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Equipment purchase nodes cannot be mapped", "campaign.hero.maximize_progression"));
+    std::set<std::string, std::less<>> combat_ids;
+    for (const auto& [skill_id, maximum] : combat_skill_max_ranks) {
+        const auto separator = skill_id.find(':');
+        const auto suffix = separator == std::string::npos ? skill_id : skill_id.substr(separator + 1);
+        if (!combat_ids.insert(suffix).second || maximum <= 0 ||
+            !append_purchase_rank_changes(model, operation, *instance, class_id + "." + suffix,
+                                          maximum, maximum, '0'))
+            return core::Result<CampaignOperation, core::Error>::failure(
+                progression_mapping_error("A combat skill has no valid effective upgrade tree: " + skill_id,
+                                          "campaign.hero.maximize_progression"));
+    }
+    std::set<std::string, std::less<>> camping_ids;
+    for (const auto& skill_id : camping_skill_ids) {
+        if (!camping_ids.insert(skill_id).second ||
+            !append_purchase_rank_changes(model, operation, *instance, class_id + "." + skill_id,
+                                          1, 1, '0'))
+            return core::Result<CampaignOperation, core::Error>::failure(
+                progression_mapping_error("A camping skill cannot be learned: " + skill_id,
+                                          "campaign.hero.maximize_progression"));
+    }
+    return core::Result<CampaignOperation, core::Error>::success(std::move(operation));
+}
+
+core::Result<CampaignOperation, core::Error>
+make_set_hero_camping_skill_equipped_operation(const domain::CampaignModel& model,
+                                               std::string_view hero_id,
+                                               std::string_view skill_id,
+                                               bool equipped) {
+    const auto hero = std::find_if(model.heroes.begin(), model.heroes.end(), [&](const auto& item) {
+        return item.persistent_id == hero_id;
+    });
+    if (hero == model.heroes.end() || skill_id.empty())
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Hero or camping skill is unavailable", "campaign.hero.set_camping_skill_equipped"));
+    const auto selected = std::find_if(hero->camping_skills.begin(), hero->camping_skills.end(),
+        [&](const auto& item) { return item.id == skill_id; });
+    if (equipped == (selected != hero->camping_skills.end()))
+        return core::Result<CampaignOperation, core::Error>::failure(
+            progression_mapping_error("Camping skill equipment state is already current",
+                                      "campaign.hero.set_camping_skill_equipped"));
+    std::vector<CampaignDocumentMutation> mutations;
+    if (equipped) {
+        std::string source;
+        if (!hero->camping_skills.empty()) source = hero->camping_skills.front().raw.display_path;
+        else for (const auto& other : model.heroes)
+            if (!other.camping_skills.empty()) {
+                source = other.camping_skills.front().raw.display_path;
+                break;
+            }
+        if (source.empty() && !hero->combat_skills.empty())
+            source = hero->combat_skills.front().raw.display_path;
+        if (source.empty())
+            return core::Result<CampaignOperation, core::Error>::failure(
+                progression_mapping_error("No mapped skill entry is available as a scalar template",
+                                          "campaign.hero.set_camping_skill_equipped"));
+        const auto target = hero->raw.display_path +
+            "/hero_file_data/raw_data => base_root/skills/selected_camping_skills/" + std::string{skill_id};
+        mutations.push_back({CampaignDocumentMutationKind::AppendClone, "Hero.SelectedCampingSkills",
+            "persist.roster.json", target, source, std::string{skill_id}, core::dson::ValueKind::Integer});
+        if (hero->camping_skills.size() >= 4) {
+            mutations.push_back({CampaignDocumentMutationKind::Erase, "Hero.SelectedCampingSkills",
+                "persist.roster.json", hero->camping_skills.front().raw.display_path, {}, {},
+                core::dson::ValueKind::Integer});
+        }
+    } else {
+        mutations.push_back({CampaignDocumentMutationKind::Erase, "Hero.SelectedCampingSkills",
+            "persist.roster.json", selected->raw.display_path, {}, {}, core::dson::ValueKind::Integer});
+    }
+    return core::Result<CampaignOperation, core::Error>::success(
+        ApplyCampaignDocumentMutationsOperation{"campaign.hero.set_camping_skill_equipped", std::move(mutations)});
+}
+
+core::Result<CampaignOperation, core::Error>
 make_set_town_upgrade_rank_operation(const domain::CampaignModel& model, std::string_view tree_id,
                                      std::int32_t rank, std::int32_t effective_max_rank) {
     CompositeCampaignOperation operation{"Set town upgrade rank", {}, {}, {}};
@@ -1626,8 +1809,10 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
     if (mapped_operation_id && mapped_mutations) {
         const bool projects_hero_roster = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) { return mutation.semantic_property == "Hero.PersistentId"; });
+        const bool projects_camping_skills = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
+            [](const auto& mutation) { return mutation.semantic_property == "Hero.SelectedCampingSkills"; });
         ChangeSet::HeroRosterSnapshot hero_snapshot;
-        if (projects_hero_roster) hero_snapshot.before = candidate.heroes;
+        if (projects_hero_roster || projects_camping_skills) hero_snapshot.before = candidate.heroes;
         const bool projects_trinket_inventory = std::any_of(mapped_mutations->begin(), mapped_mutations->end(),
             [](const auto& mutation) { return mutation.semantic_property == "TrinketInventory.Items"; });
         ChangeSet::TrinketInventorySnapshot trinket_snapshot;
@@ -1664,7 +1849,12 @@ CampaignEditSession::apply(const CampaignOperation& operation, std::uint64_t exp
                 {core::ErrorCode::ValidationFailed,
                  "The hero roster mutation could not be projected into the campaign session",
                  "CampaignEditSession"});
-        if (projects_hero_roster) {
+        if (projects_camping_skills && !apply_camping_skill_mutations(candidate, *mapped_mutations))
+            return core::Result<CampaignEditResult, core::Error>::failure(
+                {core::ErrorCode::ValidationFailed,
+                 "The camping skill mutation could not be projected into the campaign session",
+                 "CampaignEditSession"});
+        if (projects_hero_roster || projects_camping_skills) {
             hero_snapshot.after = candidate.heroes;
             change_set.hero_roster_snapshot = std::move(hero_snapshot);
         }

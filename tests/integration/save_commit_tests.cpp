@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -552,6 +553,10 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
         application::SetCampaignValueOperation{{"Hero.Name", hero_id}, std::string{"New Crusader"}}},
         session.revision());
     ASSERT_TRUE(renamed) << renamed.error().message;
+    const auto leveled = session.apply(application::CampaignOperation{
+        application::SetCampaignValueOperation{{"Hero.ResolveXp", hero_id}, std::int32_t{2}}},
+        session.revision());
+    ASSERT_TRUE(leveled) << leveled.error().message;
 
     const auto candidate = application::SaveAdapter{}.build_candidate(profile, session.pending_changes());
     ASSERT_TRUE(candidate) << candidate.error().message;
@@ -590,7 +595,7 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
     EXPECT_EQ(std::get<std::int32_t>(roster_status->value), 0);
     EXPECT_EQ(std::get<std::int32_t>(prior_status->value), 0);
     EXPECT_FLOAT_EQ(std::get<float>(current_hp->value), 33.0F);
-    EXPECT_EQ(std::get<std::int32_t>(resolve_xp->value), 0);
+    EXPECT_EQ(std::get<std::int32_t>(resolve_xp->value), 2);
     EXPECT_EQ(std::get<std::int32_t>(weapon_rank->value), 0);
     EXPECT_EQ(std::get<std::int32_t>(armour_rank->value), 0);
     ASSERT_NE(embedded_value("base_root/skills/selected_combat_skills/smite"), nullptr);
@@ -599,6 +604,26 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
         [](const auto& field) { return field.path == "base_root/actor/name"; });
     ASSERT_NE(name, embedded->embedded_document->fields.end());
     EXPECT_EQ(std::get<std::string>(name->value), "New Crusader");
+
+    // New hero scalar edits must also survive a commit that touches the separate
+    // purchase-history document in the same ChangeSet.
+    const auto& upgrades = *profile.documents.at("persist.upgrades.json").decoded;
+    const auto purchased = std::find_if(upgrades.fields.begin(), upgrades.fields.end(), [](const auto& field) {
+        return field.path == "base_root/purchases/0/is_purchased" &&
+            field.kind == core::dson::ValueKind::Boolean;
+    });
+    ASSERT_NE(purchased, upgrades.fields.end());
+    const auto prior_purchase = std::get<bool>(purchased->value);
+    auto multi_document_changes = session.pending_changes();
+    multi_document_changes.document_mutation_batches.push_back({
+        "campaign.hero.maximize_progression", "test-purchase-history",
+        {{application::CampaignDocumentMutationKind::SetValue, "Upgrade.PurchaseNode.Entry",
+          "persist.upgrades.json", purchased->path, {}, {}, core::dson::ValueKind::Boolean,
+          application::CampaignValue{prior_purchase}, application::CampaignValue{!prior_purchase}}}});
+    multi_document_changes.affected_documents.push_back("persist.upgrades.json");
+    const auto multi_document_candidate = application::SaveAdapter{}.build_candidate(profile, multi_document_changes);
+    ASSERT_TRUE(multi_document_candidate) << multi_document_candidate.error().message;
+    EXPECT_EQ(multi_document_candidate.value().documents.size(), 2U);
 
     const auto target_root = temp.path / "output" / "profile_0";
     copy_profile(source_root, target_root);
@@ -609,6 +634,86 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
     EXPECT_EQ(read_bytes(target_root / "persist.roster.json"), candidate_bytes);
     EXPECT_EQ(read_bytes(backup_root / "persist.roster.json"), bytes);
     EXPECT_EQ(read_bytes(source_root / "persist.roster.json"), bytes);
+}
+
+TEST(SaveAdapter, SavesCampingSkillReplacementInEquipmentOrder) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, fixture);
+    const auto& roster = *profile.documents.at("persist.roster.json").decoded;
+    std::map<std::string, std::vector<const core::dson::DsonField*>, std::less<>> selected;
+    constexpr std::string_view hero_prefix{"base_root/heroes/"};
+    constexpr std::string_view camping_path{"base_root/skills/selected_camping_skills/"};
+    for (const auto& field : roster.fields) {
+        if (!field.embedded_document || !field.path.starts_with(hero_prefix) ||
+            !field.path.ends_with("/hero_file_data/raw_data")) continue;
+        const auto hero_id = field.path.substr(hero_prefix.size(),
+            field.path.size() - hero_prefix.size() - std::string_view{"/hero_file_data/raw_data"}.size());
+        for (const auto& skill : field.embedded_document->fields)
+            if (skill.kind == core::dson::ValueKind::Integer && skill.path.starts_with(camping_path) &&
+                skill.path.find('/', camping_path.size()) == std::string::npos)
+                selected[hero_id].push_back(&skill);
+    }
+    const auto found = std::find_if(selected.begin(), selected.end(),
+        [](const auto& entry) { return !entry.second.empty(); });
+    if (found == selected.end()) GTEST_SKIP() << "No hero has an equipped camping skill";
+    domain::CampaignModel model;
+    domain::Hero hero;
+    hero.persistent_id = found->first;
+    hero.state = domain::EntityState::Resolved;
+    hero.raw = {"persist.roster.json", {}, std::string{hero_prefix} + found->first};
+    for (const auto* field : found->second) {
+        domain::HeroSkillSelection skill;
+        skill.id = field->name;
+        skill.camping = true;
+        skill.raw = {"persist.roster.json", {}, std::string{hero_prefix} + found->first +
+            "/hero_file_data/raw_data => " + field->path};
+        skill.raw_value.value = std::get<std::int32_t>(field->value);
+        skill.raw_value.raw = skill.raw;
+        hero.camping_skills.push_back(std::move(skill));
+    }
+    model.heroes.push_back(std::move(hero));
+    application::CampaignEditSession session{std::move(model)};
+    for (int index = static_cast<int>(found->second.size()); index < 4; ++index) {
+        const auto id = "ddse_camp_test_" + std::to_string(index);
+        auto planned = application::make_set_hero_camping_skill_equipped_operation(
+            session.model(), found->first, id, true);
+        ASSERT_TRUE(planned) << planned.error().message;
+        auto applied = session.apply(planned.value(), session.revision());
+        ASSERT_TRUE(applied) << applied.error().message;
+    }
+    std::vector<std::string> initial_skills;
+    for (const auto& skill : session.model().heroes.front().camping_skills)
+        initial_skills.push_back(skill.id);
+    ASSERT_EQ(initial_skills.size(), 4U);
+    for (const auto& id : {std::string{"ddse_camp_test_e"}, std::string{"ddse_camp_test_f"},
+                           initial_skills[0], initial_skills[1], initial_skills[2]}) {
+        auto planned = application::make_set_hero_camping_skill_equipped_operation(
+            session.model(), found->first, id, true);
+        ASSERT_TRUE(planned) << planned.error().message;
+        auto applied = session.apply(planned.value(), session.revision());
+        ASSERT_TRUE(applied) << applied.error().message;
+    }
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, session.pending_changes());
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    const auto& bytes = candidate.value().documents.front().bytes;
+    const auto decoded = core::dson::DsonReader{}.parse(
+        std::span<const std::byte>{reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()},
+        "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    std::vector<std::string> final_skills;
+    const auto embedded = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(),
+        [&](const auto& field) { return field.path == std::string{hero_prefix} + found->first +
+            "/hero_file_data/raw_data"; });
+    ASSERT_NE(embedded, decoded.value().fields.end());
+    ASSERT_TRUE(embedded->embedded_document);
+    for (const auto& field : embedded->embedded_document->fields)
+        if (field.kind == core::dson::ValueKind::Integer && field.path.starts_with(camping_path) &&
+            field.path.find('/', camping_path.size()) == std::string::npos)
+            final_skills.push_back(field.name);
+    EXPECT_EQ(final_skills, (std::vector<std::string>{
+        "ddse_camp_test_f", initial_skills[0], initial_skills[1], initial_skills[2]}));
 }
 
 TEST(SaveAdapter, ReordersAndDeletesHeroesWithUndoAndCandidateReadback) {

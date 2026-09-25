@@ -526,6 +526,15 @@ bool district_system_clone_source_allowed(const CampaignDocumentMutation& mutati
     return false;
 }
 
+bool camping_scalar_clone_source_allowed(const CampaignDocumentMutation& mutation) {
+    if (mutation.semantic_property != "Hero.SelectedCampingSkills" ||
+        mutation.kind != CampaignDocumentMutationKind::AppendClone ||
+        mutation.expected_kind != ValueKind::Integer ||
+        mutation.document_id != "persist.roster.json") return false;
+    const auto* combat = find_mapping("Hero.SelectedCombatSkills");
+    return combat != nullptr && mutation_path_matches_mapping(*combat, mutation.source_path);
+}
+
 bool purchase_entry_mutation_allowed(const CampaignDocumentMutation& mutation) {
     constexpr std::string_view prefix{"base_root/purchases/"};
     if (mutation.semantic_property != "Upgrade.PurchaseNode.Entry" ||
@@ -897,21 +906,22 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
     std::map<std::string, std::vector<CampaignDocumentMutation>, std::less<>> grouped_mutations;
     std::set<std::string, std::less<>> expected_documents;
     std::set<std::string, std::less<>> unique_targets;
-    std::map<std::string, std::string, std::less<>> template_created_hero_names;
+    std::map<std::string, std::vector<CampaignFieldChange>, std::less<>> template_created_hero_fields;
     for (const auto& change : changes.changes) {
         const auto* mapping = find_mapping(change.target.semantic_property);
-        const bool built_in_template_name = change.target.semantic_property == "Hero.Name" &&
+        const bool built_in_template_field = change.target.semantic_property.starts_with("Hero.") &&
             template_created_hero_ids.contains(change.target.entity_id) &&
             change.raw.document_id == "persist.roster.json" &&
-            change.raw.display_path == "base_root/heroes/" + change.target.entity_id +
-                "/hero_file_data/raw_data => base_root/actor/name";
+            change.raw.steps.empty() &&
+            change.raw.display_path.starts_with("base_root/heroes/" + change.target.entity_id +
+                "/hero_file_data/raw_data => base_root/");
         if (mapping == nullptr || mapping->capability() < CampaignMappingCapability::CandidateWritable)
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
                               "ChangeSet contains a property without an implemented writable mapping",
                               {{"property", change.target.semantic_property}}));
         if (mapping->document_id != change.raw.document_id ||
-            (change.raw.steps.empty() && !built_in_template_name) ||
+            (change.raw.steps.empty() && !built_in_template_field) ||
             change.raw.display_path != expand_path(mapping->raw_path_template, change.target))
             return core::Result<SaveCandidate, core::Error>::failure(
                 adapter_error(core::ErrorCode::MappingNotWritable,
@@ -920,15 +930,15 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                                {"document", change.raw.document_id}, {"path", change.raw.display_path},
                                {"expected_path", expand_path(mapping->raw_path_template, change.target)},
                                {"locator_step_count", std::to_string(change.raw.steps.size())}}));
-        if (built_in_template_name) {
-            const auto* before = std::get_if<std::string>(&change.before);
-            const auto* after = std::get_if<std::string>(&change.after);
-            if (!before || !before->empty() || !after || *before == *after)
+        if (built_in_template_field) {
+            if (!type_matches(mapping->expected_type, change.before) ||
+                !type_matches(mapping->expected_type, change.after) || change.before == change.after)
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::ValidationFailed,
-                                  "A template-created hero name must change from the template's empty default",
-                                  {{"hero_id", change.target.entity_id}}));
-            template_created_hero_names[change.target.entity_id] = *after;
+                                  "Template-created hero field has an invalid mapped value",
+                                  {{"hero_id", change.target.entity_id},
+                                   {"property", change.target.semantic_property}}));
+            template_created_hero_fields[change.target.entity_id].push_back(change);
             const auto target_key = change.raw.document_id + "|" + change.raw.display_path;
             if (!unique_targets.insert(target_key).second)
                 return core::Result<SaveCandidate, core::Error>::failure(
@@ -1058,7 +1068,8 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
             if ((mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                  mutation.kind == CampaignDocumentMutationKind::InsertClone) &&
                 !mutation_path_matches_mapping(*mapping, mutation.source_path) &&
-                !district_system_clone_source_allowed(mutation))
+                !district_system_clone_source_allowed(mutation) &&
+                !camping_scalar_clone_source_allowed(mutation))
                 return core::Result<SaveCandidate, core::Error>::failure(
                     adapter_error(core::ErrorCode::MappingNotWritable,
                                   "Clone source is outside the registered mapping",
@@ -1160,19 +1171,22 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                         adapter_error(core::ErrorCode::MappingNotWritable, "Built-in hero template is unavailable"));
                 prepared_template = clone_document(*mutation.template_document);
                 source_document_tree = &prepared_template;
-                const auto desired_name = template_created_hero_names.find(mutation.new_key);
-                if (desired_name != template_created_hero_names.end()) {
-                    auto name_field = locate_field_by_path(prepared_template,
-                        "base_root/heroes/1/hero_file_data/raw_data => base_root/actor/name", reason);
-                    if (!name_field || name_field->get().kind != ValueKind::String ||
-                        !std::holds_alternative<std::string>(name_field->get().value) ||
-                        !std::get<std::string>(name_field->get().value).empty())
+                const auto desired_fields = template_created_hero_fields.find(mutation.new_key);
+                if (desired_fields != template_created_hero_fields.end())
+                    for (const auto& change : desired_fields->second) {
+                        const auto template_path = mutation.source_path +
+                            change.raw.display_path.substr(mutation.target_path.size());
+                        reason.clear();
+                        auto field = locate_field_by_path(prepared_template, template_path, reason);
+                        const auto* mapping = find_mapping(change.target.semantic_property);
+                        if (!field || !mapping || field->get().kind != mapping->expected_type ||
+                            !value_matches(field->get(), change.before))
                         return core::Result<void, core::Error>::failure(
                             adapter_error(core::ErrorCode::MappingNotWritable,
-                                          reason.empty() ? "Built-in hero template name field is invalid" : reason,
-                                          {{"hero_id", mutation.new_key}}));
-                    replace_field_value(name_field->get(), CampaignValue{desired_name->second});
-                }
+                                          reason.empty() ? "Built-in hero template field is invalid" : reason,
+                                          {{"hero_id", mutation.new_key}, {"path", template_path}}));
+                        replace_field_value(field->get(), change.after);
+                    }
             }
             if (source_document_tree == nullptr)
                 return core::Result<void, core::Error>::failure(
@@ -1406,19 +1420,17 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
             replace_field_value(target, change->after);
         }
 
-        for (const auto& [hero_id, expected_name] : template_created_hero_names) {
-            const auto name_path = "base_root/heroes/" + hero_id +
-                "/hero_file_data/raw_data => base_root/actor/name";
-            std::string name_reason;
-            auto name_field = locate_field_by_path(cloned, name_path, name_reason);
-            if (!name_field || name_field->get().kind != ValueKind::String ||
-                !std::holds_alternative<std::string>(name_field->get().value) ||
-                std::get<std::string>(name_field->get().value) != expected_name)
-                return core::Result<SaveCandidate, core::Error>::failure(
-                    adapter_error(core::ErrorCode::ValidationFailed,
-                                  name_reason.empty() ? "Built-in hero template name did not survive materialization" : name_reason,
-                                  {{"hero_id", hero_id}, {"path", name_path}}));
-        }
+        if (document_id == "persist.roster.json")
+            for (const auto& [hero_id, fields] : template_created_hero_fields)
+                for (const auto& change : fields) {
+                    std::string reason;
+                    auto field = locate_field_by_path(cloned, change.raw.display_path, reason);
+                    if (!field || !value_matches(field->get(), change.after))
+                        return core::Result<SaveCandidate, core::Error>::failure(
+                            adapter_error(core::ErrorCode::ValidationFailed,
+                                          reason.empty() ? "Built-in hero template edit did not survive materialization" : reason,
+                                          {{"hero_id", hero_id}, {"path", change.raw.display_path}}));
+                }
 
         auto encoded = writer.encode(cloned);
         if (!encoded)
@@ -1447,6 +1459,9 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
         for (const auto& change : document_changes) output.expected_field_paths.push_back(change.raw.display_path);
         for (const auto& change : structural_changes) output.expected_field_paths.push_back(change.raw.display_path);
         for (const auto& mutation : document_mutations) output.expected_field_paths.push_back(mutation.target_path);
+        for (const auto& [hero_id, fields] : template_created_hero_fields)
+            if (document_id == "persist.roster.json")
+                for (const auto& change : fields) output.expected_field_paths.push_back(change.raw.display_path);
         if (document_id == "persist.roster.json" && std::any_of(document_mutations.begin(), document_mutations.end(),
                 [](const auto& mutation) { return mutation.kind == CampaignDocumentMutationKind::AppendTemplate; }))
             output.expected_field_paths.push_back("base_root/nextGuid");

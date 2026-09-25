@@ -243,6 +243,8 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .hero-detail-rename:disabled { opacity: .4; cursor: default; }
 .hero-detail-progress { display: grid; gap: 20px; padding: 14px 4px 20px; border-top: 1px solid #82704c66; border-bottom: 1px solid #82704c66; }
 .hero-detail-level { display: grid; justify-items: center; gap: 3px; }
+.hero-detail-level.editable strong, .hero-detail-gear-item.editable, .hero-detail-skill-grid .hero-detail-item.editable { cursor: pointer; }
+.hero-detail-level.editable strong:hover, .hero-detail-gear-item.editable:hover, .hero-detail-skill-grid .hero-detail-item.editable:hover { border-color: #d1ad68; box-shadow: 0 0 10px #c1904633; }
 .hero-detail-level > span, .hero-detail-stress span { color: #a69a87; font-size: 12px; }
 .hero-detail-level strong { display: grid; place-items: center; width: 70px; height: 70px; border: 4px ridge #786647; border-radius: 50%; background: radial-gradient(circle, #2c2a24, #0a0908); color: #d9c396; font: 700 34px Georgia, serif; text-shadow: 1px 2px #000; }
 .hero-detail-level small { min-height: 2.4em; color: #9b927f; font-size: 11px; text-align: center; }
@@ -261,6 +263,7 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .hero-detail-center { padding-top: 85px; }
 .hero-detail-right { padding-right: 8px; overflow-y: auto; }
 .hero-detail-panel { min-width: 0; }
+.hero-detail-message { position: absolute; top: 19px; left: 36%; right: 56px; z-index: 2; min-height: 18px; margin: 0; color: #d6b77e; font-size: 12px; text-align: right; pointer-events: none; }
 .hero-detail-panel h3 { margin: 0 0 13px; padding: 5px 10px; border-block: 2px solid #7b6b5044; background: linear-gradient(90deg, transparent, #5c392872 22%, #41302188 70%, transparent); color: #dfca84; font: 600 clamp(18px, 1.7vw, 28px) Georgia, 'Microsoft YaHei UI', serif; text-align: center; letter-spacing: .08em; }
 .hero-detail-quirks { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .hero-detail-quirk-columns { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -297,9 +300,15 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .hero-detail-trinket-art img { transform: scale(1.65); }
 .hero-detail-item-trinket span:last-child { max-width: 100%; font-size: 11px; }
 .hero-detail-skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); grid-auto-rows: 82px; gap: 7px; overflow-y: auto; scrollbar-color: #816944 #17130e; }
+.hero-detail-combat-panel { position: relative; }
+.hero-detail-maximize { position: absolute; top: 7px; left: 8px; z-index: 1; max-width: 36%; padding: 3px 6px; border: 1px solid #9a754766; background: #211d18; color: #d7b476; font: inherit; font-size: clamp(10px, .72vw, 12px); cursor: pointer; }
+.hero-detail-maximize:hover { background: #3b2c19; }
+.hero-detail-maximize:disabled { opacity: .45; cursor: default; }
 .hero-detail-combat-panel .hero-detail-skill-grid { max-height: calc(82px * 3 + 7px * 2); }
 .hero-detail-camping-panel .hero-detail-skill-grid { max-height: calc(82px * 2 + 7px); }
-.hero-detail-skill-grid .hero-detail-item { box-sizing: border-box; min-height: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 5px; text-align: center; }
+.hero-detail-skill-grid .hero-detail-item { position: relative; box-sizing: border-box; min-height: 0; flex-direction: column; justify-content: center; gap: 3px; padding: 5px; text-align: center; }
+.hero-detail-skill-rank { position: absolute; top: 2px; right: 4px; color: #dcc28a; font-size: 11px; }
+.hero-detail-item-camping.selected { border-color: #cba762; box-shadow: inset 0 0 8px #b9974133; }
 .hero-detail-skill-grid .hero-detail-item img, .hero-detail-skill-grid .hero-detail-item-symbol { width: 42px; height: 42px; flex-basis: 42px; }
 .hero-detail-skill-grid .hero-detail-item span:last-child { max-width: 100%; font-size: 11px; }
 .hero-detail-skill-unlearned img { filter: grayscale(1) brightness(.45); }

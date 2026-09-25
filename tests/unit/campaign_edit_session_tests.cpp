@@ -140,6 +140,43 @@ TEST(CampaignEditSession, ApplyUndoAndRedoAreSymmetricAndRevisioned) {
     EXPECT_FALSE(session.can_redo());
 }
 
+TEST(CampaignEditSession, CampingEquipmentReplacesOldestInEditedOrder) {
+    auto model = sample_model();
+    auto& hero = model.heroes.front();
+    hero.raw = locator("persist.roster.json", "base_root/heroes/hero-1");
+    for (const auto* id : {"A", "B", "C", "D"}) {
+        domain::HeroSkillSelection skill;
+        skill.id = id;
+        skill.camping = true;
+        skill.raw = locator("persist.roster.json",
+            "base_root/heroes/hero-1/hero_file_data/raw_data => base_root/skills/selected_camping_skills/" +
+            std::string{id});
+        skill.raw_value.value = 0;
+        skill.raw_value.raw = skill.raw;
+        hero.camping_skills.push_back(std::move(skill));
+    }
+    application::CampaignEditSession session{std::move(model)};
+    const auto selected_ids = [&] {
+        std::vector<std::string> ids;
+        for (const auto& skill : session.model().heroes.front().camping_skills) ids.push_back(skill.id);
+        return ids;
+    };
+    for (const auto* id : {"E", "F", "A", "B", "C"}) {
+        auto planned = application::make_set_hero_camping_skill_equipped_operation(
+            session.model(), "hero-1", id, true);
+        ASSERT_TRUE(planned) << planned.error().message;
+        auto applied = session.apply(planned.value(), session.revision());
+        ASSERT_TRUE(applied) << applied.error().message;
+    }
+    EXPECT_EQ(selected_ids(), (std::vector<std::string>{"F", "A", "B", "C"}));
+    auto undone = session.undo(session.revision());
+    ASSERT_TRUE(undone) << undone.error().message;
+    EXPECT_EQ(selected_ids(), (std::vector<std::string>{"E", "F", "A", "B"}));
+    auto redone = session.redo(session.revision());
+    ASSERT_TRUE(redone) << redone.error().message;
+    EXPECT_EQ(selected_ids(), (std::vector<std::string>{"F", "A", "B", "C"}));
+}
+
 TEST(CampaignEditSession, AfflictionStateAndStressValueAreSeparateEdits) {
     application::CampaignEditSession session{sample_model()};
     const auto direct_status_edit = session.apply(

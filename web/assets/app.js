@@ -64,6 +64,8 @@ const elements = {
   heroDetailName: document.querySelector("#hero-detail-name"),
   heroDetailClass: document.querySelector("#hero-detail-class"),
   heroDetailRename: document.querySelector("#hero-detail-rename"),
+  heroDetailMessage: document.querySelector("#hero-detail-message"),
+  heroDetailLevelControl: document.querySelector("#hero-detail-level-control"),
   heroDetailLevel: document.querySelector("#hero-detail-level"),
   heroDetailXp: document.querySelector("#hero-detail-xp"),
   heroDetailStress: document.querySelector("#hero-detail-stress"),
@@ -77,6 +79,7 @@ const elements = {
   heroDetailArmour: document.querySelector("#hero-detail-armour"),
   heroDetailTrinkets: document.querySelector("#hero-detail-trinkets"),
   heroDetailCombat: document.querySelector("#hero-detail-combat"),
+  heroDetailMaximize: document.querySelector("#hero-detail-maximize"),
   heroDetailCamping: document.querySelector("#hero-detail-camping"),
   heroDetailDiseases: document.querySelector("#hero-detail-diseases"),
   trinketGrid: document.querySelector("#trinket-grid"),
@@ -126,6 +129,7 @@ let selectedTrinketRawKeys = new Set();
 let heroClassDefinitions = [];
 let selectedHeroClassIds = new Set();
 let activeHeroId = null;
+let heroEditBusy = false;
 let heroIdleKey = "";
 let heroIdleStop = null;
 let heroIdleController = null;
@@ -502,6 +506,15 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
     card.className = `hero-detail-item hero-detail-item-${kind}`;
     if (entry.polarity === "negative") card.classList.add("hero-detail-item-negative");
     card.title = cleanGameText(entry.name || entry.id);
+    if ((kind === "combat" && entry.maxRank != null) || kind === "camping") {
+      card.dataset.skillId = entry.id;
+      card.classList.add("editable");
+      card.title += ` · ${t(kind === "combat" ? "hero.editRankHint" : "hero.campingEquipHint")}`;
+    }
+    if (kind === "camping" && entry.selected) {
+      card.classList.add("selected");
+      if (entry.selectedOrder != null) card.title += ` · ${t("hero.skillSelectedOrder", { order: entry.selectedOrder + 1 })}`;
+    }
     if (kind === "camping" && entry.learned === false) {
       card.classList.add("hero-detail-skill-unlearned");
       card.title += ` · ${t("hero.skillUnlearned")}`;
@@ -517,6 +530,12 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
     const name = document.createElement("span");
     name.textContent = cleanGameText(entry.name || entry.id);
     card.append(name);
+    if (kind === "combat" && entry.rank != null) card.prepend(Object.assign(document.createElement("small"), {
+      className: "hero-detail-skill-rank", textContent: String(entry.rank),
+    }));
+    if (kind === "camping" && entry.selectedOrder != null) card.prepend(Object.assign(document.createElement("small"), {
+      className: "hero-detail-skill-rank", textContent: String(entry.selectedOrder + 1),
+    }));
     if (entry.isLocked) card.classList.add("locked");
     container.append(card);
   }
@@ -524,6 +543,7 @@ function renderHeroDetailEntries(container, entries, kind, emptyKey) {
 
 function renderHeroEquipment(container, equipment, kind) {
   container.replaceChildren();
+  container.classList.toggle("editable", equipment?.rank != null && equipment?.maxRank != null);
   const label = t(kind === "weapon" ? "hero.weapon" : "hero.armour");
   const art = document.createElement("span");
   art.className = "hero-detail-gear-art";
@@ -536,9 +556,9 @@ function renderHeroEquipment(container, equipment, kind) {
   const name = cleanGameText(equipment?.name || label);
   copy.append(Object.assign(document.createElement("strong"), { textContent: name }));
   copy.append(Object.assign(document.createElement("span"), {
-    textContent: t("hero.equipmentRank", { rank: equipment?.rank == null ? "—" : equipment.rank }),
+    textContent: t("hero.equipmentRank", { rank: equipment?.rank == null ? "—" : equipment.rank + 1 }),
   }));
-  container.title = `${name} · ${copy.lastChild.textContent}`;
+  container.title = `${name} · ${copy.lastChild.textContent} · ${t("hero.editRankHint")}`;
   container.append(art, copy);
 }
 
@@ -590,6 +610,8 @@ function renderHeroDetail() {
   elements.heroDetailClass.textContent = cleanGameText(hero.className || hero.classId || t("town.unknownClass"));
   elements.heroDetailRename.disabled = hero.nameEditable === false;
   elements.heroDetailLevel.textContent = hero.level == null ? "—" : String(hero.level);
+  elements.heroDetailLevelControl.classList.toggle("editable", hero.level != null && hero.maxLevel != null);
+  elements.heroDetailLevelControl.title = t("hero.editLevelHint");
   elements.heroDetailXp.textContent = hero.level == null && hero.resolveXp != null
     ? t("hero.xpUnresolved", { xp: hero.resolveXp }) : "";
   elements.heroDetailStress.textContent = hero.stress == null ? "—" : String(Math.round(hero.stress));
@@ -602,6 +624,8 @@ function renderHeroDetail() {
   if (unknownQuirks.length) renderHeroDetailEntries(elements.heroDetailUnknown, unknownQuirks, "quirk", "hero.noQuirks");
   renderHeroEquipment(elements.heroDetailWeapon, hero.equipment?.weapon, "weapon");
   renderHeroEquipment(elements.heroDetailArmour, hero.equipment?.armour, "armour");
+  elements.heroDetailMaximize.disabled = hero.equipment?.weapon?.maxRank == null ||
+    hero.equipment?.armour?.maxRank == null;
   renderHeroDetailEntries(elements.heroDetailCombat, hero.combatSkills || [], "combat", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailCamping, hero.campingSkills || [], "camping", "hero.noSkills");
   renderHeroDetailEntries(elements.heroDetailDiseases, (hero.quirks || []).filter((entry) => entry.isDisease), "disease", "hero.noDiseases");
@@ -684,6 +708,7 @@ function renderCampaign(campaign) {
     row.append(text);
     row.addEventListener("click", () => {
       activeHeroId = hero.id;
+      elements.heroDetailMessage.textContent = "";
       renderHeroDetail();
       if (!elements.heroDetail.open) elements.heroDetail.showModal();
     });
@@ -1476,6 +1501,71 @@ elements.heroDetailRename.addEventListener("click", () => {
   const hero = (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId);
   if (hero && hero.nameEditable !== false) renameHero(hero);
 });
+async function editActiveHero(action, options = {}) {
+  if (heroEditBusy || !activeHeroId || !latestCampaign) return;
+  heroEditBusy = true;
+  elements.heroDetailMessage.textContent = t("hero.editing");
+  try {
+    const campaign = await editorGateway.editHeroes(action, latestCampaign.revision,
+      { heroId: activeHeroId, ...options });
+    renderCampaign(campaign);
+    elements.heroDetailMessage.textContent = "";
+  } catch (error) { elements.heroDetailMessage.textContent = displayError(error); }
+  finally { heroEditBusy = false; }
+}
+
+function activeHero() { return (latestCampaign?.heroes || []).find((hero) => hero.id === activeHeroId); }
+function nextRank(current, maximum, minimum, event, increase) {
+  if (current == null || maximum == null || current < minimum) return null;
+  const target = event.shiftKey ? (increase ? maximum : minimum)
+    : Math.max(minimum, Math.min(maximum, current + (increase ? 1 : -1)));
+  return target === current ? null : target;
+}
+
+function editHeroLevel(event, increase) {
+  if (!increase) event.preventDefault();
+  const hero = activeHero();
+  if (!hero) return;
+  const level = nextRank(hero.level, hero.maxLevel, 0, event, increase);
+  if (level != null) editActiveHero("level", { level });
+}
+elements.heroDetailLevelControl.addEventListener("click", (event) => editHeroLevel(event, true));
+elements.heroDetailLevelControl.addEventListener("contextmenu", (event) => editHeroLevel(event, false));
+
+for (const [kind, container] of [["weapon", elements.heroDetailWeapon], ["armour", elements.heroDetailArmour]]) {
+  const edit = (event, increase) => {
+    if (!increase) event.preventDefault();
+    const equipment = activeHero()?.equipment?.[kind];
+    const rank = nextRank(equipment?.rank, equipment?.maxRank, 0, event, increase);
+    if (rank != null) editActiveHero("equipment", { kind, rank });
+  };
+  container.addEventListener("click", (event) => edit(event, true));
+  container.addEventListener("contextmenu", (event) => edit(event, false));
+}
+
+function editCombatSkill(event, increase) {
+  if (!increase) event.preventDefault();
+  const skillId = event.target.closest(".hero-detail-item-combat")?.dataset.skillId;
+  const skill = activeHero()?.combatSkills?.find((item) => item.id === skillId);
+  if (!skill) return;
+  const rank = nextRank(skill.rank, skill.maxRank, 1, event, increase);
+  if (rank != null) editActiveHero("combat", { skillId, rank });
+}
+elements.heroDetailCombat.addEventListener("click", (event) => editCombatSkill(event, true));
+elements.heroDetailCombat.addEventListener("contextmenu", (event) => editCombatSkill(event, false));
+
+function editCampingSkill(event, equip) {
+  if (!equip) event.preventDefault();
+  const skillId = event.target.closest(".hero-detail-item-camping")?.dataset.skillId;
+  const skill = activeHero()?.campingSkills?.find((item) => item.id === skillId);
+  if (!skill) return;
+  if (equip && skill.learned === false) editActiveHero("camping_learn", { skillId });
+  else if (equip && !skill.selected) editActiveHero("camping_equip", { skillId, equipped: true });
+  else if (!equip && skill.selected) editActiveHero("camping_equip", { skillId, equipped: false });
+}
+elements.heroDetailCamping.addEventListener("click", (event) => editCampingSkill(event, true));
+elements.heroDetailCamping.addEventListener("contextmenu", (event) => editCampingSkill(event, false));
+elements.heroDetailMaximize.addEventListener("click", () => editActiveHero("maximize"));
 elements.heroDetailTrinkets.addEventListener("wheel", (event) => {
   if (elements.heroDetailTrinkets.scrollWidth <= elements.heroDetailTrinkets.clientWidth || !event.deltaY) return;
   event.preventDefault();
