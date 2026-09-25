@@ -64,10 +64,11 @@ bool replace_skill_map(core::dson::DsonDocument& document, std::string_view path
 
 core::Result<std::shared_ptr<core::dson::DsonDocument>, core::Error>
 build_blank_level_zero_hero_template(std::string_view hero_class,
+                                    std::string_view hero_name,
                                     const std::vector<std::string>& combat_skills,
                                     const std::vector<std::string>& camping_skills,
                                     float base_hit_points) {
-    if (hero_class.empty() || hero_class.find('/') != std::string_view::npos ||
+    if (hero_class.empty() || hero_class.find('/') != std::string_view::npos || hero_name.empty() ||
         combat_skills.empty() || !(base_hit_points > 0.0F))
         return core::Result<std::shared_ptr<core::dson::DsonDocument>, core::Error>::failure(
             template_error("The class or its verified resolve-level-zero starter data is incomplete"));
@@ -100,7 +101,7 @@ build_blank_level_zero_hero_template(std::string_view hero_class,
         return replace_value(*inner, path, std::move(value));
     };
     const bool initialized =
-        set("base_root/actor/name", std::string{}) &&
+        set("base_root/actor/name", std::string{hero_name}) &&
         set("base_root/actor/current_hp", base_hit_points) &&
         set("base_root/heroClass", std::string{hero_class}) &&
         set("base_root/resolveXp", std::int32_t{0}) &&

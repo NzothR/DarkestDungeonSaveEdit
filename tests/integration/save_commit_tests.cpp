@@ -642,8 +642,20 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
     infrastructure::NativeFileSystem fs;
     auto profile = load_profile(fs, source_root);
     const auto template_result = application::build_blank_level_zero_hero_template(
-        "crusader", {"smite", "stunning_blow"}, {}, 33.0F);
+        "crusader", "Crusader", {"smite", "stunning_blow"}, {}, 33.0F);
     ASSERT_TRUE(template_result) << template_result.error().message;
+    const auto template_data = std::find_if(template_result.value()->fields.begin(),
+        template_result.value()->fields.end(), [](const auto& field) {
+            return field.path == "base_root/heroes/1/hero_file_data/raw_data";
+        });
+    ASSERT_NE(template_data, template_result.value()->fields.end());
+    ASSERT_TRUE(template_data->embedded_document);
+    const auto template_name = std::find_if(template_data->embedded_document->fields.begin(),
+        template_data->embedded_document->fields.end(), [](const auto& field) {
+            return field.path == "base_root/actor/name";
+        });
+    ASSERT_NE(template_name, template_data->embedded_document->fields.end());
+    EXPECT_EQ(std::get<std::string>(template_name->value), "Crusader");
     auto empty_roster = *profile.documents.at("persist.roster.json").decoded;
     constexpr std::string_view hero_prefix{"base_root/heroes/"};
     while (true) {
@@ -684,6 +696,7 @@ TEST(SaveAdapter, AddsAndRenamesTemplateHeroInAnEmptyRoster) {
         application::ApplyCampaignDocumentMutationsOperation{"campaign.hero.add", {append}}}, 0);
     ASSERT_TRUE(added) << added.error().message;
     ASSERT_EQ(session.model().heroes.size(), 1U);
+    EXPECT_EQ(session.model().heroes.front().name.value, "Crusader");
     const auto renamed = session.apply(application::CampaignOperation{
         application::SetCampaignValueOperation{{"Hero.Name", hero_id}, std::string{"New Crusader"}}},
         session.revision());

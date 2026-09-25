@@ -1053,7 +1053,7 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                                   {{"path", mutation.target_path}}));
             if (valid_builtin_hero_template) {
                 const auto expected_template = build_blank_level_zero_hero_template(
-                    mutation.template_hero_class, mutation.template_combat_skills,
+                    mutation.template_hero_class, mutation.template_class_name, mutation.template_combat_skills,
                     mutation.template_camping_skills, mutation.template_base_hit_points);
                 const auto supplied_bytes = core::dson::DsonWriter{}.encode(*mutation.template_document);
                 const auto expected_bytes = expected_template

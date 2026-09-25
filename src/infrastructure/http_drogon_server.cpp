@@ -1154,8 +1154,12 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                 Json::Value entry(Json::objectValue);
                 entry["id"] = skill.id;
                 std::string name = skill.definition.display_name;
-                if (camping) {
-                    const auto localized = campaign.content->resolve_localization("camping_skill_name_" + skill.id);
+                const auto separator = skill.id.find(':');
+                const auto raw_id = separator == std::string::npos ? skill.id : skill.id.substr(separator + 1);
+                const auto localization_key = camping ? "camping_skill_name_" + raw_id
+                    : "combat_skill_name_" + class_id + "_" + raw_id;
+                if (camping || name.empty() || name == skill.id || name == raw_id) {
+                    const auto localized = campaign.content->resolve_localization(localization_key);
                     if (localized && localized.value() && !localized.value()->value.empty())
                         name = localized.value()->value;
                 }
@@ -1173,13 +1177,11 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                         if (resolved && resolved.value()) entry["iconPath"] = path;
                     }
                 } else {
-                    const auto separator = skill.id.find(':');
-                    const auto suffix = separator == std::string::npos ? skill.id : skill.id.substr(separator + 1);
-                    if (const auto maximum = hero_upgrade_limit(campaign, class_id, suffix)) {
+                    if (const auto maximum = hero_upgrade_limit(campaign, class_id, raw_id)) {
                         entry["maxRank"] = *maximum;
                         entry["rank"] = purchase_instance
                             ? std::max(1, purchased_rank(*purchase_instance,
-                                class_id + "." + suffix, *maximum)) : 1;
+                                class_id + "." + raw_id, *maximum)) : 1;
                     }
                     const auto found = campaign.cached_combat_skill_icons.find(item["classId"].asString() + ":" + skill.id);
                     if (found != campaign.cached_combat_skill_icons.end()) entry["iconPath"] = found->second;
@@ -2129,7 +2131,7 @@ void handle_campaign_hero(const drogon::HttpRequestPtr& request,
             const auto source_id = (*definition)["sourceId"].asString();
             const auto base_hit_points = (*definition)["baseHitPoints"].asFloat();
             const auto template_document = application::build_blank_level_zero_hero_template(
-                class_id, combat_skills, camping_skills, base_hit_points);
+                class_id, class_name, combat_skills, camping_skills, base_hit_points);
             if (!template_document) continue;
             const auto new_id = std::to_string(next_guid++);
             const auto target = root_path(new_id);

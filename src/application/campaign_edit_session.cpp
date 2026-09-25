@@ -954,7 +954,7 @@ bool apply_hero_roster_mutations(CampaignModel& model,
             added.read_only = false;
             added.raw = {"persist.roster.json", {}, mutation.target_path};
             const auto embedded = mutation.target_path + "/hero_file_data/raw_data => base_root/";
-            added.name.value = std::string{};
+            added.name.value = mutation.template_class_name;
             added.name.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "actor/name"};
             added.class_id.value = mutation.template_hero_class;
             added.class_id.raw = domain::RawLocator{"persist.roster.json", {}, embedded + "heroClass"};
