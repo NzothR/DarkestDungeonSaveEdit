@@ -14,6 +14,11 @@
 #include <utility>
 
 namespace ddse::infrastructure {
+struct SqliteContentDatabasePair {
+    sqlite::Database base;
+    std::optional<sqlite::Database> mods;
+};
+
 namespace {
 
 using application::ContentAssetReference;
@@ -26,10 +31,7 @@ using application::ResolvedAsset;
 using sqlite::Database;
 using sqlite::Statement;
 
-struct DatabasePair {
-    Database base;
-    std::optional<Database> mods;
-};
+using DatabasePair = SqliteContentDatabasePair;
 
 struct DefinitionLayer {
     std::string type;
@@ -649,19 +651,37 @@ find_content_in(DatabasePair& databases, const ContentEnvironmentSelection& sele
 
 } // namespace
 
+SqliteContentEnvironment::SqliteContentEnvironment(SqliteContentEnvironmentConfig config)
+    : config_(std::move(config)) {}
+
+SqliteContentEnvironment::~SqliteContentEnvironment() = default;
+
+core::Result<SqliteContentDatabasePair*, core::Error> SqliteContentEnvironment::databases() const {
+    // A content environment belongs to one Campaign Session. Reuse its read
+    // connections until that session is invalidated and the environment dies.
+    if (!databases_) {
+        auto opened = open_databases(config_);
+        if (!opened) return core::Result<SqliteContentDatabasePair*, core::Error>::failure(opened.error());
+        databases_ = std::make_unique<SqliteContentDatabasePair>(std::move(opened.value()));
+    }
+    return core::Result<SqliteContentDatabasePair*, core::Error>::success(databases_.get());
+}
+
 core::Result<std::optional<ContentDefinition>, core::Error>
 SqliteContentEnvironment::find_content(std::string_view type, std::string_view id) const {
-    auto opened = open_databases(config_);
+    std::lock_guard lock(database_mutex_);
+    auto opened = databases();
     if (!opened) return core::Result<std::optional<ContentDefinition>, core::Error>::failure(opened.error());
-    auto databases = std::move(opened.value());
+    auto& databases = *opened.value();
     return find_content_in(databases, config_.selection, type, id, databases.mods.has_value());
 }
 
 core::Result<std::vector<ContentDefinition>, core::Error>
 SqliteContentEnvironment::list_content(std::string_view type, std::string_view search_text) const {
-    auto opened = open_databases(config_);
+    std::lock_guard lock(database_mutex_);
+    auto opened = databases();
     if (!opened) return core::Result<std::vector<ContentDefinition>, core::Error>::failure(opened.error());
-    auto databases = std::move(opened.value());
+    auto& databases = *opened.value();
     const bool environment_database = databases.mods.has_value();
     Database& source = environment_database ? *databases.mods : databases.base;
     auto layers = read_definition_layers(source, type, std::nullopt, environment_database);
@@ -736,25 +756,28 @@ SqliteContentEnvironment::load_bundle(std::string_view type, std::string_view id
 
 core::Result<std::optional<ResolvedLocalization>, core::Error>
 SqliteContentEnvironment::resolve_localization(std::string_view key, std::string_view language) const {
-    auto opened = open_databases(config_);
+    std::lock_guard lock(database_mutex_);
+    auto opened = databases();
     if (!opened) return core::Result<std::optional<ResolvedLocalization>, core::Error>::failure(opened.error());
-    auto databases = std::move(opened.value());
+    auto& databases = *opened.value();
     return resolve_localization_in(databases, config_.selection, key, language, databases.mods.has_value());
 }
 
 core::Result<std::optional<ResolvedAsset>, core::Error>
 SqliteContentEnvironment::resolve_asset(std::string_view virtual_path) const {
-    auto opened = open_databases(config_);
+    std::lock_guard lock(database_mutex_);
+    auto opened = databases();
     if (!opened) return core::Result<std::optional<ResolvedAsset>, core::Error>::failure(opened.error());
-    auto databases = std::move(opened.value());
+    auto& databases = *opened.value();
     return resolve_asset_in(databases, config_.selection, virtual_path, databases.mods.has_value());
 }
 
 core::Result<std::vector<ContentProvenance>, core::Error>
 SqliteContentEnvironment::explain_provenance(std::string_view type, std::string_view id) const {
-    auto opened = open_databases(config_);
+    std::lock_guard lock(database_mutex_);
+    auto opened = databases();
     if (!opened) return core::Result<std::vector<ContentProvenance>, core::Error>::failure(opened.error());
-    auto databases = std::move(opened.value());
+    auto& databases = *opened.value();
     const bool environment_database = databases.mods.has_value();
     Database& source = environment_database ? *databases.mods : databases.base;
     auto layers = read_definition_layers(source, type, id, environment_database);

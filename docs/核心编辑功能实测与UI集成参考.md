@@ -97,7 +97,7 @@
 
 UI 应把“开放系统”“建造/锁定一栋建筑”“改变建筑升级”分开呈现和提交。
 
-前端建筑名单以集中列表呈现普通建筑，不显示错误的统一升降级值。普通建筑编辑窗从原版 `upgrades/building/*.upgrades.json` 读取独立升级链，节点左键升一级、右键降一级，Shift 左键升满、Shift 右键降到零级；名单顶部的一键操作升满所有普通建筑，单栋窗口可升满当前建筑。区域建筑进入独立窗口，名单状态来自 `base_root/districts/buildings/{districtId}/built`，系统锁定状态来自 `base_root/districts`；窗口提供逐栋解锁/锁定、批量解锁、批量锁定并清除区域系统状态，以及系统开关。所有操作进入 Campaign Session，复用撤销/重做与备份后写回流程。
+前端建筑名单以集中列表呈现八栋可升级的普通建筑，不显示没有升级树的墓园，也不显示错误的统一升降级值。普通建筑编辑窗从当前有效内容环境的 `upgrades/building/*.upgrades.json` 读取独立升级链，包括启用 Mod 对原版建筑文件的覆盖；节点左键升一级、右键降一级，Shift 左键升满、Shift 右键降到零级；名单顶部的一键操作升满所有普通建筑，单栋窗口可升满当前建筑。区域建筑进入独立窗口，名单状态来自 `base_root/districts/buildings/{districtId}/built`，系统锁定状态来自 `base_root/districts`；窗口提供逐栋解锁/锁定、批量解锁、批量锁定并清除区域系统状态，以及系统开关。所有操作进入 Campaign Session，复用撤销/重做与备份后写回流程。
 
 ## 4. Operation、Mapping 与安全写回接入情况
 

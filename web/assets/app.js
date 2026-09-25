@@ -1300,7 +1300,7 @@ async function openQuirkSelector(polarity, oldId) {
 
 const BUILDING_LOCALE_KEYS = Object.freeze({
   camping_trainer: "town.survivalist", stage_coach: "town.stageCoach", tavern: "town.tavern",
-  sanitarium: "town.sanitarium", abbey: "town.abbey", graveyard: "town.graveyard",
+  sanitarium: "town.sanitarium", abbey: "town.abbey",
   nomad_wagon: "town.nomadWagon", guild: "town.guild", blacksmith: "town.blacksmith",
 });
 

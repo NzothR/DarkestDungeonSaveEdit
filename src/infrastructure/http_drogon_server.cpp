@@ -32,6 +32,7 @@
 #include <memory>
 #include <limits>
 #include <map>
+#include <tuple>
 #include <random>
 #include <set>
 #include <sstream>
@@ -340,7 +341,6 @@ std::optional<core::Error> ensure_campaign_locked(ServerContext& context) {
     const auto save_root = configuration.save_roots.front();
     if (context.campaign && context.campaign->profile.descriptor.root_path == save_root)
         return std::nullopt;
-
     auto profile = application::SaveProfileDiscovery{context.file_system}.load(save_root);
     if (!profile) return profile.error();
     if (profile.value().status != application::ProfileReadStatus::Complete)
@@ -440,7 +440,7 @@ std::vector<ServerContext::BuildingUpgradeTree> load_building_upgrade_trees(
     for (const auto building : buildings) {
         const auto path = "upgrades/building/" + std::string{building} + ".upgrades.json";
         auto asset = content.resolve_asset(path);
-        if (!asset || !asset.value() || asset.value()->source_id != "vanilla") continue;
+        if (!asset || !asset.value()) continue;
         auto bytes = file_system.read_file(asset.value()->physical_path);
         if (!bytes) continue;
         try {
@@ -531,10 +531,16 @@ Json::Value definition_assets(const domain::DefinitionReference& definition) {
 
 std::string strip_game_markup(std::string value);
 
+struct TrinketMetadataCache {
+    std::map<std::string, std::string, std::less<>> hero_class_names;
+    std::map<std::string, std::string, std::less<>> rarity_names;
+};
+
 Json::Value trinket_definition_json(application::IContentEnvironment& content,
                                     std::string_view id,
                                     const std::vector<DatabaseModRecord>& mods,
-                                    const application::ContentDefinition* resolved_definition = nullptr) {
+                                    const application::ContentDefinition* resolved_definition = nullptr,
+                                    TrinketMetadataCache* metadata_cache = nullptr) {
     Json::Value item(Json::objectValue);
     item["id"] = std::string{id};
     item["sourceId"] = "vanilla";
@@ -579,12 +585,20 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
     for (const auto& relation : definition.relationships) {
         if (relation.relationship_type != "restricted_to" || relation.type != "hero_class") continue;
         hero_classes.append(relation.id);
-        auto hero_class = content.find_content("hero_class", relation.id);
-        const auto name = hero_class && hero_class.value()
-            ? hero_class.value()->localized_name : relation.id;
-        hero_class_names[relation.id] = strip_game_markup(name);
+        const auto class_name = [&]() {
+            if (metadata_cache) {
+                const auto found = metadata_cache->hero_class_names.find(relation.id);
+                if (found != metadata_cache->hero_class_names.end()) return found->second;
+            }
+            auto hero_class = content.find_content("hero_class", relation.id);
+            auto name = hero_class && hero_class.value()
+                ? hero_class.value()->localized_name : relation.id;
+            if (metadata_cache) metadata_cache->hero_class_names.emplace(relation.id, name);
+            return name;
+        }();
+        hero_class_names[relation.id] = strip_game_markup(class_name);
         if (!restriction.empty()) restriction += " / ";
-        restriction += strip_game_markup(name);
+        restriction += strip_game_markup(class_name);
     }
     item["heroClasses"] = std::move(hero_classes);
     item["heroClassNames"] = std::move(hero_class_names);
@@ -610,9 +624,17 @@ Json::Value trinket_definition_json(application::IContentEnvironment& content,
                 : std::to_string(payload["rarity"].get<int>());
             item["rarity"] = payload["rarity"].is_string()
                 ? Json::Value(rarity_id) : Json::Value(payload["rarity"].get<int>());
-            const auto rarity = content.resolve_localization("trinket_rarity_" + rarity_id);
-            if (rarity && rarity.value() && !rarity.value()->value.empty())
-                item["rarityName"] = strip_game_markup(rarity.value()->value);
+            const auto rarity_name = [&]() {
+                if (metadata_cache) {
+                    const auto found = metadata_cache->rarity_names.find(rarity_id);
+                    if (found != metadata_cache->rarity_names.end()) return found->second;
+                }
+                const auto rarity = content.resolve_localization("trinket_rarity_" + rarity_id);
+                const auto name = rarity && rarity.value() ? rarity.value()->value : std::string{};
+                if (metadata_cache) metadata_cache->rarity_names.emplace(rarity_id, name);
+                return name;
+            }();
+            if (!rarity_name.empty()) item["rarityName"] = strip_game_markup(rarity_name);
         }
         if (payload.contains("tags") && payload["tags"].is_array()) {
             Json::Value tags(Json::arrayValue);
@@ -630,24 +652,36 @@ namespace {
 using TrinketBuffMap = std::map<std::string, nlohmann::json, std::less<>>;
 using TrinketSetMap = std::map<std::string, bool, std::less<>>;
 
-void collect_trinket_buff_files(application::IFileSystem& file_system,
-                                const std::filesystem::path& directory,
-                                TrinketBuffMap& buffs,
-                                unsigned int depth = 0) {
+void collect_trinket_effect_files(application::IFileSystem& file_system,
+                                  const std::filesystem::path& directory,
+                                  TrinketBuffMap& buffs, TrinketSetMap& sets,
+                                  bool skip_mod_directories, unsigned int depth = 0) {
     if (depth > 16) return;
     const auto files = file_system.list_files(directory);
     if (files) {
         for (const auto& path : files.value()) {
             const auto filename = path.filename().string();
-            if (!filename.ends_with(".buffs.json") && !filename.ends_with(".networkbuffs.json")) continue;
+            const bool buff_file = filename.ends_with(".buffs.json") ||
+                filename.ends_with(".networkbuffs.json");
+            const bool set_file = filename.ends_with(".sets.trinkets.json");
+            if (!buff_file && !set_file) continue;
             const auto bytes = file_system.read_file(path);
             if (!bytes) continue;
             try {
                 const auto document = nlohmann::json::parse(bytes.value());
-                if (!document.is_object() || !document.contains("buffs") || !document["buffs"].is_array()) continue;
-                for (const auto& buff : document["buffs"]) {
-                    if (!buff.is_object() || !buff.contains("id") || !buff["id"].is_string()) continue;
-                    buffs.insert_or_assign(buff["id"].get<std::string>(), buff);
+                if (!document.is_object()) continue;
+                if (buff_file && document.contains("buffs") && document["buffs"].is_array()) {
+                    for (const auto& buff : document["buffs"]) {
+                        if (!buff.is_object() || !buff.contains("id") || !buff["id"].is_string()) continue;
+                        buffs.insert_or_assign(buff["id"].get<std::string>(), buff);
+                    }
+                }
+                if (set_file && document.contains("sets") && document["sets"].is_array()) {
+                    for (const auto& set : document["sets"]) {
+                        if (!set.is_object() || !set.contains("id") || !set["id"].is_string()) continue;
+                        const bool has_bonus = set.contains("buffs") && set["buffs"].is_array() && !set["buffs"].empty();
+                        sets.insert_or_assign(set["id"].get<std::string>(), has_bonus);
+                    }
                 }
             } catch (const nlohmann::json::exception&) {
             }
@@ -655,37 +689,11 @@ void collect_trinket_buff_files(application::IFileSystem& file_system,
     }
     const auto directories = file_system.list_directories(directory);
     if (directories)
-        for (const auto& child : directories.value())
-            collect_trinket_buff_files(file_system, child, buffs, depth + 1);
-}
-
-void collect_trinket_set_files(application::IFileSystem& file_system,
-                               const std::filesystem::path& directory,
-                               TrinketSetMap& sets,
-                               unsigned int depth = 0) {
-    if (depth > 16) return;
-    const auto files = file_system.list_files(directory);
-    if (files) {
-        for (const auto& path : files.value()) {
-            if (!path.filename().string().ends_with(".sets.trinkets.json")) continue;
-            const auto bytes = file_system.read_file(path);
-            if (!bytes) continue;
-            try {
-                const auto document = nlohmann::json::parse(bytes.value());
-                if (!document.is_object() || !document.contains("sets") || !document["sets"].is_array()) continue;
-                for (const auto& set : document["sets"]) {
-                    if (!set.is_object() || !set.contains("id") || !set["id"].is_string()) continue;
-                    const bool has_bonus = set.contains("buffs") && set["buffs"].is_array() && !set["buffs"].empty();
-                    sets.insert_or_assign(set["id"].get<std::string>(), has_bonus);
-                }
-            } catch (const nlohmann::json::exception&) {
-            }
+        for (const auto& child : directories.value()) {
+            const auto name = child.filename().string();
+            if (skip_mod_directories && (name == "mods" || name == "modes")) continue;
+            collect_trinket_effect_files(file_system, child, buffs, sets, skip_mod_directories, depth + 1);
         }
-    }
-    const auto directories = file_system.list_directories(directory);
-    if (directories)
-        for (const auto& child : directories.value())
-            collect_trinket_set_files(file_system, child, sets, depth + 1);
 }
 
 std::string format_trinket_effect(std::string format, double amount) {
@@ -759,18 +767,20 @@ void warm_trinket_catalog(ServerContext& context, ServerContext::CampaignSession
     auto& buffs = campaign.cached_buff_definitions;
     TrinketSetMap sets;
     const auto& config = context.configuration_store.current();
-    std::vector<std::filesystem::path> roots{config.game_root};
-    roots.insert(roots.end(), config.workshop_roots.begin(), config.workshop_roots.end());
-    roots.insert(roots.end(), config.local_mod_roots.begin(), config.local_mod_roots.end());
-    for (const auto& root : roots) {
-        collect_trinket_buff_files(context.file_system, root, buffs);
-        collect_trinket_set_files(context.file_system, root, sets);
+    collect_trinket_effect_files(context.file_system, config.game_root, buffs, sets, true);
+    // Mod content follows the save's enabled order; scanning configured parent
+    // directories also reads disabled mods and repeats the game-root traversal.
+    std::set<std::filesystem::path> scanned_roots;
+    for (const auto& mod : *campaign.cached_mod_records) {
+        if (mod.root_path.empty() || !scanned_roots.insert(mod.root_path).second) continue;
+        collect_trinket_effect_files(context.file_system, mod.root_path, buffs, sets, false);
     }
 
     std::map<std::string, std::string, std::less<>> localized_effect_formats;
+    TrinketMetadataCache metadata_cache;
     for (const auto& definition : definitions.value()) {
         auto item = trinket_definition_json(*campaign.content, definition.id,
-                                            *campaign.cached_mod_records, &definition);
+                                            *campaign.cached_mod_records, &definition, &metadata_cache);
         if (item["setId"].isString()) {
             const auto set = sets.find(item["setId"].asString());
             item["hasSetBonus"] = set != sets.end() && set->second;
@@ -991,6 +1001,33 @@ std::int32_t hero_purchased_rank(const domain::CampaignModel& model, std::int32_
 
 Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     const auto& model = campaign.edits->model();
+    using PurchaseKey = std::tuple<std::int32_t, std::int32_t, char>;
+    std::map<PurchaseKey, std::pair<bool, bool>> purchased_nodes;
+    for (const auto& node : model.upgrade_purchase_nodes) {
+        const bool purchased = node.is_purchased.value.value_or(false);
+        auto [entry, inserted] = purchased_nodes.try_emplace(
+            PurchaseKey{node.instance_number, node.tree_id, node.requirement_code},
+            purchased, purchased);
+        if (!inserted) entry->second.second |= purchased;
+    }
+    const auto purchased_rank = [&](std::int32_t instance, std::string_view tree_id,
+                                    std::int32_t maximum) {
+        const auto hash = static_cast<std::int32_t>(core::dson::string_hash(tree_id));
+        std::int32_t rank = 0;
+        while (rank < maximum) {
+            const auto found = purchased_nodes.find(PurchaseKey{instance, hash,
+                static_cast<char>('0' + rank)});
+            if (found == purchased_nodes.end() || !found->second.second) break;
+            ++rank;
+        }
+        return rank;
+    };
+    std::map<std::string, const Json::Value*, std::less<>> hero_catalog_by_id;
+    for (const auto& entry : campaign.cached_hero_catalog)
+        hero_catalog_by_id.emplace(entry["id"].asString(), &entry);
+    std::map<std::string, const Json::Value*, std::less<>> quirk_catalog_by_id;
+    for (const auto& entry : campaign.cached_quirk_catalog)
+        quirk_catalog_by_id.emplace(entry["id"].asString(), &entry);
     Json::Value value(Json::objectValue);
     value["profileId"] = model.summary.profile_id;
     value["state"] = model.state == domain::ModelState::Complete ? "complete" :
@@ -1060,13 +1097,12 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             : Json::Value(static_cast<Json::Int>(campaign.resolve_level_thresholds.size() - 1));
         item["resolveXp"] = hero.resolve_xp.value ? Json::Value(*hero.resolve_xp.value) : Json::Value(Json::nullValue);
         item["stress"] = hero.stress.value ? Json::Value(*hero.stress.value) : Json::Value(Json::nullValue);
-        const auto catalog = std::find_if(campaign.cached_hero_catalog.begin(), campaign.cached_hero_catalog.end(),
-            [&](const Json::Value& entry) { return entry["id"].asString() == item["classId"].asString(); });
-        if (catalog != campaign.cached_hero_catalog.end()) {
+        const auto catalog = hero_catalog_by_id.find(class_id);
+        if (catalog != hero_catalog_by_id.end()) {
             for (const auto* key : {"idleSpritePath", "idleAtlasPath", "idleSkeletonPath"})
-                if (catalog->isMember(key)) item[key] = (*catalog)[key];
-            if (!item.isMember("portraitPath") && catalog->isMember("portraitPath"))
-                item["portraitPath"] = (*catalog)["portraitPath"];
+                if (catalog->second->isMember(key)) item[key] = (*catalog->second)[key];
+            if (!item.isMember("portraitPath") && catalog->second->isMember("portraitPath"))
+                item["portraitPath"] = (*catalog->second)["portraitPath"];
         }
         Json::Value equipment(Json::objectValue);
         const auto art = campaign.cached_hero_equipment.find(item["classId"].asString());
@@ -1100,15 +1136,14 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             entry["polarity"] = quirk.polarity == domain::QuirkPolarity::Positive ? "positive" :
                 quirk.polarity == domain::QuirkPolarity::Negative ? "negative" : "unknown";
             entry["assets"] = definition_assets(quirk.definition);
-            const auto details = std::find_if(campaign.cached_quirk_catalog.begin(), campaign.cached_quirk_catalog.end(),
-                [&](const Json::Value& value) { return value["id"].asString() == quirk.id; });
-            if (details != campaign.cached_quirk_catalog.end()) {
-                entry["name"] = (*details)["name"];
-                entry["effects"] = (*details)["effects"];
-                entry["sourceId"] = (*details)["sourceId"];
-                entry["modName"] = (*details)["modName"];
-                entry["canLock"] = (*details)["canLock"];
-                entry["polarity"] = (*details)["polarity"];
+            const auto details = quirk_catalog_by_id.find(quirk.id);
+            if (details != quirk_catalog_by_id.end()) {
+                entry["name"] = (*details->second)["name"];
+                entry["effects"] = (*details->second)["effects"];
+                entry["sourceId"] = (*details->second)["sourceId"];
+                entry["modName"] = (*details->second)["modName"];
+                entry["canLock"] = (*details->second)["canLock"];
+                entry["polarity"] = (*details->second)["polarity"];
             }
             quirks.append(std::move(entry));
         }
@@ -1143,7 +1178,7 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
                     if (const auto maximum = hero_upgrade_limit(campaign, class_id, suffix)) {
                         entry["maxRank"] = *maximum;
                         entry["rank"] = purchase_instance
-                            ? std::max(1, hero_purchased_rank(model, *purchase_instance,
+                            ? std::max(1, purchased_rank(*purchase_instance,
                                 class_id + "." + suffix, *maximum)) : 1;
                     }
                     const auto found = campaign.cached_combat_skill_icons.find(item["classId"].asString() + ":" + skill.id);
@@ -1155,8 +1190,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         };
         item["combatSkills"] = skills_value(hero.combat_skills, false);
         Json::Value camping_skills(Json::arrayValue);
-        if (catalog != campaign.cached_hero_catalog.end() && (*catalog).isMember("availableCampingSkills"))
-            camping_skills = (*catalog)["availableCampingSkills"];
+        if (catalog != hero_catalog_by_id.end() && catalog->second->isMember("availableCampingSkills"))
+            camping_skills = (*catalog->second)["availableCampingSkills"];
         const auto selected_camping = skills_value(hero.camping_skills, true);
         for (Json::ArrayIndex selected_index = 0; selected_index < selected_camping.size(); ++selected_index) {
             const auto& selected = selected_camping[selected_index];
@@ -1179,7 +1214,7 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
         }
         for (auto& skill : camping_skills) {
             bool learned = skill.get("selected", false).asBool();
-            if (purchase_instance && hero_purchased_rank(model, *purchase_instance,
+            if (purchase_instance && purchased_rank(*purchase_instance,
                 class_id + "." + skill["id"].asString(), 1) > 0) learned = true;
             skill["learned"] = learned;
             if (!skill.isMember("selected")) skill["selected"] = false;
@@ -1223,8 +1258,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
     }
     value["trinkets"] = std::move(trinkets);
 
-    constexpr std::array<std::string_view, 9> building_order{
-        "camping_trainer", "stage_coach", "tavern", "sanitarium", "abbey", "graveyard",
+    constexpr std::array<std::string_view, 8> building_order{
+        "camping_trainer", "stage_coach", "tavern", "sanitarium", "abbey",
         "nomad_wagon", "guild", "blacksmith"};
     Json::Value buildings(Json::arrayValue);
     for (const auto building_id : building_order) {
@@ -1245,13 +1280,8 @@ Json::Value campaign_value(const ServerContext::CampaignSession& campaign) {
             Json::Value nodes(Json::arrayValue);
             for (std::size_t node_index = 0; node_index < tree.codes.size(); ++node_index) {
                 const auto code = tree.codes[node_index];
-                const auto node = std::find_if(model.upgrade_purchase_nodes.begin(), model.upgrade_purchase_nodes.end(),
-                    [&](const auto& purchase) {
-                        return purchase.instance_number == 0 && purchase.tree_id == hash &&
-                               purchase.requirement_code == code;
-                    });
-                const bool purchased = node != model.upgrade_purchase_nodes.end() &&
-                    node->is_purchased.value.value_or(false);
+                const auto node = purchased_nodes.find(PurchaseKey{0, hash, code});
+                const bool purchased = node != purchased_nodes.end() && node->second.first;
                 if (purchased) ++rank;
                 Json::Value node_json(Json::objectValue);
                 node_json["code"] = std::string(1, code);
@@ -2932,7 +2962,7 @@ void handle_campaign_building_rank(const drogon::HttpRequestPtr& request,
         if (selected == context->campaign->building_upgrade_trees.end() ||
             (*body)["rank"].asUInt64() > selected->codes.size()) {
             callback(json_error(drogon::k400BadRequest, "BUILDING_UPGRADE_NOT_FOUND",
-                                "The requested building upgrade is not in the original game upgrade catalog."));
+                                "The requested building upgrade is not in the active upgrade catalog."));
             return;
         }
         auto built = application::make_set_town_upgrade_rank_operation(model, tree_id,
@@ -2952,7 +2982,7 @@ void handle_campaign_building_rank(const drogon::HttpRequestPtr& request,
                 return tree.building_id == selected_building;
             })) {
             callback(json_error(drogon::k400BadRequest, "BUILDING_UPGRADE_NOT_FOUND",
-                                "The requested building has no original upgrade tree."));
+                                "The requested building has no active upgrade tree."));
             return;
         }
         application::CompositeCampaignOperation maximum{selected_building.empty()
@@ -3376,7 +3406,7 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         return;
     }
     auto configuration = context->configuration_store.current();
-    const auto previous_save_roots = configuration.save_roots;
+    const auto previous_configuration = configuration;
     const auto read_path = [&](const char* key, std::filesystem::path& target) {
         if ((*body).isMember(key) && (*body)[key].isString()) target = (*body)[key].asString();
     };
@@ -3411,7 +3441,13 @@ void handle_configuration(const drogon::HttpRequestPtr& request,
         callback(json_error(drogon::k400BadRequest, "INVALID_CONFIGURATION", result.error().message));
         return;
     }
-    if (configuration.save_roots != previous_save_roots) context->invalidate_campaign();
+    if (configuration.save_roots != previous_configuration.save_roots ||
+        configuration.game_root != previous_configuration.game_root ||
+        configuration.workshop_roots != previous_configuration.workshop_roots ||
+        configuration.local_mod_roots != previous_configuration.local_mod_roots ||
+        configuration.data_root != previous_configuration.data_root ||
+        configuration.language != previous_configuration.language)
+        context->invalidate_campaign();
     context->initialization.start(context->configuration_store.current());
     callback(json_ok(configuration_value(context->configuration_store.current())));
 }

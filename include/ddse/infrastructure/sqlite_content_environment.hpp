@@ -3,6 +3,8 @@
 #include "ddse/application/content_environment.hpp"
 
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 namespace ddse::infrastructure {
@@ -13,10 +15,12 @@ struct SqliteContentEnvironmentConfig {
     application::ContentEnvironmentSelection selection;
 };
 
+struct SqliteContentDatabasePair;
+
 class SqliteContentEnvironment final : public application::IContentEnvironment {
 public:
-    explicit SqliteContentEnvironment(SqliteContentEnvironmentConfig config)
-        : config_(std::move(config)) {}
+    explicit SqliteContentEnvironment(SqliteContentEnvironmentConfig config);
+    ~SqliteContentEnvironment() override;
 
     [[nodiscard]] core::Result<std::optional<application::ContentDefinition>, core::Error>
     find_content(std::string_view type, std::string_view id) const override;
@@ -37,7 +41,10 @@ public:
     explain_provenance(std::string_view type, std::string_view id) const override;
 
 private:
+    [[nodiscard]] core::Result<SqliteContentDatabasePair*, core::Error> databases() const;
     SqliteContentEnvironmentConfig config_;
+    mutable std::mutex database_mutex_;
+    mutable std::unique_ptr<SqliteContentDatabasePair> databases_;
 };
 
 } // namespace ddse::infrastructure
