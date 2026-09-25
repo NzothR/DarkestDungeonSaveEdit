@@ -434,6 +434,76 @@ TEST(SaveAdapter, CreatesAQuirkInAnEmptySlotAndSkipsANetNoOpWrite) {
               profile.documents.at("persist.roster.json").bytes);
 }
 
+TEST(SaveAdapter, ReplacesAQuirkAtItsOriginalOrderedPosition) {
+    const auto fixture = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR};
+    if (!std::filesystem::exists(fixture)) GTEST_SKIP() << "Optional local save sample is not present";
+    TempDirectory temp;
+    const auto source_root = temp.path / "source" / "profile_0";
+    copy_profile(fixture, source_root);
+    infrastructure::NativeFileSystem fs;
+    const auto profile = load_profile(fs, source_root);
+    const auto& roster = *profile.documents.at("persist.roster.json").decoded;
+    std::string hero_id;
+    std::string old_id;
+    std::string next_id;
+    for (const auto& field : roster.fields) {
+        if (!field.embedded_document || !field.path.ends_with("/hero_file_data/raw_data")) continue;
+        const auto& inner = *field.embedded_document;
+        const auto parent = std::find_if(inner.fields.begin(), inner.fields.end(), [](const auto& candidate) {
+            return candidate.path == "base_root/quirks";
+        });
+        if (parent == inner.fields.end() || parent->children.size() < 2) continue;
+        const auto first = parent->children[0], second = parent->children[1];
+        if (first >= inner.fields.size() || second >= inner.fields.size() ||
+            inner.fields[first].kind != core::dson::ValueKind::Object) continue;
+        const auto id_start = std::string_view{"base_root/heroes/"}.size();
+        const auto id_end = field.path.find('/', id_start);
+        hero_id = field.path.substr(id_start, id_end - id_start);
+        old_id = inner.fields[first].name;
+        next_id = inner.fields[second].name;
+        break;
+    }
+    if (hero_id.empty()) GTEST_SKIP() << "Save sample has no hero with two ordered quirks";
+    const auto base = "base_root/heroes/" + hero_id +
+        "/hero_file_data/raw_data => base_root/quirks/";
+    application::ChangeSet changes;
+    application::CampaignDocumentMutationBatch batch;
+    batch.operation_id = "campaign.hero.add_or_replace_quirk";
+    batch.transaction_id = "test-quirk-ordered-replace";
+    batch.mutations.emplace_back(application::CampaignDocumentMutationKind::Erase,
+        "Hero.Quirks", "persist.roster.json", base + old_id, std::string{},
+        std::string{}, core::dson::ValueKind::Object);
+    application::CampaignDocumentMutation created{application::CampaignDocumentMutationKind::CreateObject,
+        "Hero.Quirks", "persist.roster.json", base + "ddse_ordered_replacement", std::string{},
+        "ddse_ordered_replacement", core::dson::ValueKind::Object};
+    created.insertion_index = 0;
+    batch.mutations.push_back(std::move(created));
+    changes.document_mutation_batches.push_back(std::move(batch));
+    changes.affected_documents = {"persist.roster.json"};
+    const auto candidate = application::SaveAdapter{}.build_candidate(profile, changes);
+    ASSERT_TRUE(candidate) << candidate.error().message;
+    ASSERT_EQ(candidate.value().documents.size(), 1U);
+    const auto& bytes = candidate.value().documents.front().bytes;
+    core::dson::DsonReader reader;
+    const auto decoded = reader.parse(std::span<const std::byte>{
+        reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()}, "persist.roster.json");
+    ASSERT_TRUE(decoded) << decoded.error().message;
+    const auto hero_file = std::find_if(decoded.value().fields.begin(), decoded.value().fields.end(),
+        [&](const auto& field) {
+            return field.path == "base_root/heroes/" + hero_id + "/hero_file_data/raw_data" &&
+                field.embedded_document != nullptr;
+        });
+    ASSERT_NE(hero_file, decoded.value().fields.end());
+    const auto& inner = *hero_file->embedded_document;
+    const auto parent = std::find_if(inner.fields.begin(), inner.fields.end(), [](const auto& field) {
+        return field.path == "base_root/quirks";
+    });
+    ASSERT_NE(parent, inner.fields.end());
+    ASSERT_GE(parent->children.size(), 2U);
+    EXPECT_EQ(inner.fields[parent->children[0]].name, "ddse_ordered_replacement");
+    EXPECT_EQ(inner.fields[parent->children[1]].name, next_id);
+}
+
 TEST(SaveAdapter, RejectsAnUnmappedOrUnverifiedStructuralTarget) {
     application::ChangeSet changes;
     domain::HeroQuirk removed;

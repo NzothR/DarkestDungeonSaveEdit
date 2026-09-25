@@ -195,6 +195,17 @@ Result<std::size_t, Error> DsonDocumentEditor::insert_clone_at(
 Result<std::size_t, Error> DsonDocumentEditor::append_object(
     DsonDocument& target, std::string_view parent_path, std::string_view child_name,
     const std::vector<std::pair<std::string, Value>>& primitive_fields) {
+    const auto parent_index = find_field(target, parent_path);
+    if (!parent_index || target.fields[*parent_index].kind != ValueKind::Object)
+        return Result<std::size_t, Error>::failure(edit_error("Destination path is not an object", std::string{parent_path}));
+    return insert_object_at(target, parent_path, child_name, primitive_fields,
+                            target.fields[*parent_index].children.size());
+}
+
+Result<std::size_t, Error> DsonDocumentEditor::insert_object_at(
+    DsonDocument& target, std::string_view parent_path, std::string_view child_name,
+    const std::vector<std::pair<std::string, Value>>& primitive_fields,
+    std::size_t child_position) {
     if (child_name.empty() || child_name.find('/') != std::string_view::npos)
         return Result<std::size_t, Error>::failure(edit_error("New object name is empty or contains a path separator"));
     const auto parent_index = find_field(target, parent_path);
@@ -206,6 +217,9 @@ Result<std::size_t, Error> DsonDocumentEditor::append_object(
         }))
         return Result<std::size_t, Error>::failure(edit_error("Destination object already has a child with that name",
             std::string{parent_path} + "/" + std::string{child_name}));
+    if (child_position > parent.children.size())
+        return Result<std::size_t, Error>::failure(edit_error("Ordered child insertion position is outside the destination object",
+            std::string{parent_path}));
 
     std::set<std::string, std::less<>> names;
     for (const auto& [name, value] : primitive_fields) {
@@ -214,7 +228,8 @@ Result<std::size_t, Error> DsonDocumentEditor::append_object(
             return Result<std::size_t, Error>::failure(edit_error("New object contains an invalid primitive field", name));
     }
 
-    const auto insertion_index = subtree_end(target, *parent_index);
+    const auto insertion_index = child_position == parent.children.size()
+        ? subtree_end(target, *parent_index) : parent.children[child_position];
     const auto new_root_path = target.fields[*parent_index].path + "/" + std::string{child_name};
     std::vector<DsonField> appended;
     appended.reserve(primitive_fields.size() + 1);
@@ -256,7 +271,7 @@ Result<std::size_t, Error> DsonDocumentEditor::append_object(
     target.fields.insert(target.fields.begin() + static_cast<std::ptrdiff_t>(insertion_index),
                          std::make_move_iterator(appended.begin()), std::make_move_iterator(appended.end()));
     auto& children = target.fields[adjusted_parent_index].children;
-    children.push_back(insertion_index);
+    children.insert(children.begin() + static_cast<std::ptrdiff_t>(child_position), insertion_index);
     target.structural_dirty = true;
     return Result<std::size_t, Error>::success(insertion_index);
 }

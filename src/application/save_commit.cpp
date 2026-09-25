@@ -1334,9 +1334,13 @@ SaveAdapter::build_candidate(const RawSaveProfile& profile, const ChangeSet& req
                     return core::Result<SaveCandidate, core::Error>::failure(
                         adapter_error(core::ErrorCode::MappingNotWritable, std::move(reason),
                                       {{"path", parent_path}}));
-                auto created = core::dson::DsonDocumentEditor::append_object(
-                    destination->first.get(), destination->second, mutation.new_key,
-                    mutation.semantic_property == "Hero.Quirks" ? quirk_fields : trinket_fields);
+                auto created = mutation.insertion_index && mutation.semantic_property == "Hero.Quirks"
+                    ? core::dson::DsonDocumentEditor::insert_object_at(
+                        destination->first.get(), destination->second, mutation.new_key,
+                        quirk_fields, *mutation.insertion_index)
+                    : core::dson::DsonDocumentEditor::append_object(
+                        destination->first.get(), destination->second, mutation.new_key,
+                        mutation.semantic_property == "Hero.Quirks" ? quirk_fields : trinket_fields);
                 if (!created) {
                     auto error = created.error();
                     error.context["semantic_property"] = mutation.semantic_property;

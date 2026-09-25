@@ -2585,6 +2585,9 @@ void handle_campaign_hero_quirk(const drogon::HttpRequestPtr& request,
                     existing->raw.display_path, std::string{}, std::string{}, core::dson::ValueKind::Object);
             Mutation created{Kind::CreateObject, "Hero.Quirks", "persist.roster.json",
                 target, {}, new_id, core::dson::ValueKind::Object};
+            if (action == "replace")
+                created.insertion_index = static_cast<std::size_t>(
+                    std::distance(hero->quirks.begin(), existing));
             created.quirk_positive = positive;
             created.quirk_name = (*catalog)["name"].asString();
             created.quirk_source_id = definition->provenance.source_id;

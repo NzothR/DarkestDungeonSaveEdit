@@ -824,8 +824,10 @@ bool apply_hero_quirk_mutations(CampaignModel& model,
                    mutation.kind == CampaignDocumentMutationKind::AppendClone ||
                    mutation.kind == CampaignDocumentMutationKind::InsertClone) {
             domain::HeroQuirk added;
+            std::optional<std::size_t> position = mutation.insertion_index;
             if (mutation.kind == CampaignDocumentMutationKind::Rename) {
                 if (found == hero->quirks.end()) return false;
+                position = static_cast<std::size_t>(std::distance(hero->quirks.begin(), found));
                 added = *found;
                 hero->quirks.erase(found);
             } else if (mutation.kind == CampaignDocumentMutationKind::AppendClone ||
@@ -885,9 +887,10 @@ bool apply_hero_quirk_mutations(CampaignModel& model,
                 added.definition.display_name = mutation.new_key;
                 added.definition.state = EntityState::Unresolved;
             }
-            if (mutation.kind == CampaignDocumentMutationKind::InsertClone) {
-                if (!mutation.insertion_index || *mutation.insertion_index > hero->quirks.size()) return false;
-                hero->quirks.insert(hero->quirks.begin() + static_cast<std::ptrdiff_t>(*mutation.insertion_index),
+            if (mutation.kind == CampaignDocumentMutationKind::InsertClone && !position) return false;
+            if (position) {
+                if (*position > hero->quirks.size()) return false;
+                hero->quirks.insert(hero->quirks.begin() + static_cast<std::ptrdiff_t>(*position),
                     std::move(added));
             } else hero->quirks.push_back(std::move(added));
         } else if (mutation.kind == CampaignDocumentMutationKind::SetValue && mutation.after) {

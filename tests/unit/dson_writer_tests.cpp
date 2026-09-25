@@ -285,6 +285,45 @@ TEST(DsonWriter, InsertsClonedObjectAtTheRequestedSiblingPosition) {
     EXPECT_EQ(std::get<std::int32_t>(cloned_value->value), 7);
 }
 
+TEST(DsonWriter, InsertsTemplateObjectAtTheRemovedChildPosition) {
+    DsonDocument document;
+    DsonField root;
+    root.name = "base_root";
+    root.path = "base_root";
+    root.kind = ValueKind::Object;
+    root.children = {1};
+    document.fields.push_back(std::move(root));
+    document.root_fields = {0};
+    DsonField parent;
+    parent.name = "quirks";
+    parent.path = "base_root/quirks";
+    parent.kind = ValueKind::Object;
+    parent.parent_index = 0;
+    parent.children = {2, 3, 4};
+    document.fields.push_back(std::move(parent));
+    for (const auto& name : {"first", "old", "last"}) {
+        DsonField field;
+        field.name = name;
+        field.path = "base_root/quirks/" + std::string{name};
+        field.kind = ValueKind::Object;
+        field.parent_index = 1;
+        document.fields.push_back(std::move(field));
+    }
+    const auto removed = DsonDocumentEditor::erase(document, "base_root/quirks/old");
+    ASSERT_TRUE(removed) << removed.error().message;
+    const auto inserted = DsonDocumentEditor::insert_object_at(document, "base_root/quirks",
+        "replacement", {{"is_new", true}, {"is_locked", false}}, 1);
+    ASSERT_TRUE(inserted) << inserted.error().message;
+    const auto& children = document.fields[1].children;
+    ASSERT_EQ(children.size(), 3U);
+    EXPECT_EQ(document.fields[children[0]].name, "first");
+    EXPECT_EQ(document.fields[children[1]].name, "replacement");
+    EXPECT_EQ(document.fields[children[2]].name, "last");
+    EXPECT_NE(std::find_if(document.fields.begin(), document.fields.end(), [](const auto& field) {
+        return field.path == "base_root/quirks/replacement/is_locked";
+    }), document.fields.end());
+}
+
 TEST(DsonWriter, ClonesRosterHeroWithIndependentEmbeddedDocument) {
     const std::filesystem::path sample = std::filesystem::path{DDSE_TEST_SAVE_PROFILE_DIR} / "persist.roster.json";
     if (!std::filesystem::exists(sample)) GTEST_SKIP() << "Optional local save sample is not present";

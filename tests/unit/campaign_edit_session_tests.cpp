@@ -435,6 +435,48 @@ TEST(CampaignEditSession, LegacyQuirkCloneAndRenameMutationsRemainProjectable) {
     EXPECT_EQ(session.model().heroes.front().quirks.front().raw.display_path, old_path);
 }
 
+TEST(CampaignEditSession, QuirkReplacementsKeepTheirOriginalListPositions) {
+    using Kind = application::CampaignDocumentMutationKind;
+    auto model = sample_model();
+    auto& quirks = model.heroes.front().quirks;
+    const auto root = quirks.front().raw.display_path.substr(0,
+        quirks.front().raw.display_path.find_last_of('/') + 1);
+    auto middle = quirks.front();
+    middle.id = "negative_old";
+    middle.polarity = domain::QuirkPolarity::Negative;
+    middle.raw.display_path = root + middle.id;
+    quirks.push_back(middle);
+    auto last = quirks.front();
+    last.id = "positive_last";
+    last.raw.display_path = root + last.id;
+    quirks.push_back(last);
+    application::CampaignEditSession session{std::move(model)};
+
+    application::CampaignDocumentMutation rename{Kind::Rename, "Hero.Quirks", "persist.roster.json",
+        root + "mod_positive_quirk", {}, "positive_new", core::dson::ValueKind::Object};
+    rename.quirk_positive = true;
+    const auto positive = session.apply(application::ApplyCampaignDocumentMutationsOperation{
+        "campaign.hero.add_or_replace_quirk", {rename}}, 0);
+    ASSERT_TRUE(positive) << positive.error().message;
+    EXPECT_EQ(session.model().heroes.front().quirks[0].id, "positive_new");
+    EXPECT_EQ(session.model().heroes.front().quirks[1].id, "negative_old");
+
+    application::CampaignDocumentMutation erase{Kind::Erase, "Hero.Quirks", "persist.roster.json",
+        root + "negative_old", {}, {}, core::dson::ValueKind::Object};
+    application::CampaignDocumentMutation create{Kind::CreateObject, "Hero.Quirks", "persist.roster.json",
+        root + "negative_new", {}, "negative_new", core::dson::ValueKind::Object};
+    create.insertion_index = 1;
+    create.quirk_positive = false;
+    const auto negative = session.apply(application::ApplyCampaignDocumentMutationsOperation{
+        "campaign.hero.add_or_replace_quirk", {erase, create}}, 1);
+    ASSERT_TRUE(negative) << negative.error().message;
+    const auto& result = session.model().heroes.front().quirks;
+    ASSERT_EQ(result.size(), 3U);
+    EXPECT_EQ(result[0].id, "positive_new");
+    EXPECT_EQ(result[1].id, "negative_new");
+    EXPECT_EQ(result[2].id, "positive_last");
+}
+
 TEST(CampaignEditSession, DistrictStateUsesAnExplicitSemanticOperation) {
     application::CampaignEditSession session{sample_model()};
     const auto result = session.apply(application::SetDistrictBuiltOperation{"test_district", true}, 0);
