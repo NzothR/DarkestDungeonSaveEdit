@@ -360,6 +360,14 @@ h1 { margin: 12px 0 10px; text-align: center; font: 500 clamp(25px, 5vw, 34px) G
 .quirk-search-controls input, .quirk-search-controls select { min-width: 0; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; font: inherit; }
 .quirk-selector-item { min-height: 50px; }
 .trinket-search-controls input, .trinket-search-controls select { min-width: 0; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; font: inherit; }
+.trinket-multi-filter { position: relative; min-width: 0; }
+.trinket-multi-filter summary { overflow: hidden; padding: 8px 9px; border: 1px solid #9a754744; background: #0c0b0a; color: #e4d5bc; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+.trinket-multi-filter[open] summary { border-color: #c59a53; }
+.trinket-multi-options { position: absolute; z-index: 5; top: 100%; left: 0; width: max(100%, 200px); max-width: min(360px, 75vw); max-height: min(45vh, 360px); overflow: auto; padding: 5px; border: 1px solid #9a7547; background: #171513; box-shadow: 0 12px 24px #000a; }
+.trinket-multi-options label { display: flex; align-items: center; gap: 7px; padding: 5px; cursor: pointer; }
+.trinket-multi-options label:hover { background: #342818; }
+.trinket-multi-options input { flex: 0 0 auto; margin: 0; }
+.trinket-multi-options span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trinket-selector-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 7px; max-height: min(58vh, 620px); overflow: auto; padding: 2px; }
 .trinket-selector-item { position: relative; display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 66px; padding: 6px; border: 1px solid #ffffff18; background: #0c0b0aaa; color: inherit; text-align: left; cursor: pointer; }
 .trinket-selector-item:hover { border-color: #c59a53; background: #342818; }

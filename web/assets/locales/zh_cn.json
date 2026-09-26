@@ -173,6 +173,8 @@
   ,"trinket.searchPlaceholder": "搜索 ID、名称、效果、Mod 或标签；正则可写 /词条/i"
   ,"trinket.allMods": "所有 Mod"
   ,"trinket.allClasses": "所有职业"
+  ,"trinket.selectedMods": "已选 {count} 个 Mod"
+  ,"trinket.selectedClasses": "已选 {count} 个职业"
   ,"trinket.onlyNew": "仅添加当前饰品箱中没有的饰品"
   ,"trinket.clearSelection": "清空所有选中"
   ,"trinket.selectedCount": "已选中 {count} 件"

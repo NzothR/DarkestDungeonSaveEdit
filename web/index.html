@@ -222,8 +222,8 @@
               <select id="trinket-source"><option value="inventory" data-i18n="hero.trinketSourceInventory">饰品箱</option><option value="catalog" data-i18n="hero.trinketSourceCatalog">内容数据库</option></select>
             </label>
             <input id="trinket-search" type="search" data-i18n-placeholder="trinket.searchPlaceholder" placeholder="搜索 ID、名称、描述或 Mod">
-            <select id="trinket-mod-filter" aria-label="Mod filter"><option value="" data-i18n="trinket.allMods">所有 Mod</option></select>
-            <select id="trinket-class-filter" aria-label="Class filter"><option value="" data-i18n="trinket.allClasses">所有职业</option></select>
+            <details id="trinket-mod-filter" class="trinket-multi-filter"><summary data-i18n="trinket.allMods">所有 Mod</summary><div class="trinket-multi-options"></div></details>
+            <details id="trinket-class-filter" class="trinket-multi-filter"><summary data-i18n="trinket.allClasses">所有职业</summary><div class="trinket-multi-options"></div></details>
             <select id="trinket-rarity-filter" aria-label="Rarity filter"><option value="" data-i18n="trinket.allRarities">所有稀有度</option></select>
           </div>
           <p id="trinket-selector-message" class="building-editor-hint"></p>

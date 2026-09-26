@@ -1021,10 +1021,42 @@ function trinketSearchRank(definition, query) {
   return index < 0 ? Number.MAX_SAFE_INTEGER : weights[index];
 }
 
+function selectedTrinketFilterValues(control) {
+  return new Set([...control.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value));
+}
+
+function updateTrinketFilterLabel(control, allKey, selectedKey) {
+  const count = selectedTrinketFilterValues(control).size;
+  control.querySelector("summary").textContent = count ? t(selectedKey, { count }) : t(allKey);
+}
+
+function populateTrinketFilter(control, options, allKey, selectedKey) {
+  control.open = false;
+  const list = control.querySelector(".trinket-multi-options");
+  list.replaceChildren();
+  for (const [id, name] of [...options].sort((a, b) => a[1].localeCompare(b[1]))) {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = id;
+    label.append(checkbox, Object.assign(document.createElement("span"), { textContent: name }));
+    list.append(label);
+  }
+  updateTrinketFilterLabel(control, allKey, selectedKey);
+}
+
+function matchesTrinketFilters(item, definition, mods, classes, rarity, query) {
+  if (mods.size && !mods.has(definition.sourceId)) return false;
+  if (classes.size && !(definition.heroClasses || []).some((id) => classes.has(id))) return false;
+  if (rarity && trinketRarityId(definition) !== rarity) return false;
+  return trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER ||
+    (definition !== item && trinketSearchRank(definition, query) !== Number.MAX_SAFE_INTEGER);
+}
+
 function renderTrinketSelector() {
   const query = elements.trinketSearch.value;
-  const mod = elements.trinketModFilter.value;
-  const heroClass = elements.trinketClassFilter.value;
+  const mods = selectedTrinketFilterValues(elements.trinketModFilter);
+  const classes = selectedTrinketFilterValues(elements.trinketClassFilter);
   const rarity = elements.trinketRarityFilter.value;
   const inventory = latestCampaign?.trinkets || [];
   const heroMode = trinketSelectorMode === "hero";
@@ -1032,13 +1064,8 @@ function renderTrinketSelector() {
   const hero = heroMode ? (latestCampaign?.heroes || []).find((entry) => entry.id === activeHeroId) : null;
   const equippedIds = new Set((hero?.trinkets || []).map((entry) => entry.id));
   const isBatch = trinketSelectorMode === "batchAdd" || trinketSelectorMode === "batchDelete";
-  const matchesFilters = (item, definition = item) => {
-    if (mod && definition.sourceId !== mod) return false;
-    if (heroClass && !(definition.heroClasses || []).includes(heroClass)) return false;
-    if (rarity && trinketRarityId(definition) !== rarity) return false;
-    return trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER ||
-      (definition !== item && trinketSearchRank(definition, query) !== Number.MAX_SAFE_INTEGER);
-  };
+  const matchesFilters = (item, definition = item) =>
+    matchesTrinketFilters(item, definition, mods, classes, rarity, query);
   const candidates = trinketSelectorMode === "batchDelete" || (heroMode && sourceMode === "inventory")
     ? inventory.map((item) => ({ item, definition: trinketDefinitions.find((entry) => entry.id === item.id) }))
       .filter(({ item, definition }) => matchesFilters(item, definition || item) &&
@@ -1065,7 +1092,7 @@ function renderTrinketSelector() {
     const selectedCount = trinketSelectorMode === "batchAdd" ? selectedTrinketIds.size : selectedTrinketRawKeys.size;
     elements.trinketSelectionCount.textContent = t("trinket.selectedCount", { count: selectedCount });
     const hasSelection = selectedCount > 0;
-    const hasScopeFilters = Boolean(mod || heroClass || rarity);
+    const hasScopeFilters = Boolean(mods.size || classes.size || rarity);
     const actionLabel = trinketSelectorMode === "batchAdd"
       ? hasSelection ? "trinket.batchAddSelected" : "trinket.batchAddVisible"
       : hasSelection ? "trinket.batchDeleteSelected"
@@ -1212,8 +1239,6 @@ async function openTrinketSelector(mode) {
   elements.trinketClearSelection.hidden = mode !== "batchAdd" && mode !== "batchDelete";
   elements.trinketBatchConfirm.textContent = t(mode === "batchDelete" ? "trinket.batchDelete" : "trinket.batchAdd");
   elements.trinketSearch.value = "";
-  elements.trinketModFilter.value = "";
-  elements.trinketClassFilter.value = "";
   elements.trinketRarityFilter.value = "";
   elements.trinketSelectorList.replaceChildren();
   if (!elements.trinketSelector.open) elements.trinketSelector.showModal();
@@ -1231,10 +1256,8 @@ async function openTrinketSelector(mode) {
       const rarityId = trinketRarityId(item);
       if (rarityId) rarities.set(rarityId, trinketRarityLabel(item));
     }
-    elements.trinketModFilter.replaceChildren(new Option(t("trinket.allMods"), ""));
-    for (const [id, name] of mods) elements.trinketModFilter.add(new Option(name, id));
-    elements.trinketClassFilter.replaceChildren(new Option(t("trinket.allClasses"), ""));
-    for (const [id, name] of classes) elements.trinketClassFilter.add(new Option(name, id));
+    populateTrinketFilter(elements.trinketModFilter, mods, "trinket.allMods", "trinket.selectedMods");
+    populateTrinketFilter(elements.trinketClassFilter, classes, "trinket.allClasses", "trinket.selectedClasses");
     elements.trinketRarityFilter.replaceChildren(new Option(t("trinket.allRarities"), ""));
     for (const [id, name] of rarities) elements.trinketRarityFilter.add(new Option(name, id));
     renderTrinketSelector();
@@ -1912,13 +1935,22 @@ elements.trinketSelector.addEventListener("close", () => {
 });
 elements.trinketSearch.addEventListener("input", renderTrinketSelector);
 elements.trinketSource.addEventListener("change", renderTrinketSelector);
-for (const control of [elements.trinketModFilter, elements.trinketClassFilter, elements.trinketRarityFilter]) {
+for (const [control, allKey, selectedKey] of [
+  [elements.trinketModFilter, "trinket.allMods", "trinket.selectedMods"],
+  [elements.trinketClassFilter, "trinket.allClasses", "trinket.selectedClasses"],
+]) {
   control.addEventListener("change", () => {
     selectedTrinketIds.clear();
     selectedTrinketRawKeys.clear();
+    updateTrinketFilterLabel(control, allKey, selectedKey);
     renderTrinketSelector();
   });
 }
+elements.trinketRarityFilter.addEventListener("change", () => {
+  selectedTrinketIds.clear();
+  selectedTrinketRawKeys.clear();
+  renderTrinketSelector();
+});
 elements.trinketClearSelection.addEventListener("click", () => {
   selectedTrinketIds.clear();
   selectedTrinketRawKeys.clear();
@@ -1928,23 +1960,18 @@ elements.trinketBatchConfirm.addEventListener("click", async () => {
   const action = trinketSelectorMode === "batchAdd" ? "batch_add" : "batch_delete";
   const onlyNew = elements.trinketOnlyNew.checked;
   const query = elements.trinketSearch.value;
-  const modId = elements.trinketModFilter.value;
-  const heroClass = elements.trinketClassFilter.value;
+  const mods = selectedTrinketFilterValues(elements.trinketModFilter);
+  const classes = selectedTrinketFilterValues(elements.trinketClassFilter);
   const rarityId = elements.trinketRarityFilter.value;
   const visibleDefinitions = trinketDefinitions.filter((item) =>
-    (!modId || item.sourceId === modId) && (!heroClass || item.heroClasses?.includes(heroClass)) &&
-    (!rarityId || trinketRarityId(item) === rarityId) &&
-    trinketSearchRank(item, query) !== Number.MAX_SAFE_INTEGER);
+    matchesTrinketFilters(item, item, mods, classes, rarityId, query));
   const visibleInventory = (latestCampaign?.trinkets || []).filter((entry) => {
     const def = trinketDefinitions.find((item) => item.id === entry.id) || entry;
-    return (!modId || def.sourceId === modId) && (!heroClass || def.heroClasses?.includes(heroClass)) &&
-      (!rarityId || trinketRarityId(def) === rarityId) &&
-      (trinketSearchRank(entry, query) !== Number.MAX_SAFE_INTEGER ||
-        (def !== entry && trinketSearchRank(def, query) !== Number.MAX_SAFE_INTEGER));
+    return matchesTrinketFilters(entry, def, mods, classes, rarityId, query);
   });
   const trinketIds = trinketSelectorMode === "batchAdd"
     ? (selectedTrinketIds.size ? [...selectedTrinketIds] : visibleDefinitions.map((item) => item.id)) : null;
-  const filteredInventoryMode = Boolean(modId || heroClass || rarityId);
+  const filteredInventoryMode = Boolean(mods.size || classes.size || rarityId);
   const rawKeys = trinketSelectorMode === "batchDelete"
     ? (selectedTrinketRawKeys.size ? [...selectedTrinketRawKeys]
       : filteredInventoryMode ? visibleInventory.map((item) => item.rawKey) : null) : null;
